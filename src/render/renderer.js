@@ -75,6 +75,15 @@ export class Renderer {
   }
 
   // Grid-space bounding box of everything currently on screen.
+  // Restricts the drawn area to the layer the player occupies, so the maze
+  // never hangs in the air next to a vault.
+  layerBounds(world, bounds) {
+    const band = world.level.mazeHeight;
+    if (band === undefined) return bounds;
+    if (world.playerLayer === 1) return { ...bounds, y0: Math.max(bounds.y0, band) };
+    return { ...bounds, y1: Math.min(bounds.y1, band - 1) };
+  }
+
   visibleBounds(level) {
     const halfW = this.width / (2 * this.zoom);
     const halfH = this.height / (2 * this.zoom);
@@ -111,7 +120,9 @@ export class Renderer {
     const level = world.level;
     const subjects = [];
     const p = world.player;
+    const layer = world.playerLayer;
     const push = (x, y, halfW, top, bottom) => {
+      if (world.layerAt(Math.floor(y)) !== layer) return;
       if (Math.abs(x - p.x) + Math.abs(y - p.y) > 16) return;
       subjects.push({ x, y, halfW, top, bottom });
     };
@@ -181,7 +192,7 @@ export class Renderer {
     ctx.scale(this.zoom, this.zoom);
     ctx.translate(-this.camera.x, -this.camera.y);
 
-    const bounds = this.visibleBounds(level);
+    const bounds = this.layerBounds(world, this.visibleBounds(level));
     this.computeFades(world, bounds);
     this.drawFloors(world, bounds);
     this.buildRenderList(world, bounds);
@@ -275,31 +286,36 @@ export class Renderer {
       return { lit: vis.visGen[i] === vis.gen ? vis.light[i] : 0, mem: vis.memory[i], i };
     };
 
+    const layer = world.playerLayer;
+    const onLayer = (y) => world.layerAt(Math.floor(y)) === layer;
+
     for (const d of level.decor) {
+      if (!onLayer(d.y)) continue;
       const s = seenAt(Math.floor(d.x), Math.floor(d.y));
       if (s.lit <= 0.02 && s.mem <= MEMORY_MIN) continue;
       list.push({ d: d.x + d.y + 0.005, kind: 'decor', item: d, lit: s.lit, mem: s.mem });
     }
     for (const s of level.sconces) {
+      if (!onLayer(s.y)) continue;
       const v = seenAt(Math.floor(s.x), Math.floor(s.y));
       if (v.lit <= 0.02 && v.mem <= MEMORY_MIN) continue;
       list.push({ d: s.x + s.y + 0.006, kind: 'sconce', item: s, lit: Math.max(v.lit, 0.6), mem: v.mem });
     }
     for (const prop of level.props) {
-      if (prop.consumed) continue;
+      if (prop.consumed || !onLayer(prop.y)) continue;
       if (prop.hidden && !world.revealedProps.has(prop.id)) continue;
       const v = seenAt(Math.floor(prop.x), Math.floor(prop.y));
       if (v.lit <= 0.02 && v.mem <= MEMORY_MIN) continue;
       list.push({ d: prop.x + prop.y + 0.01, kind: 'prop', item: prop, lit: v.lit, mem: v.mem });
     }
     for (const k of level.keys) {
-      if (k.taken || k.holder === 'enemy') continue;
+      if (k.taken || k.holder === 'enemy' || !onLayer(k.y)) continue;
       const v = seenAt(k.x, k.y);
       if (v.lit <= 0.02 && v.mem <= MEMORY_MIN) continue;
       list.push({ d: k.x + k.y + 0.02, kind: 'key', item: k, lit: v.lit, mem: v.mem });
     }
     for (const e of world.enemies) {
-      if (e.dead) continue;
+      if (e.dead || !onLayer(e.y)) continue;
       const gx = Math.floor(e.x), gy = Math.floor(e.y);
       const lit = vis.lightAt(gx, gy);
       const revealed = world.revealRadius > 0 && e.speedNow > 0.3 &&

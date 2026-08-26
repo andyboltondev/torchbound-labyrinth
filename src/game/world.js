@@ -54,6 +54,7 @@ export class World {
     }
     this.revealedProps = new Set();
     this.sealBlocks = new Set();
+    this.occupied = new Map();   // tile index -> enemy id, refreshed each frame
 
     this.flow = null;
     this.flowTimer = 0;
@@ -66,6 +67,9 @@ export class World {
     this.revealRadius = 0;
     this.lowHealthPulse = 0;
     this.secretsFound = 0;
+    // When true, a direction key moves exactly that way on screen or not at
+    // all -- no deflecting into a corridor that is merely nearby.
+    this.strictMovement = false;
     this.listeners = new Set();
     this.damageTakenThisLevel = 0;
     this.shakeRequest = 0;
@@ -116,6 +120,29 @@ export class World {
     for (const g of this.level.gates) mark(g.x, g.y);
   }
 
+  // What the player is trying to do right now, in one line. Without this a
+  // newcomer has a torch, a sword and no idea what the level wants.
+  currentObjective() {
+    if (this.level.isBoss) {
+      return this.boss && !this.boss.dead
+        ? { text: 'Slay ' + this.boss.def.name, colour: '#e05a3c' }
+        : { text: 'Take the stairs down', colour: '#6fce87' };
+    }
+    for (const gate of this.level.gates) {
+      if (gate.open) continue;
+      const col = keyColour(gate.colourIndex);
+      const key = this.level.keys.find((k) => k.colourIndex === gate.colourIndex);
+      if (this.run.keys.has(gate.colourIndex)) {
+        return { text: 'Unlock the ' + col.name + ' Gate', colour: col.hex };
+      }
+      if (key && key.holder === 'enemy') {
+        return { text: 'Something is carrying the ' + col.name + ' Key', colour: col.hex };
+      }
+      return { text: 'Find the ' + col.name + ' Key', colour: col.hex };
+    }
+    return { text: 'Find the stairs down', colour: '#6fce87' };
+  }
+
   // --- lookups ------------------------------------------------------------
   gateAt(x, y) { return this.gateIndex.get(this.grid.idx(x, y)) || null; }
   secretAt(x, y) { return this.secretIndex.get(this.grid.idx(x, y)) || null; }
@@ -123,6 +150,16 @@ export class World {
     const s = this.secretAt(x, y);
     return !!(s && s.discovered);
   }
+  // Vaults live in a strip below the maze on the same grid. They are a
+  // different place, so they are drawn as one: only the layer the player is
+  // standing on is rendered at all.
+  layerAt(y) {
+    const band = this.level.mazeHeight;
+    return band !== undefined && y >= band ? 1 : 0;
+  }
+
+  get playerLayer() { return this.layerAt(Math.floor(this.player.y)); }
+
   zoneAt(x, y) {
     const i = this.grid.idx(Math.floor(x), Math.floor(y));
     return this.level.zoneMap ? this.level.zoneMap[i] : 0;
@@ -137,6 +174,7 @@ export class World {
     this.torch.update(dt, this.hazardMods);
     this.player.torchFlicker = this.torch.flicker;
 
+    this._refreshOccupancy();
     this.player.update(dt, this, intent);
     this.updateFlow(dt);
     this.refreshVisibility(dt);
@@ -158,6 +196,43 @@ export class World {
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       if (this.enemies[i].dead) this.enemies.splice(i, 1);
     }
+  }
+
+  // Rebuilt once a frame so the direction chooser can reject tiles another
+  // enemy already stands on or is stepping into.
+  _refreshOccupancy() {
+    this.occupied.clear();
+    for (const e of this.enemies) {
+      if (e.dead || !e.mover) continue;
+      this.occupied.set(this.grid.idx(e.mover.tileX, e.mover.tileY), e.id);
+      if (e.mover.moving) this.occupied.set(this.grid.idx(e.mover.toX, e.mover.toY), e.id);
+    }
+  }
+
+  tileTakenBy(x, y, id) {
+    const who = this.occupied.get(this.grid.idx(x, y));
+    if (who !== undefined && who !== id) return true;
+    // Enemies stop next to the player rather than on top of them.
+    const pm = this.player.mover;
+    if (pm.tileX === x && pm.tileY === y) return true;
+    if (pm.moving && pm.toX === x && pm.toY === y) return true;
+    return false;
+  }
+
+  // One footfall per tile, which is exactly the rhythm grid movement wants.
+  onPlayerEnterTile(x, y) {
+    const hz = this.hazardMods;
+    const colour = hz.footstepSplash ? '#8fb4c4' : hz.footprints ? '#4a3722' : '#6f6a5e';
+    footDust(this.particles, x + 0.5, y + 0.5, colour);
+    this.playSfx(hz.footstepSplash ? 'stepWet' : hz.playerSpeed ? 'stepMud' : 'step');
+  }
+
+  // Knockback is presentation only: shoving a grid mover off its lane would
+  // undo the whole point of tile-to-tile movement.
+  knock(entity, dx, dy, power = 0.28) {
+    const m = Math.hypot(dx, dy) || 1;
+    entity.knockX = (dx / m) * power;
+    entity.knockY = (dy / m) * power;
   }
 
   updateHazard() {
@@ -301,7 +376,7 @@ export class World {
       e.takeDamage(damage, this, 'sword');
       const dx = e.x - player.x, dy = e.y - player.y;
       const m = Math.hypot(dx, dy) || 1;
-      moveEntity(this, e, (dx / m) * 0.22, (dy / m) * 0.22);
+      this.knock(e, dx, dy, 0.3);
       burstBlood(this.particles, e.x, e.y, dx / m, dy / m);
       this.particles.text(e.x, e.y, Math.round(damage), '#ffe0b0', 13);
     }
@@ -492,13 +567,6 @@ export class World {
     this.shake(5);
   }
 
-  onFootstep(player) {
-    const hz = this.hazardMods;
-    const colour = hz.footstepSplash ? '#8fb4c4' : hz.footprints ? '#4a3722' : '#6f6a5e';
-    footDust(this.particles, player.x, player.y, colour);
-    this.playSfx(hz.footstepSplash ? 'stepWet' : hz.playerSpeed ? 'stepMud' : 'step');
-  }
-
   // --- pickups ------------------------------------------------------------
   updatePickups() {
     const p = this.player;
@@ -643,6 +711,16 @@ export class World {
             type: 'chest', prop, label: 'Open the cursed chest',
             hint: 'Something is bound to it', enabled: true, hx: prop.x, hy: prop.y,
           };
+        } else if (prop.type === 'ladder') {
+          const down = prop.dir === 'down';
+          const vault = this.level.vaults[prop.vault];
+          target = {
+            type: 'ladder', prop,
+            label: down ? 'Climb down the ladder' : 'Climb back up',
+            hint: down ? (vault && vault.visited ? 'Back to the vault' : 'Something is sealed down there')
+              : 'Return to the labyrinth',
+            enabled: true, hx: prop.x, hy: prop.y,
+          };
         } else if ((prop.type === 'shrine' || prop.type === 'shrineSmall') && !prop.used) {
           const heal = prop.flavour === 'heal' || prop.type === 'shrineSmall';
           target = {
@@ -672,6 +750,7 @@ export class World {
       case 'gate': return this.unlockGate(target.gate);
       case 'chest': return this.openChest(target.prop);
       case 'shrine': return this.useShrine(target.prop);
+      case 'ladder': return this.useLadder(target.prop);
       default: return false;
     }
   }
@@ -689,6 +768,30 @@ export class World {
     // that pausing genuinely pauses it.
     this.flow = null;
     this.emit('gateOpened', { gate });
+    return true;
+  }
+
+  // Ladders move you within the same depth: down into a sealed vault that
+  // nothing else connects to, and back up again. They never change level.
+  useLadder(prop) {
+    const dest = prop.link;
+    const vault = this.level.vaults[prop.vault];
+    this.player.placeAt(dest.x, dest.y);
+    this.player.invulnTimer = 0.8;
+    this.flow = null;
+    this.particles.clear();
+    this.playSfx('descend');
+
+    if (prop.dir === 'down' && vault && !vault.visited) {
+      vault.visited = true;
+      this.secretsFound++;
+      const pts = this.run.score.addSecret(320 + this.level.depth * 45, this.run.mods);
+      this.particles.text(dest.x + 0.5, dest.y + 0.5 - 1,
+        'VAULT FOUND  +' + Math.round(pts), '#e8b45c', 16, 2.2);
+      ring(this.particles, dest.x + 0.5, dest.y + 0.5, '#e8b45c', 20, 1.1, 0.8);
+      this.playSfx('reveal');
+    }
+    this.emit('ladder', { dir: prop.dir, vault: prop.vault, first: vault && vault.visited });
     return true;
   }
 
@@ -945,9 +1048,7 @@ export class World {
     const d = Math.hypot(this.player.x - boss.x, this.player.y - boss.y);
     if (d <= radius) {
       this.damagePlayer(boss.damage, boss);
-      const dx = this.player.x - boss.x, dy = this.player.y - boss.y;
-      const m = Math.hypot(dx, dy) || 1;
-      moveEntity(this, this.player, (dx / m) * 0.8, (dy / m) * 0.8);
+      this.knock(this.player, this.player.x - boss.x, this.player.y - boss.y, 0.5);
     }
   }
 
@@ -994,6 +1095,14 @@ export class World {
   onBossKilled(boss) {
     const pts = this.run.score.addBoss(boss.def.score || 3000, this.run.mods);
     this.particles.text(boss.x, boss.y - 1, '+' + Math.round(pts), '#e8b45c', 22, 2.4);
+    // Killing a great foe mends you. Without this a boss is followed by a
+    // much larger depth entered on the health the fight left behind, which
+    // reads as the run ending by arithmetic rather than by mistake.
+    const mended = this.run.heal(this.run.maxHp * 0.4, true);
+    if (mended > 0) {
+      this.particles.text(this.player.x, this.player.y - 1.2,
+        '+' + mended + ' VIGOUR', '#6fce87', 17, 2.2);
+    }
     for (let i = 0; i < 5; i++) {
       setTimeout(() => {
         if (!this.particles) return;

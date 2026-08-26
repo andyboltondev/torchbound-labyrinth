@@ -3,7 +3,7 @@
 
 import { GameLoop } from './core/loop.js';
 import { Input } from './core/input.js';
-import { screenDirToGrid } from './render/iso.js';
+import { inputDirToGrid } from './render/iso.js';
 import { Renderer } from './render/renderer.js';
 import { Minimap } from './render/minimap.js';
 import { warmTileSets } from './render/sprites.js';
@@ -39,6 +39,7 @@ class Game {
       chooseRelic: (relic) => this.chooseRelic(relic),
       afterSummary: () => this.showRelicChoice(),
       onTouchModeChange: () => this.refreshTouchMode(),
+      onSettingChanged: (key) => this.applySettings(key),
       get run() { return window.__game ? window.__game.run : null; },
     });
     this.state = STATE.MENU;
@@ -85,6 +86,11 @@ class Game {
     this.refreshTouchMode();
   }
 
+  applySettings(key) {
+    if (key === 'touchControls') this.refreshTouchMode();
+    if (this.world) this.world.strictMovement = profile.settings.movementAssist === 'strict';
+  }
+
   refreshTouchMode() {
     const mode = profile.settings.touchControls;
     const on = mode === 'always' || (mode === 'auto' && isTouchDevice());
@@ -125,6 +131,7 @@ class Game {
       if (this.world) this.world.dispose();
       warmTileSets(level.zoneInfo.map((z) => z.biome).concat([level.biome]));
       this.world = new World(this.run, level, this.run.rng.fork('level' + depth));
+      this.world.strictMovement = profile.settings.movementAssist === 'strict';
       this.world.on((type, data) => this.onWorldEvent(type, data));
       this.minimap.bind(level);
       this.renderer.cameraReady = false;
@@ -148,6 +155,15 @@ class Game {
       this.hud.toast('Depth ' + depth + (level.isBoss ? '  \u2014  ' + level.boss.name : ''));
       if (level.gates.length) {
         this.hud.toast(level.gates.length + ' sealed gate' + (level.gates.length > 1 ? 's' : '') + ' ahead');
+      }
+      // A first-ever run gets told how to hold the sword.
+      if (profile.stats.runs === 0 && depth === 1) {
+        const touch = this.touchEnabled;
+        setTimeout(() => this.hud.toast(touch
+          ? 'Drag anywhere on the left to move' : 'Move with WASD or the arrow keys'), 1400);
+        setTimeout(() => this.hud.toast(touch
+          ? 'SLASH to strike, ACT to use things' : 'Space to slash, E to act'), 3600);
+        setTimeout(() => this.hud.toast('Your torch is the only light. Find the stairs.'), 5800);
       }
     }, 60);
   }
@@ -243,6 +259,13 @@ class Game {
         this.hud.toast('Crossbow recovered  \u2014  F or K to loose', 'good');
         break;
       case 'gateOpened': this.hud.toast('Gate opened', 'good'); break;
+      case 'ladder':
+        // The camera has to cut, not pan: the vault is nowhere near the maze.
+        this.renderer.cameraReady = false;
+        this.renderer.addShake(4);
+        this.hud.toast(data.dir === 'down' ? 'A vault beneath the labyrinth' : 'Back in the labyrinth',
+          data.dir === 'down' ? 'good' : '');
+        break;
       case 'encounterStart':
         this.combatHeat = 1;
         if (data.encounter.label) this.hud.toast(data.encounter.label, 'bad');
@@ -281,7 +304,7 @@ class Game {
     }
 
     const axis = this.input.axis();
-    const dir = screenDirToGrid(axis.x, axis.y);
+    const dir = inputDirToGrid(axis.x, axis.y, profile.settings.movementFrame);
     const intent = {
       moveX: dir.x,
       moveY: dir.y,

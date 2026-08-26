@@ -230,6 +230,7 @@ export function drawProp(ctx, prop, t) {
     case 'arrows': drawArrows(ctx, sx, sy, t); break;
     case 'crossbow': drawCrossbowPickup(ctx, sx, sy, t); break;
     case 'treasure': drawTreasure(ctx, sx, sy, t); break;
+    case 'ladder': drawLadder(ctx, sx, sy, t, prop); break;
     default: break;
   }
 }
@@ -408,6 +409,73 @@ function drawTreasure(ctx, sx, sy, t) {
     ctx.ellipse(sx + Math.cos(i * 2.1) * (8 - i * 0.5), sy - 2 - (i % 3) * 2.4, 4, 2, 0, 0, TAU);
     ctx.fill();
   }
+}
+
+function drawLadder(ctx, sx, sy, t, prop) {
+  const down = prop.dir === 'down';
+  const glow = 0.3 + Math.sin(t * 1.8 + prop.x) * 0.1;
+
+  // The shaft: a dark opening cut into the floor, sunk below the tile.
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(sx, sy - HALF_H * 0.8);
+  ctx.lineTo(sx + HALF_W * 0.8, sy);
+  ctx.lineTo(sx, sy + HALF_H * 0.8);
+  ctx.lineTo(sx - HALF_W * 0.8, sy);
+  ctx.closePath();
+  ctx.fillStyle = '#05070b';
+  ctx.fill();
+  ctx.strokeStyle = rgba('#8a7a5c', 0.55);
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+  ctx.clip();
+  // Rails and rungs receding into the dark.
+  for (let i = 0; i < 5; i++) {
+    const k = i / 5;
+    const w = 11 * (1 - k * 0.45);
+    const y = sy - 4 + i * 5;
+    ctx.strokeStyle = rgba('#6b5636', 0.85 - k * 0.6);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(sx - w, y);
+    ctx.lineTo(sx + w, y);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = rgba('#7d6540', 0.8);
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  ctx.moveTo(sx - 11, sy - 6); ctx.lineTo(sx - 6, sy + 20);
+  ctx.moveTo(sx + 11, sy - 6); ctx.lineTo(sx + 6, sy + 20);
+  ctx.stroke();
+  ctx.restore();
+
+  // A ladder head standing proud of the floor, so it is spottable as an
+  // object rather than as a dark patch of ground.
+  ctx.save();
+  ctx.strokeStyle = '#8a6f45';
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(sx - 9, sy - 2); ctx.lineTo(sx - 9, sy - 17);
+  ctx.moveTo(sx + 9, sy - 2); ctx.lineTo(sx + 9, sy - 17);
+  ctx.stroke();
+  ctx.lineWidth = 2.2;
+  for (let i = 0; i < 3; i++) {
+    const y = sy - 5 - i * 5;
+    ctx.beginPath();
+    ctx.moveTo(sx - 9, y); ctx.lineTo(sx + 9, y);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const g = ctx.createRadialGradient(sx, sy - 6, 0, sx, sy - 6, 34);
+  g.addColorStop(0, rgba(down ? '#e8b45c' : '#8fd7ff', glow));
+  g.addColorStop(1, rgba(down ? '#e8b45c' : '#8fd7ff', 0));
+  ctx.fillStyle = g;
+  ctx.fillRect(sx - 34, sy - 40, 68, 68);
+  ctx.restore();
 }
 
 // --- scenery --------------------------------------------------------------

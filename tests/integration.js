@@ -11,6 +11,7 @@ import { World } from '../src/game/world.js';
 import { Enemy } from '../src/game/enemies.js';
 import { RELICS, RELIC_BY_ID, computeMods, offerRelics } from '../src/game/relics.js';
 import { T } from '../src/gen/tiles.js';
+import { inputDirToGrid, screenDirToGrid, screenX, screenY } from '../src/render/iso.js';
 import { bfsField, N4 } from '../src/gen/grid.js';
 import { RNG } from '../src/core/rng.js';
 import { hazardBudget, HAZARDS } from '../src/gen/biomes.js';
@@ -43,11 +44,10 @@ function step(world, frames = 60, intent = idle) {
   for (let i = 0; i < frames; i++) world.update(1 / 60, intent);
 }
 
-// Drops the player onto a specific tile.
+// Drops the player onto a specific tile. Position is owned by the grid mover,
+// so it has to be moved rather than assigned.
 function place(world, x, y) {
-  world.player.x = x + 0.5;
-  world.player.y = y + 0.5;
-  world.player.vx = 0; world.player.vy = 0;
+  world.player.placeAt(x, y);
   world.player.invulnTimer = 0;
   world.flow = null;
 }
@@ -121,6 +121,136 @@ test('enemies never end up inside solid rock', () => {
   }
 });
 
+// --- controls ---------------------------------------------------------------
+
+// Clears a square of floor and stands the level down, so a movement test
+// measures the controls and nothing else. Without this the arena can overlap
+// an encounter room, which seals its doorways the moment the player walks in
+// -- correct behaviour, but not what is under test here.
+function clearArena(world, cx, cy, radius = 3) {
+  for (const enc of world.level.encounters) {
+    enc.state = 'cleared';
+    if (enc.sealedCells) world.releaseSeal(enc);
+  }
+  world.sealBlocks.clear();
+  world.enemies.length = 0;
+  for (let y = cy - radius; y <= cy + radius; y++) {
+    for (let x = cx - radius; x <= cx + radius; x++) world.grid.set(x, y, T.FLOOR);
+  }
+  world.flow = null;
+}
+
+// The direction keys walk the dungeon's compass: Up is north, Right is east,
+// Down is south, Left is west. Corridors run along those axes, so one key
+// carries you down a passage. The isometric view draws north as
+// up-and-to-the-right, which is the projection doing its job.
+const COMPASS = {
+  Up: { key: { x: 0, y: -1 }, grid: { x: 0, y: -1 }, name: 'north' },
+  Right: { key: { x: 1, y: 0 }, grid: { x: 1, y: 0 }, name: 'east' },
+  Down: { key: { x: 0, y: 1 }, grid: { x: 0, y: 1 }, name: 'south' },
+  Left: { key: { x: -1, y: 0 }, grid: { x: -1, y: 0 }, name: 'west' },
+  'Up+Right': { key: { x: 0.7071, y: -0.7071 }, grid: { x: 1, y: -1 }, name: 'north-east' },
+  'Down+Right': { key: { x: 0.7071, y: 0.7071 }, grid: { x: 1, y: 1 }, name: 'south-east' },
+  'Down+Left': { key: { x: -0.7071, y: 0.7071 }, grid: { x: -1, y: 1 }, name: 'south-west' },
+  'Up+Left': { key: { x: -0.7071, y: -0.7071 }, grid: { x: -1, y: -1 }, name: 'north-west' },
+};
+
+// Walks one input direction from the middle of a cleared arena.
+function walkFrom(world, cx, cy, key, frame) {
+  place(world, cx, cy);
+  world.player.mover.heading = null;
+  const grid = inputDirToGrid(key.x, key.y, frame);
+  const from = { sx: screenX(world.player.x, world.player.y), sy: screenY(world.player.x, world.player.y) };
+  step(world, 30, { moveX: grid.x, moveY: grid.y, slash: false, fire: false });
+  const dx = screenX(world.player.x, world.player.y) - from.sx;
+  const dy = screenY(world.player.x, world.player.y) - from.sy;
+  const m = Math.hypot(dx, dy);
+  return {
+    tileDx: world.player.mover.tileX - cx,
+    tileDy: world.player.mover.tileY - cy,
+    ux: dx / (m || 1), uy: dy / (m || 1), moved: m,
+  };
+}
+
+test('each direction key walks the dungeon compass', () => {
+  const { world, level } = makeWorld(3, 'controls-1');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 4);
+
+  for (const [name, spec] of Object.entries(COMPASS)) {
+    const t = walkFrom(world, cx, cy, spec.key, 'dungeon');
+    assert(t.moved > 8, `${name} did not move the character at all`);
+    assert(Math.sign(t.tileDx) === Math.sign(spec.grid.x)
+        && Math.sign(t.tileDy) === Math.sign(spec.grid.y),
+      `${name} should walk ${spec.name} (grid ${spec.grid.x},${spec.grid.y}) `
+      + `but moved ${t.tileDx},${t.tileDy}`);
+    if (spec.grid.x === 0) assert(t.tileDx === 0, `${name} drifted east/west while walking ${spec.name}`);
+    if (spec.grid.y === 0) assert(t.tileDy === 0, `${name} drifted north/south while walking ${spec.name}`);
+  }
+});
+
+test('the view frame still points the keys at the screen', () => {
+  const { world, level } = makeWorld(3, 'controls-view');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 4);
+
+  const screenKeys = {
+    Up: { x: 0, y: -1 }, Down: { x: 0, y: 1 }, Left: { x: -1, y: 0 }, Right: { x: 1, y: 0 },
+  };
+  for (const [name, key] of Object.entries(screenKeys)) {
+    const t = walkFrom(world, cx, cy, key, 'view');
+    assert(t.moved > 8, `${name} did not move the character at all`);
+    const alignment = t.ux * key.x + t.uy * key.y;
+    assert(alignment > 0.99,
+      `${name} moved along screen vector (${t.ux.toFixed(2)}, ${t.uy.toFixed(2)}) `
+      + `instead of (${key.x.toFixed(2)}, ${key.y.toFixed(2)})`);
+  }
+});
+
+test('a blocked compass direction never deflects you sideways', () => {
+  const { world, level } = makeWorld(3, 'controls-2');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 4);
+  level.grid.set(cx, cy - 1, T.WALL);   // wall off north
+
+  // Diagonals cannot cut corners, so blocking north also blocks north-east
+  // and north-west. Pressing Up therefore has exactly one meaning under the
+  // dungeon axes: walk north, or stand still. It can never send you east.
+  for (const mode of [true, false]) {
+    world.strictMovement = mode;
+    place(world, cx, cy);
+    world.player.mover.heading = null;
+    step(world, 40, { moveX: 0, moveY: -1, slash: false, fire: false });
+    assert(world.player.mover.tileX === cx && world.player.mover.tileY === cy,
+      `with assist ${mode ? 'off' : 'on'}, a blocked north moved the player to `
+      + `${world.player.mover.tileX},${world.player.mover.tileY}`);
+  }
+});
+
+test('a blocked diagonal takes the nearest way round, unless told to stop', () => {
+  const { world, level } = makeWorld(3, 'controls-3');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 4);
+  level.grid.set(cx + 1, cy - 1, T.WALL);   // wall off north-east only
+
+  world.strictMovement = false;
+  place(world, cx, cy);
+  world.player.mover.heading = null;
+  step(world, 40, { moveX: 0.7071, moveY: -0.7071, slash: false, fire: false });
+  const dx = world.player.mover.tileX - cx, dy = world.player.mover.tileY - cy;
+  assert(dx !== 0 || dy !== 0, 'the assist found no way round a blocked diagonal');
+  // North or east: either is a reasonable reading of "north-east".
+  assert((dx === 0 && dy < 0) || (dx > 0 && dy === 0),
+    `the assist went ${dx},${dy} instead of north or east`);
+
+  world.strictMovement = true;
+  place(world, cx, cy);
+  world.player.mover.heading = null;
+  step(world, 40, { moveX: 0.7071, moveY: -0.7071, slash: false, fire: false });
+  assert(world.player.mover.tileX === cx && world.player.mover.tileY === cy,
+    'strict mode deflected a blocked diagonal');
+});
+
 // --- keys, gates and the exit ----------------------------------------------
 
 test('a gate stays shut without its key and opens with it', () => {
@@ -183,9 +313,15 @@ test('stairs need an explicit action and never trigger by standing on them', () 
 });
 
 test('a key carried by an enemy drops where the enemy dies', () => {
-  const { world, level } = makeWorld(9, 'carried-key');
-  const carrier = world.enemies.find((e) => e.carriesKey !== null && e.carriesKey !== undefined);
-  if (!carrier) return 'skipped: this seed placed no enemy-held key';
+  // Carried keys are a chance placement, so search seeds for one rather than
+  // letting the test quietly skip itself.
+  let world = null, level = null, carrier = null;
+  for (let s = 0; s < 30 && !carrier; s++) {
+    const built = makeWorld(9, 'carried-key-' + s);
+    const found = built.world.enemies.find((e) => e.carriesKey !== null && e.carriesKey !== undefined);
+    if (found) { world = built.world; level = built.level; carrier = found; }
+  }
+  assert(carrier, 'no enemy-held key generated across 30 seeds');
   const key = level.keys.find((k) => k.colourIndex === carrier.carriesKey);
   assert(key.holder === 'enemy', 'key was not marked as carried');
   carrier.takeDamage(99999, world, 'sword');
@@ -230,7 +366,8 @@ test('a sword swing damages and kills what it faces, and misses what it does not
 
   const target = spawnAt(world, 'draugr_thrall', spot.x + 1, spot.y);
   const behind = spawnAt(world, 'draugr_thrall', spot.x - 1, spot.y);
-  behind.x = spot.x - 1 + 0.5; behind.y = spot.y + 0.5;
+  // Hold both still so the test measures the swing, not their wandering.
+  for (const e of [target, behind]) { e.state = 'idle'; e.wanderTimer = 999; e.wanderX = 0; e.wanderY = 0; }
 
   const before = target.hp;
   step(world, 40, { moveX: 0, moveY: 0, slash: true, fire: false });
@@ -453,19 +590,32 @@ test('hazards apply the mechanic their visuals promise', () => {
   assert(muddy < dry * 0.85, `mud did not slow the player (${muddy.toFixed(2)} vs ${dry.toFixed(2)})`);
 });
 
-test('ice gives the player momentum they have to fight', () => {
+test('ice carries you past where you let go, and steering is delayed', () => {
   const { world, level } = makeWorld(6, 'hazard-2');
-  const run = findRun(level, 6);
-  assert(run, 'no straight corridor found to slide along');
-  place(world, run.x, run.y);
+  const corridor = findRun(level, 8);
+  assert(corridor, 'no straight corridor found to slide along');
+  const move = { moveX: corridor.dx, moveY: corridor.dy, slash: false, fire: false };
+
+  // On dry ground, releasing the input stops you at the next tile.
+  place(world, corridor.x, corridor.y);
+  forceHazard(world, 'clear');
+  step(world, 30, move);
+  const dryRelease = { x: world.player.mover.tileX, y: world.player.mover.tileY };
+  step(world, 120, { moveX: 0, moveY: 0, slash: false, fire: false });
+  const dryCoast = Math.abs(world.player.mover.tileX - dryRelease.x)
+    + Math.abs(world.player.mover.tileY - dryRelease.y);
+
+  // On ice, the slide carries you further.
+  place(world, corridor.x, corridor.y);
   forceHazard(world, 'ice');
-  step(world, 90, { moveX: run.dx, moveY: run.dy, slash: false, fire: false });
-  const speedBefore = Math.hypot(world.player.vx, world.player.vy);
-  step(world, 12, { moveX: 0, moveY: 0, slash: false, fire: false });
-  const speedAfter = Math.hypot(world.player.vx, world.player.vy);
-  assert(speedBefore > 0.5, 'the player never got moving on ice');
-  assert(speedAfter > speedBefore * 0.5,
-    `momentum vanished immediately on ice (${speedBefore.toFixed(2)} -> ${speedAfter.toFixed(2)})`);
+  step(world, 30, move);
+  const iceRelease = { x: world.player.mover.tileX, y: world.player.mover.tileY };
+  step(world, 120, { moveX: 0, moveY: 0, slash: false, fire: false });
+  const iceCoast = Math.abs(world.player.mover.tileX - iceRelease.x)
+    + Math.abs(world.player.mover.tileY - iceRelease.y);
+
+  assert(dryCoast <= 1, `dry ground coasted ${dryCoast} tiles after the input stopped`);
+  assert(iceCoast > dryCoast, `ice did not carry the player (${iceCoast} vs ${dryCoast} tiles)`);
 });
 
 test('hazard threat never exceeds the depth budget', () => {
@@ -521,6 +671,77 @@ test('taking damage during an encounter forfeits the flawless bonus', () => {
   for (const e of world.enemies) if (e.encounter === enc.id) e.takeDamage(99999, world, 'sword');
   step(world, 4);
   assert(run.score.level.flawless === before, 'a flawless bonus was paid out after taking damage');
+});
+
+// --- ladders and vaults ----------------------------------------------------
+
+test('a ladder carries the player into a vault and back, without changing depth', () => {
+  const { world, level, run } = makeWorld(6, 'vault-1');
+  assert(level.vaults.length > 0, 'no vault generated on this depth');
+  const vault = level.vaults[0];
+  const depthBefore = run.depth;
+
+  place(world, vault.entry.x, vault.entry.y);
+  step(world, 2);
+  assert(world.interactTarget && world.interactTarget.type === 'ladder',
+    'standing on the ladder offered no prompt');
+  assert(world.interactTarget.enabled, 'the ladder down was disabled');
+  world.interact();
+
+  assert(world.player.mover.tileX === vault.exit.x && world.player.mover.tileY === vault.exit.y,
+    'climbing down did not land the player in the vault');
+  assert(run.depth === depthBefore, 'a ladder changed the depth');
+  assert(!world.finished, 'a ladder completed the level');
+
+  step(world, 2);
+  assert(world.interactTarget && world.interactTarget.type === 'ladder', 'no ladder back up');
+  world.interact();
+  assert(world.player.mover.tileX === vault.entry.x && world.player.mover.tileY === vault.entry.y,
+    'climbing back up did not return the player to the labyrinth');
+});
+
+test('a vault cannot be walked into -- the ladder is the only way in', () => {
+  for (let s = 0; s < 6; s++) {
+    const { world, level } = makeWorld(7, 'vault-walk-' + s);
+    if (!level.vaults.length) continue;
+    const reach = bfsField(level.grid, [level.entrance], (x, y, t) =>
+      t === T.FLOOR || t === T.STAIRS || t === T.ENTRANCE || t === T.GATE || t === T.SECRET);
+    for (const vault of level.vaults) {
+      const inside = reach[level.grid.idx(vault.exit.x, vault.exit.y)];
+      assert(inside < 0, `vault ${vault.index} can be reached on foot`);
+    }
+  }
+});
+
+test('a vault holds a reward and something guarding it', () => {
+  let checked = 0;
+  for (let s = 0; s < 8; s++) {
+    const { level } = makeWorld(8, 'vault-loot-' + s);
+    for (const vault of level.vaults) {
+      const loot = level.props.filter((p) => p.vault === vault.index && p.type !== 'ladder');
+      const guards = level.spawns.filter((sp) => sp.encounter === 'enc_vault_' + vault.index);
+      assert(loot.length > 0, `vault ${vault.index} is empty`);
+      assert(guards.length > 0, `vault ${vault.index} is unguarded`);
+      checked++;
+    }
+  }
+  assert(checked > 0, 'no vaults were generated across eight seeds');
+});
+
+test('finding a vault is scored as a discovery, once', () => {
+  const { world, level, run } = makeWorld(6, 'vault-score');
+  assert(level.vaults.length > 0, 'no vault to find');
+  const vault = level.vaults[0];
+  place(world, vault.entry.x, vault.entry.y);
+  step(world, 2);
+  world.interact();
+  const first = run.score.level.secrets;
+  assert(first > 0, 'finding a vault scored nothing');
+  step(world, 2);
+  world.interact();              // back up
+  step(world, 2);
+  world.interact();              // down again
+  assert(run.score.level.secrets === first, 'a vault paid out twice');
 });
 
 // --- bosses -----------------------------------------------------------------
@@ -676,12 +897,18 @@ function objectiveFor(world) {
     if (gate.open) continue;
     if (!held.has(gate.colourIndex)) {
       const key = world.level.keys.find((k) => k.colourIndex === gate.colourIndex && !k.taken);
-      if (key) return { x: key.x, y: key.y, kind: 'key' };
-      // Carried by an enemy: go to the carrier.
+      // A carried key is not lying where it was placed -- hunt the carrier.
+      if (key && key.holder !== 'enemy') return { x: key.x, y: key.y, kind: 'key' };
       const carrier = world.enemies.find((e) => !e.dead && e.carriesKey === gate.colourIndex);
       if (carrier) return { x: Math.floor(carrier.x), y: Math.floor(carrier.y), kind: 'carrier' };
+      if (key) return { x: key.x, y: key.y, kind: 'key' };
     }
     return { x: gate.x, y: gate.y, kind: 'gate' };
+  }
+  // A boss seals the exit behind itself, so it is the objective until it
+  // falls -- walking to the stairs and waiting is not a plan.
+  if (world.boss && !world.boss.dead && world.boss.awake) {
+    return { x: Math.floor(world.boss.x), y: Math.floor(world.boss.y), kind: 'boss' };
   }
   return { x: world.level.stairs.x, y: world.level.stairs.y, kind: 'stairs' };
 }
@@ -696,6 +923,18 @@ function passableForAuto(world) {
     }
     return false;
   };
+}
+
+// Inside a vault nothing on the main map is reachable on foot, so the only
+// sensible objective is the ladder back out.
+function vaultObjective(world) {
+  const px = world.player.mover.tileX, py = world.player.mover.tileY;
+  for (const vault of world.level.vaults || []) {
+    if (px < vault.rect.x0 || px > vault.rect.x1) continue;
+    if (py < vault.rect.y0 || py > vault.rect.y1) continue;
+    return { x: vault.exit.x, y: vault.exit.y, kind: 'ladder-out' };
+  }
+  return null;
 }
 
 // A sealed room has to be fought out of before anything else matters.
@@ -715,28 +954,34 @@ function sealedObjective(world) {
 }
 
 // Runs the level until the exit is used, the player dies, or time runs out.
-function autoplayLevel(world, maxSeconds = 240) {
+export function autoplayLevel(world, maxSeconds = 240, onTick = null) {
   const dt = 1 / 60;
   let field = null;
   let refresh = 0;
   let goal = null;
   let stuckFor = 0;
   let lastPos = { x: world.player.x, y: world.player.y };
+  const visited = new Set();
+  const lootedVaults = new Set();
+  let transitions = 0;
+  let lastTile = '';
 
   for (let frame = 0; frame < maxSeconds * 60; frame++) {
     if (world.finished) return { ok: true, frames: frame };
     if (world.playerDead) return { ok: false, reason: 'died', frames: frame };
 
     refresh -= dt;
-    const want = sealedObjective(world) || objectiveFor(world);
+    const want = vaultObjective(world) || sealedObjective(world) || objectiveFor(world);
     if (!field || refresh <= 0 || !goal || goal.x !== want.x || goal.y !== want.y) {
       goal = want;
       field = bfsField(world.grid, [{ x: goal.x, y: goal.y }], passableForAuto(world));
-      refresh = 0.4;
+      refresh = goal.kind === 'boss' || goal.kind === 'carrier' ? 0.15 : 0.4;
     }
 
     // Walk downhill toward the objective.
-    const gx = Math.floor(world.player.x), gy = Math.floor(world.player.y);
+    const gx = world.player.mover.tileX, gy = world.player.mover.tileY;
+    const tileKey = gx + ',' + gy;
+    if (tileKey !== lastTile) { lastTile = tileKey; transitions++; visited.add(tileKey); }
     let mx = 0, my = 0;
     const here = field[world.grid.idx(gx, gy)];
     if (here > 0) {
@@ -778,17 +1023,31 @@ function autoplayLevel(world, maxSeconds = 240) {
       const d = Math.hypot(e.x - world.player.x, e.y - world.player.y);
       if (d < nd) { nd = d; nearest = e; }
     }
-    if (nearest && nd < 1.7) {
-      world.player.faceX = (nearest.x - world.player.x) / (nd || 1);
-      world.player.faceY = (nearest.y - world.player.y) / (nd || 1);
-      slash = true;
-      mx = 0; my = 0;
-    } else if (world.actionableSecret) {
-      slash = true;
+    if (world.boss && !world.boss.dead) {
+      const d = Math.hypot(world.boss.x - world.player.x, world.boss.y - world.player.y)
+        - world.boss.radius;
+      if (d < nd) { nd = d; nearest = world.boss; }
     }
+    // Swing at anything close, but keep walking: standing still to duel every
+    // wanderer would stall the run rather than test whether it can be run.
+    if (nearest && nd < 1.7) slash = true;
+    if (world.actionableSecret) slash = true;
 
+    if (onTick) onTick({ frame, gx, gy, here, goal, mx, my, slash });
     world.update(dt, { moveX: mx, moveY: my, slash, fire: false });
-    if (world.interactTarget && world.interactTarget.enabled) world.interact();
+
+    const prompt = world.interactTarget;
+    if (prompt && prompt.enabled) {
+      const diving = prompt.type === 'ladder' && prompt.prop.dir === 'down';
+      const healthy = world.run.hp / world.run.maxHp > 0.6;
+      // Visit each vault once, and only while in a fit state to: they are
+      // optional, and a hurt player would walk past.
+      if (diving && !healthy) { /* leave it for another day */ }
+      else if (!diving || !lootedVaults.has(prompt.prop.vault)) {
+        if (diving) lootedVaults.add(prompt.prop.vault);
+        world.interact();
+      }
+    }
 
     // Detect being wedged and jiggle out of it.
     if (frame % 30 === 0) {
@@ -805,7 +1064,17 @@ function autoplayLevel(world, maxSeconds = 240) {
       }
     }
   }
-  return { ok: false, reason: 'timeout', frames: maxSeconds * 60 };
+  return {
+    ok: false,
+    reason: 'timeout',
+    frames: maxSeconds * 60,
+    detail: `stuck at ${world.player.mover.tileX},${world.player.mover.tileY} `
+      + `chasing ${goal ? goal.kind + ' ' + goal.x + ',' + goal.y : 'nothing'}; `
+      + `keys ${Array.from(world.run.keys).join('') || 'none'}; `
+      + `gates ${world.level.gates.map((g) => (g.open ? 'o' : 'x')).join('')}; `
+      + `enemies ${world.enemies.filter((e) => !e.dead).length}; seals ${world.sealBlocks.size}; `
+      + `visited ${visited.size} tiles over ${transitions} moves`,
+  };
 }
 
 test('an autopilot can actually finish generated levels, keys, gates and all', () => {
@@ -819,9 +1088,9 @@ test('an autopilot can actually finish generated levels, keys, gates and all', (
       const seed = `autoplay-${depth}-${s}`;
       const { world } = makeWorld(depth, seed);
       world.damagePlayer = () => {};
-      const result = autoplayLevel(world, 260);
+      const result = autoplayLevel(world, 340);
       if (result.ok) completed++;
-      else failures.push(`depth ${depth} seed ${s}: ${result.reason} at frame ${result.frames}`);
+      else failures.push(`depth ${depth} seed ${s}: ${result.reason} -- ${result.detail || ''}`);
     }
   }
   assert(failures.length === 0,
@@ -829,6 +1098,8 @@ test('an autopilot can actually finish generated levels, keys, gates and all', (
 });
 
 // --- runner -----------------------------------------------------------------
+
+export { objectiveFor, passableForAuto };
 
 export function runIntegrationTests() {
   const results = [];

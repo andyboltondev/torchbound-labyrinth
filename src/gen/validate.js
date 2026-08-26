@@ -14,6 +14,11 @@ import { T } from './tiles.js';
 import { bfsField, N4 } from './grid.js';
 import { HAZARDS, hazardBudget, pairAllowed } from './biomes.js';
 
+function standableAt(grid, x, y) {
+  const t = grid.get(Math.floor(x), Math.floor(y));
+  return t === T.FLOOR || t === T.STAIRS || t === T.ENTRANCE;
+}
+
 function gateLookup(level) {
   const map = new Map();
   level.gates.forEach((g, i) => map.set(level.grid.idx(g.x, g.y), i));
@@ -34,6 +39,25 @@ function passableFactory(level, gateMap, openColours, secretsSolid = true, force
     }
     return false;
   };
+}
+
+// Ladders are edges in the reachability graph: reaching one end makes the
+// other end reachable. Flood, seed any newly-reachable ladder exits, repeat.
+function floodWithLadders(level, sources, passable) {
+  const seeds = sources.slice();
+  let field = bfsField(level.grid, seeds, passable);
+  for (let pass = 0; pass < 6; pass++) {
+    let grew = false;
+    for (const v of level.vaults || []) {
+      const entry = level.grid.idx(v.entry.x, v.entry.y);
+      const exit = level.grid.idx(v.exit.x, v.exit.y);
+      if (field[entry] >= 0 && field[exit] < 0) { seeds.push(v.exit); grew = true; }
+      if (field[exit] >= 0 && field[entry] < 0) { seeds.push(v.entry); grew = true; }
+    }
+    if (!grew) break;
+    field = bfsField(level.grid, seeds, passable);
+  }
+  return field;
 }
 
 export function validateLevel(level) {
@@ -146,7 +170,8 @@ export function validateLevel(level) {
   // --- 6. no orphaned geometry --------------------------------------------
   // Floor the player can never stand on is a generation bug, so allow only
   // cells that open up once secrets are broken.
-  const generous = bfsField(grid, [level.entrance], passableFactory(level, gateMap, allColours, false));
+  const generous = floodWithLadders(level, [level.entrance],
+    passableFactory(level, gateMap, allColours, false));
   let orphans = 0;
   for (let y = 0; y < grid.h; y++) {
     for (let x = 0; x < grid.w; x++) {
@@ -157,11 +182,26 @@ export function validateLevel(level) {
   }
   if (orphans > 0) errors.push(`${orphans} floor cells are unreachable by any means`);
 
+  // --- 6b. ladders lead somewhere, and never gate progression --------------
+  for (const vault of level.vaults || []) {
+    if (!standableAt(grid, vault.entry.x, vault.entry.y))
+      errors.push(`vault ${vault.index} ladder is not on walkable ground`);
+    if (!standableAt(grid, vault.exit.x, vault.exit.y))
+      errors.push(`vault ${vault.index} has no walkable landing`);
+    if (honest[grid.idx(vault.entry.x, vault.entry.y)] < 0)
+      errors.push(`vault ${vault.index} ladder cannot be reached`);
+    // A vault is optional by definition, so nothing needed to finish the
+    // depth may live inside one.
+    const inside = (p) => p.x >= vault.rect.x0 && p.x <= vault.rect.x1
+      && p.y >= vault.rect.y0 && p.y <= vault.rect.y1;
+    if (inside(level.stairs)) errors.push(`the exit is inside vault ${vault.index}`);
+    for (const key of level.keys) {
+      if (inside(key)) errors.push(`key ${key.colourIndex} is inside vault ${vault.index}`);
+    }
+  }
+
   // --- 7. entities stand on real ground ------------------------------------
-  const standable = (x, y) => {
-    const t = grid.get(Math.floor(x), Math.floor(y));
-    return t === T.FLOOR || t === T.STAIRS || t === T.ENTRANCE;
-  };
+  const standable = (x, y) => standableAt(grid, x, y);
   for (const s of level.spawns) {
     if (!standable(s.x, s.y)) errors.push(`spawn ${s.defId || s.boss} is inside a wall`);
   }

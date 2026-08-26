@@ -12,6 +12,7 @@
 // zone without ever being load-bearing for progression.
 
 import { RNG } from '../core/rng.js';
+import { clamp } from '../core/util.js';
 import { T, keyColour } from './tiles.js';
 import { Grid, bfsField, N4, DisjointSet, rectCentre, rectContains } from './grid.js';
 import { HAZARDS, BIOME_HAZARDS, BIOMES, pairAllowed, hazardBudget, biomeForDepth } from './biomes.js';
@@ -23,17 +24,29 @@ const MIN_ZONE_SPAN = 14;
 const oddUp = (v) => (v % 2 === 0 ? v + 1 : v);
 const evenNear = (v) => (v % 2 === 0 ? v : v - 1);
 
+// The grid is taller than the maze: the strip below it holds hidden vaults,
+// which are carved disconnected from everything and reachable only by ladder.
+const VAULT_BAND = 17;
+
 function levelSize(depth) {
-  const d = Math.min(depth, 12);
-  const w = oddUp(37 + d * 2);
-  const h = oddUp(33 + d * 2);
-  return { w, h };
+  const d = Math.min(depth, 14);
+  // Levels grow steadily with depth. The growth eases very slightly on the
+  // depths that add a staged region, since a new region already lengthens the
+  // route on its own, but the overall trend stays upward.
+  const zones = zonesForDepth(depth);
+  const w = oddUp(Math.round(25 + d * 2.7 - (zones - 1) * 1.2));
+  const h = oddUp(Math.round(21 + d * 2.5 - (zones - 1) * 1.1));
+  return { w, h, band: VAULT_BAND };
 }
 
+// Staged regions are the single largest difficulty step in the game: each
+// one adds a key hunt, a gate and roughly another region's worth of fighting
+// on the same health bar. They are spaced widely on purpose, so the player
+// meets a second gate with more health, more relics and a crossbow in hand.
 function zonesForDepth(depth) {
-  if (depth <= 1) return 1;
-  if (depth <= 3) return 2;
-  if (depth <= 7) return 3;
+  if (depth <= 2) return 1;
+  if (depth <= 8) return 2;
+  if (depth <= 14) return 3;
   return 4;
 }
 
@@ -459,22 +472,22 @@ function buildEncounters(level, rng, depth) {
   for (const key of level.keys) {
     if (!key.room) continue;
     const id = 'enc_key_' + key.colourIndex;
-    const count = 2 + rng.int(0, 2) + Math.floor(depth / 5);
+    const count = 2 + rng.int(0, 1) + Math.floor(depth / 6);
     const enemies = spawnGroup(level, rng, key.room, depth, count, {
       encounterId: id, dormant: true, guard: true,
-      elite: depth >= 4 && rng.bool(0.45),
+      elite: depth >= 9 && rng.bool(0.4),
     });
     key.room.kind = 'guardedKey';
     level.encounters.push({
       id, type: 'guardedKey', room: key.room, zone: key.room.zone,
-      seal: depth >= 4 && rng.bool(0.4), waves: 0, count: enemies.length,
+      seal: depth >= 8 && rng.bool(0.4), waves: 0, count: enemies.length,
       state: 'idle', flawless: true, scoreBonus: 250 + depth * 20,
       label: keyColour(key.colourIndex).name + ' Key -- guarded',
     });
   }
 
   // 2. Optional challenge room: clearly marked, clearly harder, clearly worth it.
-  if (depth >= 3 && rng.bool(0.42) && rooms.length) {
+  if (depth >= 8 && rng.bool(0.4) && rooms.length) {
     const room = take();
     const id = 'enc_challenge';
     room.kind = 'challenge';
@@ -491,7 +504,7 @@ function buildEncounters(level, rng, depth) {
   }
 
   // 3. Survival room: hold the ground while waves arrive.
-  if (depth >= 4 && rng.bool(0.32) && rooms.length) {
+  if (depth >= 10 && rng.bool(0.32) && rooms.length) {
     const room = take();
     const id = 'enc_survival';
     room.kind = 'survival';
@@ -504,7 +517,7 @@ function buildEncounters(level, rng, depth) {
   }
 
   // 4. A plain ambush somewhere along the route.
-  if (depth >= 2 && rng.bool(0.6) && rooms.length) {
+  if (depth >= 4 && rng.bool(0.55) && rooms.length) {
     const room = take();
     const id = 'enc_ambush';
     room.kind = 'ambush';
@@ -616,7 +629,9 @@ function addProps(level, rng, depth, ctx) {
   // The crossbow enters the pool at depth 3 and is guaranteed by depth 7.
   let crossbowHere = false;
   if (!ctx.hasCrossbow && depth >= 3) {
-    if (rng.bool(Math.min(1, 0.4 + (depth - 3) * 0.16))) {
+    // A ranged option should be in hand before the depths get busy, not
+    // arriving as a curiosity once the run is already in trouble.
+    if (rng.bool(Math.min(1, 0.55 + (depth - 3) * 0.2))) {
       crossbowHere = true;
       const room = level.freeRooms && level.freeRooms.length ? level.freeRooms.pop() : null;
       if (room) {
@@ -634,14 +649,26 @@ function addProps(level, rng, depth, ctx) {
   if (ctx.hasCrossbow || crossbowHere) {
     for (let i = 0; i < 2 + rng.int(0, 2); i++) place('arrows', { amount: rng.int(1, 3) });
   }
-  for (let i = 0; i < 1 + rng.int(0, 2); i++) place('potion', { heal: 28 + depth * 2 });
+  // Supplies follow the length of the route, not just the depth: a level
+  // with three staged regions is two or three times the walking and fighting
+  // on the same health bar as a single-region one.
+  const draughts = 1 + rng.int(0, 1) + level.zones.length;
+  for (let i = 0; i < draughts; i++) place('potion', { heal: 28 + depth * 2 });
 
   const chestCount = 1 + (depth >= 3 ? 1 : 0) + (rng.bool(0.35) ? 1 : 0);
   for (let i = 0; i < chestCount; i++) {
     const cursed = depth >= 2 && rng.bool(0.3);
     place(cursed ? 'cursedChest' : 'chest', { opened: false }, rng.bool(0.5));
   }
-  if (rng.bool(0.34)) place('shrine', { flavour: rng.bool(0.4) ? 'heal' : 'blessing', used: false });
+  // A staged level always carries somewhere to recover partway through.
+  const staged = level.zones.length >= 3;
+  if (staged || rng.bool(0.45)) {
+    place('shrine', {
+      flavour: staged || rng.bool(0.5) ? 'heal' : 'blessing',
+      used: false,
+    });
+  }
+  if (staged && rng.bool(0.5)) place('shrine', { flavour: 'blessing', used: false });
 
   // Wall sconces: atmosphere, but they cast a little real light.
   for (let y = 1; y < grid.h - 1; y++) {
@@ -673,14 +700,18 @@ function populateEnemies(level, rng, depth) {
   const { grid } = level;
   const field = bfsField(grid, [level.entrance], makePassable(level, level.gates.length));
   const pool = enemyPoolFor(depth);
-  const target = Math.min(40, Math.round(4 + depth * 1.75 + level.zones.length * 2.2));
+  // Enemies per floor cell, climbing with depth: a bigger level is not
+  // automatically a harder one unless it is also busier.
+  const density = 0.009 + Math.min(depth, 16) * 0.0011;
+  const target = clamp(Math.round(level.floorCells.length * density), 3, 42);
   const want = Math.max(0, target - level.spawns.length);
-  const eliteChance = depth >= 3 ? Math.min(0.26, 0.03 + depth * 0.017) : 0;
+  const eliteChance = depth >= 4 ? Math.min(0.26, 0.02 + depth * 0.016) : 0;
 
   const taken = new Set(level.spawns.map((s) => grid.idx(Math.floor(s.x), Math.floor(s.y))));
+  const minFromEntrance = depth <= 2 ? 7 : 9;
   const spots = level.floorCells.filter((c) => {
     const d = field[grid.idx(c.x, c.y)];
-    return d >= 9 && !taken.has(grid.idx(c.x, c.y));
+    return d >= minFromEntrance && !taken.has(grid.idx(c.x, c.y));
   });
   rng.shuffle(spots);
 
@@ -721,13 +752,168 @@ function enforceSpawnSpacing(level, minDist = 7.5) {
     if (best && bestD <= 9) {
       s.x = best.x + 0.5; s.y = best.y + 0.5;
       s.anchor = { x: s.x, y: s.y };
+      if (s.carriesKey !== undefined) {
+        const key = level.keys.find((k) => k.colourIndex === s.carriesKey);
+        if (key) { key.x = best.x; key.y = best.y; }
+      }
       kept.push(s);
     } else if (s.carriesKey !== undefined) {
-      // A key carrier must survive relocation or the key becomes unobtainable.
+      // A key carrier must survive: dropping it would strand the key.
       kept.push(s);
     }
   }
   level.spawns = kept;
+}
+
+// --- hidden vaults ---------------------------------------------------------
+// Ladders do not lead to another depth. They lead to a sealed vault belonging
+// to *this* depth -- carved in the strip below the maze, connected to nothing,
+// and reachable only by climbing down. Entirely optional, always worth it.
+
+function carveVault(grid, rect, rng) {
+  for (let y = rect.y0; y <= rect.y1; y++) {
+    for (let x = rect.x0; x <= rect.x1; x++) grid.set(x, y, T.FLOOR);
+  }
+  // Pillars, so a vault reads as built rather than hollowed out.
+  const px0 = rect.x0 + 2, px1 = rect.x1 - 2;
+  const py0 = rect.y0 + 2, py1 = rect.y1 - 2;
+  if (px1 - px0 >= 2 && py1 - py0 >= 2 && rng.bool(0.75)) {
+    for (const [x, y] of [[px0, py0], [px1, py0], [px0, py1], [px1, py1]]) {
+      if (rng.bool(0.85)) grid.set(x, y, T.WALL);
+    }
+  }
+}
+
+function addVaults(level, rng, depth, ctx) {
+  const { grid } = level;
+  const bandTop = level.mazeHeight;
+  const bandBottom = grid.h - 3;
+  if (bandBottom - bandTop < 8) return;
+
+  // Somewhere to put the ladder down: deep in the maze, off the beaten path.
+  const busy = new Set();
+  const mark = (x, y, r) => {
+    for (let dy = -r; dy <= r; dy++)
+      for (let dx = -r; dx <= r; dx++) busy.add(grid.idx(Math.round(x) + dx, Math.round(y) + dy));
+  };
+  mark(level.entrance.x, level.entrance.y, 6);
+  mark(level.stairs.x, level.stairs.y, 3);
+  for (const g of level.gates) mark(g.x, g.y, 2);
+  for (const k of level.keys) mark(k.x, k.y, 2);
+  for (const p of level.props) if (!p.hidden) mark(p.x, p.y, 1);
+
+  const spots = level.floorCells.filter((c) => {
+    if (busy.has(grid.idx(c.x, c.y))) return false;
+    let exits = 0;
+    for (const [dx, dy] of N4) if (grid.get(c.x + dx, c.y + dy) !== T.WALL) exits++;
+    return exits <= 2;
+  });
+  if (!spots.length) return;
+  rng.shuffle(spots);
+
+  const wanted = 1 + (depth >= 9 && rng.bool(0.4) ? 1 : 0);
+  const slot = Math.floor((grid.w - 6) / wanted);
+  if (slot < 10) return;
+
+  for (let i = 0; i < wanted; i++) {
+    const entry = spots.pop();
+    if (!entry) break;
+
+    const vw = rng.int(8, Math.min(14, slot - 3));
+    const vh = rng.int(7, Math.min(12, bandBottom - bandTop - 1));
+    const vx = 3 + i * slot + rng.int(0, Math.max(0, slot - vw - 2));
+    const vy = bandTop + 1 + rng.int(0, Math.max(0, bandBottom - bandTop - vh));
+    const rect = { x0: vx, y0: vy, x1: vx + vw - 1, y1: vy + vh - 1 };
+    carveVault(grid, rect, rng);
+
+    // The ladder back up sits in a corner; the player arrives standing on it.
+    const exit = { x: rect.x0 + 1, y: rect.y0 + 1 };
+    grid.set(exit.x, exit.y, T.FLOOR);
+
+    const vault = {
+      index: level.vaults.length, rect,
+      entry: { x: entry.x, y: entry.y },
+      exit,
+      biomeId: level.biome.id,
+      visited: false,
+    };
+    level.vaults.push(vault);
+
+    level.props.push({
+      type: 'ladder', dir: 'down', x: entry.x + 0.5, y: entry.y + 0.5,
+      link: { x: exit.x, y: exit.y }, vault: vault.index,
+      id: 'ladder_down_' + vault.index,
+    });
+    level.props.push({
+      type: 'ladder', dir: 'up', x: exit.x + 0.5, y: exit.y + 0.5,
+      link: { x: entry.x, y: entry.y }, vault: vault.index,
+      id: 'ladder_up_' + vault.index,
+    });
+
+    // Register the vault as a room first: its encounter needs to point at one.
+    const room = {
+      x0: rect.x0, y0: rect.y0, x1: rect.x1, y1: rect.y1,
+      zone: level.zones.length, kind: 'vault', id: level.rooms.length, region: -1,
+    };
+    level.rooms.push(room);
+    level.zones.push({ x0: rect.x0 - 1, y0: rect.y0 - 1, x1: rect.x1 + 1, y1: rect.y1 + 1 });
+    vault.room = room;
+    fillVault(level, vault, rng, depth, ctx);
+  }
+}
+
+function fillVault(level, vault, rng, depth, ctx) {
+  const { grid } = level;
+  const cells = [];
+  for (let y = vault.rect.y0; y <= vault.rect.y1; y++) {
+    for (let x = vault.rect.x0; x <= vault.rect.x1; x++) {
+      if (grid.get(x, y) !== T.FLOOR) continue;
+      if (Math.abs(x - vault.exit.x) + Math.abs(y - vault.exit.y) < 2) continue;
+      cells.push({ x, y });
+    }
+  }
+  rng.shuffle(cells);
+  const take = () => cells.pop();
+
+  // A vault always holds a real haul -- that is the whole reason to climb in.
+  const hoard = 2 + rng.int(0, 1) + Math.floor(depth / 6);
+  for (let i = 0; i < hoard; i++) {
+    const c = take();
+    if (!c) break;
+    const type = rng.weighted(['treasure', 'chest', 'potion', 'arrows', 'shrineSmall'],
+      (t) => (t === 'treasure' ? 3 : t === 'chest' ? 2.4 : 1.2));
+    if (type === 'arrows' && !(ctx.hasCrossbow || level.hasCrossbowPickup)) { i--; continue; }
+    level.props.push({
+      type, x: c.x + 0.5, y: c.y + 0.5, id: 'vault' + vault.index + '_' + i,
+      amount: rng.int(2, 3), heal: 30 + depth * 2, opened: false, used: false,
+      flavour: 'heal', vault: vault.index,
+    });
+  }
+
+  // And something guarding it.
+  const guards = 2 + rng.int(0, 2) + Math.floor(depth / 7);
+  const pool = enemyPoolFor(depth);
+  const encId = 'enc_vault_' + vault.index;
+  let placed = 0;
+  for (const c of cells) {
+    if (placed >= guards) break;
+    if (Math.abs(c.x - vault.exit.x) + Math.abs(c.y - vault.exit.y) < 3) continue;
+    const def = rng.weighted(pool, (p) => p.weight).def;
+    level.spawns.push({
+      defId: def.id, x: c.x + 0.5, y: c.y + 0.5,
+      elite: depth >= 4 && rng.bool(0.16 + depth * 0.012), dormant: true,
+      zone: 0, encounter: encId, anchor: { x: c.x + 0.5, y: c.y + 0.5 }, guard: true,
+    });
+    placed++;
+  }
+  if (placed) {
+    level.encounters.push({
+      id: encId, type: 'vault', room: vault.room,
+      zone: vault.room.zone, optional: true, seal: false, waves: 0, count: placed,
+      state: 'idle', flawless: true, scoreBonus: 500 + depth * 40,
+      label: 'The Vault', vault: vault.index,
+    });
+  }
 }
 
 // --- hazards --------------------------------------------------------------
@@ -787,6 +973,7 @@ function emptyLevel(depth, seed, w, h) {
     props: [], decor: [], sconces: [], spawns: [], encounters: [],
     entrance: null, stairs: null, floorCells: [], freeRooms: [],
     isBoss: false, boss: null, hasCrossbowPickup: false,
+    ladders: [], vaults: [], mazeHeight: h,
     _reserved: new Set(),
   };
 }
@@ -817,8 +1004,9 @@ function gateInboundCell(level, gateIndex) {
 }
 
 function buildLabyrinth(depth, rng, seed, ctx) {
-  const { w, h } = levelSize(depth);
-  const level = emptyLevel(depth, seed, w, h);
+  const { w, h, band } = levelSize(depth);
+  const level = emptyLevel(depth, seed, w, h + band);
+  level.mazeHeight = h;
   level.seedHash = (rng.initial ^ (depth * 2654435761)) | 0;
   level.biome = biomeForDepth(depth, rng);
   level.zones = splitZoneChain({ x0: 0, y0: 0, x1: w - 1, y1: h - 1 }, zonesForDepth(depth), rng);
@@ -882,13 +1070,25 @@ function finishLevel(level, rng, depth, ctx) {
   for (let i = 0; i < level.gates.length; i++) {
     const anchor = gateInboundCell(level, i);
     const field = bfsField(grid, [anchor], makePassable(level, i));
+    // Far from the gate as a proportion of the region, and never merely
+    // round the corner from it: on a small early level those are not the
+    // same constraint.
+    const keepBack = [
+      { x: level.entrance.x, y: level.entrance.y, r: 13 },
+      { x: anchor.x, y: anchor.y, r: 10 },
+    ];
     const spot = pickFarCell(grid, field, rng, {
       minFrac: 0.5,
       filter: (x, y) => zoneOf(level.zones, x, y) <= i,
       preferRooms: (x, y) => !!roomAt(level, x, y),
-      avoid: [{ x: level.entrance.x, y: level.entrance.y, r: 13 }],
+      avoid: keepBack,
     }) || pickFarCell(grid, field, rng, {
-      minFrac: 0.2, filter: (x, y) => zoneOf(level.zones, x, y) <= i,
+      minFrac: 0.2,
+      filter: (x, y) => zoneOf(level.zones, x, y) <= i,
+      avoid: [
+        { x: anchor.x, y: anchor.y, r: 8 },
+        { x: level.entrance.x, y: level.entrance.y, r: 10 },
+      ],
     });
     if (!spot) return null;
     const room = roomAt(level, spot.x, spot.y);
@@ -923,11 +1123,12 @@ function finishLevel(level, rng, depth, ctx) {
   addProps(level, rng, depth, ctx);
   populateEnemies(level, rng, depth);
   enforceSpawnSpacing(level);
+  addVaults(level, rng, depth, ctx);
   assignHazards(level, rng, depth);
   buildZoneMap(level);
   buildVariants(level);
 
-  level.parTime = Math.round(40 + level.floorCells.length * 0.18 + depth * 6);
+  level.parTime = Math.round(35 + level.floorCells.length * 0.15 + depth * 5);
   level.totalSecrets = level.secrets.length;
   return level;
 }
@@ -988,10 +1189,19 @@ function buildBossArena(depth, rng, seed, ctx) {
   });
 
   addProps(level, rng, depth, ctx);
+  // The arena seals behind you, so it has to carry its own supplies.
+  for (let i = 0; i < 2; i++) {
+    const spot = level.floorCells[rng.int(0, level.floorCells.length - 1)];
+    if (!spot) break;
+    level.props.push({
+      type: 'potion', x: spot.x + 0.5, y: spot.y + 0.5,
+      heal: 34 + depth * 2, id: 'boss_draught_' + i,
+    });
+  }
   assignHazards(level, rng, depth);
   buildZoneMap(level);
   buildVariants(level);
-  level.parTime = Math.round(120 + depth * 8);
+  level.parTime = Math.round(110 + depth * 6);
   level.totalSecrets = 0;
   return level;
 }
@@ -1003,6 +1213,7 @@ function buildBossArena(depth, rng, seed, ctx) {
 function buildFallback(depth, rng, seed, ctx) {
   const { w, h } = levelSize(Math.min(depth, 6));
   const level = emptyLevel(depth, seed, w, h);
+  level.mazeHeight = h;
   level.seedHash = rng.initial | 0;
   level.biome = biomeForDepth(depth, rng);
   level.zones = [{ x0: 0, y0: 0, x1: w - 1, y1: h - 1 }];

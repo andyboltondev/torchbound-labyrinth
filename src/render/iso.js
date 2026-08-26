@@ -28,6 +28,23 @@ export function toGrid(sx, sy) {
 // Painter's-algorithm depth. Larger draws later, i.e. nearer the viewer.
 export function depthOf(gx, gy) { return gx + gy; }
 
+// Turns a raw input vector into the grid direction to walk, under one of two
+// frames of reference:
+//
+//   'dungeon' -- the keys point along the dungeon's own axes. Up is north,
+//                Right is east. Corridors run along these axes, so one key
+//                walks a passage end to end. The isometric view draws north
+//                as up-and-to-the-right.
+//   'view'    -- the keys point at the screen. Up is straight up the display,
+//                which in an isometric view is a diagonal across the grid.
+export function inputDirToGrid(sx, sy, frame = 'dungeon') {
+  if (frame === 'view') return screenDirToGrid(sx, sy);
+  const m = Math.hypot(sx, sy);
+  if (m < 1e-6) return { x: 0, y: 0 };
+  // Dungeon frame: the input vector *is* the grid vector.
+  return { x: sx, y: sy };
+}
+
 // Converts a screen-relative input direction (up on the stick means up on the
 // display) into the grid-space direction the player should actually walk.
 export function screenDirToGrid(sx, sy) {

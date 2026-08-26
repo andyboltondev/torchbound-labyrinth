@@ -58,8 +58,11 @@ export function facingInfo(gx, gy) {
 // A torchbearer: helm, cloak, sword in the lead hand, flame in the other.
 
 export function drawPlayer(ctx, p, t, opts = {}) {
-  const sx = screenX(p.x, p.y);
-  const sy = screenY(p.x, p.y);
+  // Knockback is a render-space shove, so it reads as impact without pushing
+  // the character off its movement lane.
+  const px = p.x + (p.knockX || 0), py = p.y + (p.knockY || 0);
+  const sx = screenX(px, py);
+  const sy = screenY(px, py);
   const f = facingInfo(p.faceX, p.faceY);
   const scale = 1;
   const walk = p.moving ? Math.sin(p.animTime * 11) : 0;
@@ -299,8 +302,9 @@ export function drawFlame(ctx, x, y, scale, t, flicker = 1) {
 // --- enemies --------------------------------------------------------------
 
 export function drawEnemy(ctx, e, t) {
-  const sx = screenX(e.x, e.y);
-  const sy = screenY(e.x, e.y);
+  const ex = e.x + (e.knockX || 0), ey = e.y + (e.knockY || 0);
+  const sx = screenX(ex, ey);
+  const sy = screenY(ex, ey);
   const def = e.def;
   const s = e.scale || 1;
 

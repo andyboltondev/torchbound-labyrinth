@@ -9,6 +9,7 @@ const BASE_MAX_HP = 100;
 const BASE_ARROWS = 5;
 const BASE_BOLT_DAMAGE = 24;
 const BASE_BOLT_RANGE = 5;
+const DEPTH_VIGOUR = 6;   // max health gained for each depth survived
 
 export class Run {
   constructor(seed) {
@@ -17,6 +18,9 @@ export class Run {
     this.depth = 1;
     this.relics = {};
     this.mods = computeMods(this.relics);
+    // Health earned during the run: shrine blessings and depths survived.
+    // Held separately from relic modifiers so recomputing those cannot wipe it.
+    this.bonusHp = 0;
     this.maxHp = BASE_MAX_HP;
     this.hp = BASE_MAX_HP;
     this.hasCrossbow = false;
@@ -38,7 +42,7 @@ export class Run {
   refreshMods() {
     const previousMax = this.maxHp;
     this.mods = computeMods(this.relics);
-    this.maxHp = Math.max(30, BASE_MAX_HP + this.mods.maxHpBonus);
+    this.maxHp = Math.max(30, BASE_MAX_HP + this.bonusHp + this.mods.maxHpBonus);
     // Gaining max health should not silently heal; losing it should not kill.
     if (this.maxHp > previousMax) this.hp += this.maxHp - previousMax;
     this.hp = Math.max(1, Math.min(this.hp, this.maxHp));
@@ -102,7 +106,9 @@ export class Run {
 
   addBlessing() {
     this.blessings++;
-    // A blessing is a small permanent lift, deliberately modest.
+    // A blessing is a small permanent lift, deliberately modest. It goes into
+    // bonusHp so that taking a relic later does not quietly undo it.
+    this.bonusHp += 8;
     this.maxHp += 8;
     this.hp = Math.min(this.maxHp, this.hp + 8);
   }
@@ -119,7 +125,16 @@ export class Run {
     this.depth++;
     this.keys.clear();
     this.score.resetLevel();
-    const rest = Math.round(this.maxHp * 0.12 * this.mods.levelHeal);
+    // Surviving a depth hardens you. Without this the player's survivability
+    // is flat while enemy count and damage both climb, so every run ends at
+    // the same depth for the same arithmetic reason rather than a mistake.
+    // Relics stay build-defining; this is the baseline that keeps pace.
+    this.bonusHp += DEPTH_VIGOUR;
+    this.maxHp += DEPTH_VIGOUR;
+    this.hp += DEPTH_VIGOUR;
+
+    // Climbing down is the one guaranteed breather.
+    const rest = Math.round(this.maxHp * 0.25 * this.mods.levelHeal);
     if (rest > 0) this.heal(rest, true);
   }
 

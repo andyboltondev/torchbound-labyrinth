@@ -28,7 +28,7 @@ Any equivalent works too, for example `npx serve` or `python -m http.server`.
 
 | Action | Keyboard | Touch |
 | --- | --- | --- |
-| Move | `WASD` **and** arrow keys (both always active) | analogue d-pad |
+| Move | `WASD` **and** arrow keys (both always active), 8-way | floating d-pad |
 | Slash | `Space` / `J` | SLASH |
 | Fire crossbow | `F` / `K` | FIRE (appears once you own one) |
 | Action (doors, gates, stairs, chests, shrines) | `E` / `Enter` | ACT |
@@ -37,6 +37,41 @@ Any equivalent works too, for example `npx serve` or `python -m http.server`.
 
 Stairs never trigger by walking onto them -- they always require an explicit
 Action press, so you cannot fall into the next depth by accident.
+
+On a touch screen the movement pad is not fixed in a corner: the whole lower
+left of the glass is the movement surface, and the pad anchors wherever your
+thumb lands. The action buttons stay put on the right, because those you want
+in the same place every time.
+
+### What the direction keys do
+
+The direction keys walk **the dungeon's compass**:
+
+| Key | Direction | How the view draws it |
+| --- | --- | --- |
+| `W` / `Up` | North | up and to the right |
+| `D` / `Right` | East | down and to the right |
+| `S` / `Down` | South | down and to the left |
+| `A` / `Left` | West | up and to the left |
+
+Corridors run along those axes, so one key walks a passage end to end. Holding
+two keys gives the four diagonals: `Up`+`Right` is north-east, and so on.
+
+North being drawn up-and-to-the-right is the isometric projection doing its
+job, not a mapping error -- a 2:1 view rotates the world 45 degrees, so the
+dungeon's axes land on the screen's diagonals.
+
+Because diagonals may not cut corners, blocking a cardinal also blocks both
+diagonals beside it. That gives a useful guarantee: **a cardinal key either
+walks you that way or leaves you standing still.** It can never quietly send
+you east when you pressed north. There are tests for this.
+
+Two settings cover the rest, under Settings:
+
+* **Direction keys** -- *Dungeon axes* (default) or *Screen direction*, which
+  makes `Up` move straight up the display instead. Applies to the touch pad too.
+* **Blocked direction** -- whether a blocked *diagonal* takes the nearest way
+  round or simply stops.
 
 ---
 
@@ -47,9 +82,12 @@ Action press, so you cannot fall into the next depth by accident.
    remembered ground fades.
 3. Find the colour-coded key for the gate barring the next region.
 4. Repeat through two, three or four staged regions as depths get deeper.
-5. Find the stairs and choose to descend.
-6. Take one of three relics.
-7. Every fifth depth is a boss, and a boss always pays out a relic.
+5. Somewhere in the maze there is a ladder. It does not lead to another
+   depth -- it drops into a sealed vault belonging to *this* one, guarded and
+   full of treasure, with no other way in or out.
+6. Find the stairs and choose to descend.
+7. Take one of three relics.
+8. Every fifth depth is a boss, and a boss always pays out a relic.
 
 ---
 
@@ -98,6 +136,70 @@ and rejects it if any of these fail:
 If a level fails, it is thrown away and regenerated. A guaranteed-valid
 single-zone fallback exists so the game can never present a broken map.
 
+### Movement
+
+Everything that walks the labyrinth moves tile to tile rather than floating
+freely. A step interpolates at constant speed and the next begins the instant
+the last lands, so holding a direction reads as running -- but a body is never
+between tiles, never wedged on a corner, and never dragged sideways along a
+wall it walked into.
+
+Input stays a free vector; only the eight grid directions are ever taken. The
+mover picks the open one closest to what was asked for. Press into a wall and
+nothing happens at all, and diagonals refuse to cut corners -- which is what
+makes a cardinal key exact rather than approximate.
+
+Ice does not take this away. What ice removes is your ability to *stop*:
+letting go carries you on a couple of tiles, and a hard about-face has to wait
+for the slide to run out. Steering still works, because controls that ignore
+you read as broken rather than slippery.
+
+### Ladders and vaults
+
+The grid is taller than the maze. The strip below it holds vaults: small,
+sealed, well-stocked chambers carved connected to nothing at all. A ladder in
+the maze is the only way in, and the only way out. They are worth real points
+to find, they are always guarded, and -- because the validator forbids it --
+nothing you need to finish the depth is ever inside one.
+
+Only the layer you are standing on is drawn, so a vault feels like somewhere
+else rather than a room that happens to be south of the map.
+
+### Difficulty and pacing
+
+The descent is meant to open gently and tighten steadily, so the shape is
+measured rather than guessed. `tests.html` runs whole descents -- one run
+carrying health, relics and the crossbow from depth to depth -- and reports a
+curve. The pilot is deliberately mediocre: it walks its route, swings at what
+is in reach and never dodges. It is a yardstick, not a good player.
+
+What the shape looks for:
+
+* **Depths 1-2** teach. One region, no gates, no hazards, a handful of foes on
+  a small map. Losing more than a scratch here means something is wrong.
+* **Depth 3** introduces the whole key-and-gate idea, and is the first real
+  bite.
+* **Depth 5** is the first boss.
+* **Beyond that** the clear rate should fall smoothly. A cliff means one depth
+  is introducing too much at once.
+
+Two rules came out of measuring it:
+
+**One new idea per depth.** Every wall found during tuning was a depth where
+several things arrived together -- hazards *and* a new staged region *and*
+elite guards. Content is now introduced on separate depths on purpose, which
+is why the thresholds in `buildEncounters` look arbitrary. They are not.
+
+**A staged region is the biggest step in the game.** Each one adds a key hunt,
+a gate and roughly another region of fighting on the same health bar, and it
+dwarfs anything else. Regions are therefore spaced widely (1 up to depth 2, 2
+up to depth 8, 3 up to depth 14, 4 beyond) so a second gate is met with more
+health, more relics and a crossbow in hand.
+
+Levels grow with depth throughout, from roughly 29x25 at depth 1 to 55x49 by
+depth 14, with enemy counts set as a density over floor area so a bigger level
+is not automatically a busier one.
+
 ### Torchlight
 
 Symmetric recursive shadowcasting produces the visible set each frame. The same
@@ -108,7 +210,20 @@ flame is low.
 
 Tiles are baked once per biome in three versions -- lit, black silhouette and a
 cold, dimmed "memory" copy -- so the whole lighting and map-memory model costs
-at most two `drawImage` calls per tile.
+at most two `drawImage` calls per tile. The whole set bakes in about 50ms.
+
+### Surfaces
+
+Walls and floors are real masonry, not tinted shapes. Each face is clipped and
+the drawing space skewed into the isometric plane, so courses of stone run
+*with* the wall; every block gets its own tone, a lit bevel along its top and
+left, a shadowed one along its bottom and right, and the odd knocked-off
+corner. Fine grain is scattered over the top.
+
+The stylised half is deliberate and lives in the edges: a firm dark seam under
+each wall cap and a catch-light along its upper edges. That is what keeps
+stone reading as solid objects at the edge of torchlight, where a purely
+photographic treatment would dissolve into mud.
 
 ### Readability
 
@@ -126,14 +241,24 @@ Open <http://localhost:8123/tests.html>.
 band and asserts the guarantees above, plus determinism (same seed, same level)
 and RNG uniformity. It also renders sample layouts.
 
-Current status: 720/720 levels valid, no fallbacks, ~14 ms per level.
+Current status: 630/630 levels valid, no fallbacks, no warnings, ~15 ms per level.
 
 **Gameplay integration** -- drives the real systems through scripted scenarios:
 gates blocking and opening, keys dropping from carriers, stairs requiring an
 explicit press, sword arcs hitting only what they face, bolts stopping at walls,
 quiver caps, shield-relic probabilities measured over 200k rolls, contextual
 relic offers, hazard mechanics, encounter sealing, flawless forfeiture, boss
-phases and arena gating, memory decay, and score arithmetic.
+phases and arena gating, ladders into vaults (and the vaults being unwalkable
+into), memory decay, and score arithmetic.
+
+It also pins the control mapping: each direction key is measured against the
+compass direction it is supposed to walk, with the drift-free guarantee
+checked against a deliberately walled-off direction, and the screen-relative
+frame checked separately.
+
+**Balance curve** -- plays whole descents and reports clear rate, health lost
+and time taken per depth. Not pass/fail: it is there to be looked at when
+tuning, and to catch a depth turning into a wall.
 
 It finishes with an **autopilot completability test**: a pathfinding bot plays
 24 generated levels across depths 1-14 from entrance to exit, routing to each
@@ -141,7 +266,7 @@ key, unlocking each gate, fighting its way out of rooms that seal behind it,
 and taking the stairs. It is the practical counterpart to the validator -- the
 validator proves a route exists, the bot walks it.
 
-Current status: 36/36 passing.
+Current status: 44/44 passing.
 
 ---
 

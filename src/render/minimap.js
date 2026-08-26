@@ -32,7 +32,11 @@ export class Minimap {
     if (!world) return;
     const vis = world.vis;
     const grid = level.grid;
-    for (let y = 0; y < grid.h; y++) {
+    // Only chart the layer the player is standing on.
+    const band = level.mazeHeight;
+    const y0 = band === undefined ? 0 : (world.playerLayer === 1 ? band : 0);
+    const y1 = band === undefined ? grid.h : (world.playerLayer === 1 ? grid.h : band);
+    for (let y = y0; y < y1; y++) {
       for (let x = 0; x < grid.w; x++) {
         const i = grid.idx(x, y);
         if (!vis.seen[i]) continue;
@@ -51,6 +55,15 @@ export class Minimap {
       }
     }
     ctx.globalAlpha = 1;
+
+    // Ladders, once found: they are the only way into the vaults.
+    for (const prop of level.props) {
+      if (prop.type !== 'ladder') continue;
+      const i = grid.idx(Math.floor(prop.x), Math.floor(prop.y));
+      if (!vis.seen[i] || vis.memory[i] <= 0.04) continue;
+      ctx.fillStyle = prop.dir === 'down' ? '#e8b45c' : '#8fd7ff';
+      ctx.fillRect(Math.floor(prop.x) * CELL - 1, Math.floor(prop.y) * CELL - 1, CELL + 2, CELL + 2);
+    }
 
     // Keys the player has actually laid eyes on.
     for (const k of level.keys) {

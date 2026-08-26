@@ -13,6 +13,9 @@ export class Hud {
     this.healthText = $('healthText');
     this.healthBar = this.healthFill.parentElement;
     this.depthChip = $('depthChip');
+    this.objective = $('objective');
+    this.objectiveDot = $('objectiveDot');
+    this.objectiveText = $('objectiveText');
     this.ammoChip = $('ammoChip');
     this.ammoText = $('ammoText');
     this.keysChip = $('keysChip');
@@ -80,6 +83,14 @@ export class Hud {
 
     const depth = 'Depth ' + depthLabel(run.depth) + (world.level.isBoss ? '  \u2022  Boss' : '');
     if (c.depth !== depth) { this.depthChip.textContent = depth; c.depth = depth; }
+
+    const objective = world.currentObjective();
+    if (c.objective !== objective.text) {
+      c.objective = objective.text;
+      this.objective.hidden = false;
+      this.objectiveText.textContent = objective.text;
+      this.objectiveDot.style.color = objective.colour;
+    }
 
     if (run.hasCrossbow) {
       this.ammoChip.hidden = false;

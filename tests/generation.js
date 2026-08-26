@@ -53,9 +53,14 @@ check('exit is a meaningful walk from the entrance', (lv) => {
 });
 
 check('no enemy spawns on top of the entrance', (lv) => {
+  if (lv.isBoss) return null;
   for (const s of lv.spawns) {
+    // Vault guards live in the strip below the maze. They can be numerically
+    // close to the entrance while being sealed away on another layer, so only
+    // spawns sharing the entrance's layer are relevant here.
+    if (lv.mazeHeight !== undefined && s.y >= lv.mazeHeight) continue;
     const d = Math.hypot(s.x - lv.entrance.x, s.y - lv.entrance.y);
-    if (!lv.isBoss && d < 6) return `spawn ${s.defId} is ${d.toFixed(1)} tiles from the entrance`;
+    if (d < 6) return `spawn ${s.defId} is ${d.toFixed(1)} tiles from the entrance`;
   }
   return null;
 });
