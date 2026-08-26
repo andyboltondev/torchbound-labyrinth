@@ -10,7 +10,8 @@ import { Particles, burstSparks, burstBlood, burstStone, ring, footDust } from '
 import { Player } from './player.js';
 import { Enemy } from './enemies.js';
 import { Boss } from './boss.js';
-import { ENEMIES, enemyPoolFor } from './enemyData.js';
+import { ENEMIES, enemyPoolFor, DEFAULT_BLOOD } from './enemyData.js';
+import { Gore } from './gore.js';
 import { hasLineOfSight, tileBlocks } from './physics.js';
 import { probeAcoustics, spaceProfile, blendSpace, DEFAULT_SPACE } from '../audio/space.js';
 import { clamp } from '../core/util.js';
@@ -18,6 +19,19 @@ import { RNG } from '../core/rng.js';
 
 const FLOW_INTERVAL = 0.14;
 const FLOW_RADIUS = 30;
+
+// How far a torchbearer sees with the torch out. Enough not to walk into the
+// walls, nothing like enough to see what is coming.
+const DOUSED_RADIUS = 2.4;
+
+// How much better the ears work in the dark. Deliberately slight: this is
+// compensation for going blind, not a second way of seeing.
+const DOUSED_HEARING = 1.3;
+
+// What each size of fire is called when the player is standing over a cold one.
+const FIRE_NAMES = {
+  sconce: 'sconce', brazier: 'brazier', firepit: 'firepit', campfire: 'campfire',
+};
 
 // Not everything in the labyrinth bleeds. The spark colour a hit throws is
 // the visual half of the same material lookup the mixer uses for the sound.
@@ -39,6 +53,8 @@ export class World {
     this.vis = new Visibility(level.grid);
     this.torch = new Torch();
     this.particles = new Particles();
+    // Blood, bodies and the prints they get tracked around on.
+    this.gore = new Gore(level.grid);
 
     this.enemies = [];
     this.projectiles = [];
@@ -76,6 +92,12 @@ export class World {
     this.currentHazard = HAZARDS.clear;
     this.currentZone = 0;
     this.torchRadius = 7;
+    this.revealRadius = 0;
+    // A torch can be put out. It is the only thing the player carries that
+    // the labyrinth can see from a distance, so dousing it is a real choice:
+    // you go nearly blind, and so does most of what is hunting you.
+    this.torchLit = true;
+    this.torchToggleCooldown = 0;
     this.revealRadius = 0;
     this.lowHealthPulse = 0;
     this.secretsFound = 0;
@@ -206,10 +228,12 @@ export class World {
     this.time += dt;
     if (!this.finished && !this.playerDead) this.elapsed += dt;
 
+    this.torchToggleCooldown = Math.max(0, this.torchToggleCooldown - dt);
     this.updateHazard();
     this.updateAcoustics(dt);
     this.torch.update(dt, this.hazardMods);
     this.player.torchFlicker = this.torch.flicker;
+    this.player.torchLit = this.torchLit;
 
     this._refreshOccupancy();
     this.player.update(dt, this, intent);
@@ -223,6 +247,7 @@ export class World {
     if (this.boss) this.boss.update(dt, this);
     this.updateProjectiles(dt);
     this.particles.update(dt);
+    this.gore.update(dt);
     this.updateEncounters(dt);
     this.updatePickups();
     this.updateSecretAwareness();
@@ -233,7 +258,7 @@ export class World {
     const frac = this.run.hp / Math.max(1, this.run.maxHp);
     this.lowHealthPulse = frac < 0.3 ? (0.3 - frac) / 0.3 : 0;
 
-    // Retire the dead once their effects have played out.
+      // Retire the dead once their effects have played out.
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       if (this.enemies[i].dead) this.enemies.splice(i, 1);
     }
@@ -262,10 +287,18 @@ export class World {
 
   // One footfall per tile, which is exactly the rhythm grid movement wants.
   onPlayerEnterTile(x, y) {
+    this.gore.tread(this.player, x, y);
     const hz = this.hazardMods;
     const colour = hz.footstepSplash ? '#8fb4c4' : hz.footprints ? '#4a3722' : '#6f6a5e';
     footDust(this.particles, x + 0.5, y + 0.5, colour);
     this.playSfx('step', { surface: this.surfaceAt() });
+  }
+
+  // Anything that walks tracks blood the same way the player does. This is
+  // also the one place that knows an enemy has taken a step, which is what
+  // the noise it makes will be hung off.
+  onEnemyEnterTile(enemy, x, y) {
+    this.gore.tread(enemy, x, y);
   }
 
   // Knockback is presentation only: shoving a grid mover off its lane would
@@ -290,7 +323,9 @@ export class World {
     const mods = this.run.mods;
     this.torch.baseRadius = 7.5 * mods.torchRadius;
     this.torch.instability = mods.torchInstability;
-    this.torchRadius = this.torch.effectiveRadius(this.hazardMods);
+    this.torchRadius = this.torchLit
+      ? this.torch.effectiveRadius(this.hazardMods)
+      : DOUSED_RADIUS * (0.94 + this.torch.flicker * 0.06);
     this.revealRadius = this.hazardMods.revealMovers || 0;
   }
 
@@ -379,12 +414,16 @@ export class World {
   refreshVisibility(dt) {
     const sources = [{
       x: this.player.x, y: this.player.y,
-      radius: this.torchRadius, intensity: 1,
+      radius: this.torchRadius, intensity: this.torchLit ? 1 : 0.5,
     }];
-    // Wall sconces contribute genuine light, but only nearby ones.
+    // Fires contribute genuine light, but only nearby ones. A doused
+    // torchbearer can still see by somebody else's flame, which is what makes
+    // walking a lit hall in the dark a thing worth doing.
     for (const s of this.level.sconces) {
-      if (Math.abs(s.x - this.player.x) + Math.abs(s.y - this.player.y) > 14) continue;
-      sources.push({ x: s.x, y: s.y, radius: 3.6, intensity: 0.6 });
+      if (s.lit === false) continue;
+      const reach = (s.radius || 3.6) + 7;
+      if (Math.abs(s.x - this.player.x) + Math.abs(s.y - this.player.y) > reach) continue;
+      sources.push({ x: s.x, y: s.y, radius: s.radius || 3.6, intensity: s.intensity || 0.6 });
     }
     const decay = 0.05 * this.run.mods.memoryDecay * (this.hazardMods.memoryDecay || 1);
     this.vis.update(sources, dt, decay);
@@ -522,6 +561,8 @@ export class World {
       const m = Math.hypot(dx, dy) || 1;
       this.knock(e, dx, dy, 0.3);
       burstBlood(this.particles, e.x, e.y, dx / m, dy / m, IMPACT_SPARK[e.def.material]);
+      this.gore.splat(e.x, e.y, e.def.blood || DEFAULT_BLOOD,
+        Math.min(1.4, 0.35 + damage / 40), dx / m, dy / m);
       this.particles.text(e.x, e.y, Math.round(damage), '#ffe0b0', 13);
       material = e.def.material || 'flesh';
       hitAt = { x: e.x, y: e.y };
@@ -588,6 +629,8 @@ export class World {
     enemy.takeDamage(damage, this, 'bolt');
     burstBlood(this.particles, projectile.x, projectile.y, projectile.vx, projectile.vy,
       IMPACT_SPARK[enemy.def.material]);
+    this.gore.splat(projectile.x, projectile.y, enemy.def.blood || DEFAULT_BLOOD, 0.7,
+      projectile.vx * 0.1, projectile.vy * 0.1);
     this.particles.text(enemy.x, enemy.y, Math.round(damage), '#ffe0b0', 13);
     this.playSfx('arrowHit', { x: enemy.x, y: enemy.y, material: enemy.def.material || 'flesh' });
     // Reclaimer: a killing bolt sometimes comes home.
@@ -659,6 +702,8 @@ export class World {
     player.onDamaged(dealt);
     this.particles.text(player.x, player.y, '-' + dealt, '#ff8a72', 15, 1.1);
     burstBlood(this.particles, player.x, player.y, -player.faceX, -player.faceY, '#a02020');
+    this.gore.splat(player.x, player.y, '#8e2320', Math.min(1.4, 0.4 + dealt / 26),
+      -player.faceX, -player.faceY);
     this.shake(6 + dealt * 0.2);
     this.playSfx('playerHurt');
     this.emit('health', { hp: this.run.hp, maxHp: this.run.maxHp });
@@ -696,6 +741,16 @@ export class World {
     }
     burstBlood(this.particles, enemy.x, enemy.y, 0, -1);
     burstSparks(this.particles, enemy.x, enemy.y, enemy.def.palette.eye, 6, 2.4);
+    // The body stays where it fell for the rest of the depth.
+    const blood = enemy.def.blood || DEFAULT_BLOOD;
+    this.gore.pool(enemy.x, enemy.y, blood, 0.8 + (enemy.elite ? 0.5 : 0));
+    this.gore.splat(enemy.x, enemy.y, blood, 1.3, this.player.faceX, this.player.faceY);
+    this.gore.corpse({
+      defId: enemy.def.id, x: enemy.x, y: enemy.y,
+      faceX: enemy.faceX, faceY: enemy.faceY,
+      elite: enemy.elite, scale: enemy.scale, seed: enemy.seed,
+      palette: enemy.def.palette, blood,
+    });
     this.playSfx(enemy.elite ? 'eliteDeath' : 'enemyDeath',
       { x: enemy.x, y: enemy.y, material: enemy.def.material || 'flesh' });
     this.run.discover(enemy.def.id);
@@ -905,6 +960,21 @@ export class World {
         if (target) break;
       }
     }
+
+    // Cold fires come last: they are everywhere, and should never stand
+    // between the player and a chest they are also standing on.
+    if (!target) {
+      const fire = this.fireAt(p.x, p.y, 1.35);
+      if (fire) {
+        target = {
+          type: 'fire', fire,
+          label: 'Light the ' + (FIRE_NAMES[fire.kind] || 'fire'),
+          hint: this.torchLit ? '' : 'Your torch is out',
+          enabled: this.torchLit,
+          hx: fire.x, hy: fire.y,
+        };
+      }
+    }
     this.interactTarget = target;
   }
 
@@ -924,8 +994,72 @@ export class World {
       case 'chest': return this.openChest(target.prop);
       case 'shrine': return this.useShrine(target.prop);
       case 'ladder': return this.useLadder(target.prop);
+      case 'fire': return this.lightFire(target.fire);
       default: return false;
     }
+  }
+
+  // Douse or relight. Free either way: the cost of the dark is the dark, and
+  // making the player hunt for a flame to get their sight back would turn a
+  // tactical choice into a punishment.
+  toggleTorch() {
+    if (this.torchToggleCooldown > 0 || this.playerDead || this.finished) return false;
+    this.torchToggleCooldown = 0.45;
+    this.torchLit = !this.torchLit;
+    if (this.torchLit) {
+      this.playSfx('torchLight');
+      burstSparks(this.particles, this.player.x, this.player.y - 0.2, '#ffb35c', 8, 2.2);
+      this.particles.text(this.player.x, this.player.y - 1.1, 'TORCH LIT', '#ffb35c', 12, 1.0);
+    } else {
+      this.playSfx('torchDouse');
+      for (let i = 0; i < 7; i++) {
+        this.particles.spawn({
+          x: this.player.x, y: this.player.y, z: 0.9,
+          vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4,
+          vz: 0.5 + Math.random() * 0.5, gravity: -0.2, drag: 0.8,
+          life: 1.4, size: 2.4, colour: '#59524a', fade: 1.6,
+        });
+      }
+      this.particles.text(this.player.x, this.player.y - 1.1, 'TORCH OUT', '#8fa0b8', 12, 1.0);
+    }
+    this.updateHazard();
+    this.refreshVisibility(0);
+    this.emit('torch', { lit: this.torchLit });
+    return true;
+  }
+
+  // How much better sound carries to the player right now. The ears sharpen
+  // when the eyes have nothing to do.
+  get hearingScale() {
+    const relic = (this.run.mods && this.run.mods.hearing) || 1;
+    return relic * (this.torchLit ? 1 : DOUSED_HEARING);
+  }
+
+  // The nearest cold fire the player could set alight, if they are standing
+  // over it and still carrying a flame.
+  fireAt(x, y, r = 1.3) {
+    let best = null, bestD = r;
+    for (const f of this.level.sconces) {
+      if (f.lit !== false) continue;
+      if (this.layerAt(Math.floor(f.y)) !== this.playerLayer) continue;
+      const d = Math.hypot(f.x - x, f.y - y);
+      if (d < bestD) { bestD = d; best = f; }
+    }
+    return best;
+  }
+
+  lightFire(fire) {
+    if (!fire || fire.lit || !this.torchLit) return false;
+    fire.lit = true;
+    this.playSfx('torchLight', { x: fire.x, y: fire.y });
+    ring(this.particles, fire.x, fire.y, '#ff9a3a', 16, 0.9, 0.6);
+    burstSparks(this.particles, fire.x, fire.y, '#ffd27a', 14, 3);
+    const points = this.run.score.addBonus(40, this.run.mods);
+    this.particles.text(fire.x, fire.y - 0.8,
+      'LIT  +' + Math.round(points), '#ffb35c', 13, 1.4);
+    this.refreshVisibility(0);
+    this.emit('fireLit', { fire });
+    return true;
   }
 
   unlockGate(gate) {
@@ -1266,6 +1400,13 @@ export class World {
   }
 
   onBossKilled(boss) {
+    const blood = boss.def.blood || DEFAULT_BLOOD;
+    this.gore.pool(boss.x, boss.y, blood, 2.4);
+    this.gore.corpse({
+      defId: boss.def.id, x: boss.x, y: boss.y,
+      faceX: boss.faceX, faceY: boss.faceY,
+      elite: true, scale: 2.2, seed: 0.5, palette: boss.def.palette, blood, boss: true,
+    });
     const pts = this.run.score.addBoss(boss.def.score || 3000, this.run.mods);
     this.particles.text(boss.x, boss.y - 1, '+' + Math.round(pts), '#e8b45c', 22, 2.4);
     // Killing a great foe mends you. Without this a boss is followed by a
@@ -1309,5 +1450,6 @@ export class World {
     this.particles.clear();
     this.enemies.length = 0;
     this.projectiles.length = 0;
+    this.gore.clear();
   }
 }

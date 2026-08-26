@@ -348,7 +348,7 @@ function vary(amount) { return 1 + (Math.random() * 2 - 1) * amount; }
 const THROTTLE = {
   hit: 0.03, step: 0.1, swing: 0.05, swingWall: 0.06,
   enemyDeath: 0.03, arrowHit: 0.03, alert: 0.18, windup: 0.08, enemyShot: 0.06,
-  drip: 0.25, emberPop: 0.2,
+  drip: 0.25, emberPop: 0.2, scurry: 0.8, flutter: 1.2,
 };
 
 const MAX_THROTTLE = Math.max(...Object.values(THROTTLE));
@@ -634,6 +634,26 @@ const EFFECTS = {
     a.tone({ freq: 300 * vary(0.3), to: 120, type: 'triangle', dur: 0.06, peak: 0.04 });
   },
   gust: (a) => a.noise({ dur: 1.6 * vary(0.2), type: 'bandpass', f0: 380, f1: 900, q: 0.6, peak: 0.055, attack: 0.5 }),
+  // --- fire. Catching is a rising rush; going out is the same shape backwards.
+  torchLight: (a) => {
+    a.noise({ dur: 0.5, type: 'bandpass', f0: 500, f1: 2400, q: 0.8, peak: 0.16, attack: 0.06 });
+    a.tone({ freq: 140, to: 320, type: 'sawtooth', dur: 0.3, peak: 0.06 });
+  },
+  torchDouse: (a) => {
+    a.noise({ dur: 0.45, type: 'bandpass', f0: 2200, f1: 260, q: 0.7, peak: 0.14, attack: 0.02 });
+    a.tone({ freq: 240, to: 90, type: 'sine', dur: 0.35, peak: 0.05 });
+  },
+  // --- small things living in the walls
+  scurry: (a) => {
+    for (let i = 0; i < 4; i++) {
+      a.noise({ dur: 0.035, type: 'bandpass', f0: 3400 * vary(0.3), q: 6, peak: 0.028, delay: i * 0.055 });
+    }
+  },
+  flutter: (a) => {
+    for (let i = 0; i < 5; i++) {
+      a.noise({ dur: 0.07, type: 'bandpass', f0: 900 * vary(0.3), q: 2, peak: 0.03, delay: i * 0.09 });
+    }
+  },
   distantFall: (a) => {
     a.noise({ dur: 0.9, type: 'lowpass', f0: 420, f1: 120, peak: 0.09, attack: 0.05 });
     a.tone({ freq: 70, to: 40, type: 'sine', dur: 1.1, peak: 0.07 });

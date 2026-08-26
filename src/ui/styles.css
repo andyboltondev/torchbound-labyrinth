@@ -361,6 +361,10 @@ input, textarea { -webkit-user-select: text; user-select: text; }
 .tbtn.slash { border-color: rgba(232,180,92,.6); color: var(--gold); grid-column: 2; grid-row: 2; }
 .tbtn.fire { border-color: rgba(168,216,239,.55); color: var(--frost); grid-column: 1; grid-row: 2; }
 .tbtn.action { border-color: rgba(111,206,135,.5); color: var(--good); grid-column: 2; grid-row: 1; }
+/* The torch toggle takes the one free corner of the pad. Smaller type: it is
+   a word, not a verb, and it is pressed far less often than the other three. */
+.tbtn.torch { border-color: rgba(255,154,58,.5); color: var(--ember); grid-column: 1; grid-row: 1; font-size: 10px; }
+.tbtn.torch.out { border-color: rgba(143,160,184,.4); color: var(--stone); }
 
 /* -------------------------------------------------------------- screens */
 #screens { position: absolute; inset: 0; z-index: 10; pointer-events: none; }

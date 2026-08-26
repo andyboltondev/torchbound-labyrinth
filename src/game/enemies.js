@@ -239,6 +239,7 @@ export class Enemy {
     this.mover.update(dt, world, this._desire, {
       speed: this._desiredSpeed,
       isBlocked: blocked,
+      onEnterTile: (x, y) => world.onEnemyEnterTile(this, x, y),
     });
     this.speedNow = this.mover.speedNow;
     const h = this.mover.moving ? this.mover.heading : null;

@@ -301,6 +301,12 @@ class Game {
         this.touch.setCrossbow(true);
         this.hud.toast('Crossbow recovered  \u2014  F or K to loose', 'good');
         break;
+      case 'torch':
+        this.touch.setTorch(data.lit);
+        this.hud.toast(data.lit ? 'Torch lit' : 'Torch out  —  you can hear better in the dark',
+          data.lit ? 'good' : '');
+        break;
+      case 'fireLit': this.hud.toast('The fire catches', 'good'); break;
       case 'gateOpened':
         this.hud.toast('Gate opened', 'good');
         if (data.gate) this.minimap.repaint(data.gate.x, data.gate.y);
@@ -364,6 +370,7 @@ class Game {
       fire: this.input.held('fire'),
     };
     if (this.input.consume('action')) this.world.interact();
+    if (this.input.consume('torch')) this.world.toggleTorch();
 
     this.world.update(dt, intent);
 

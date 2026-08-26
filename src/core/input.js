@@ -15,6 +15,7 @@ const DEFAULT_BINDINGS = {
   pause: ['Escape', 'KeyP'],
   bestiary: ['KeyB'],
   map: ['KeyM'],
+  torch: ['KeyT', 'KeyQ'],
 };
 
 export class Input {

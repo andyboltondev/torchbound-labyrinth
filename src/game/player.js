@@ -31,6 +31,7 @@ export class Player {
     this.slowTimer = 0;
     this.burnTimer = 0;
     this.torchFlicker = 1;
+    this.torchLit = true;
     this.hasCrossbow = false;
     this.hasShieldRelic = false;
     this.tileX = 0;

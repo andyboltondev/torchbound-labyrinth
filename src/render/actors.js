@@ -498,7 +498,21 @@ function drawPlayerArms(ctx, p, t, cfg) {
   ctx.fillRect(-2, -14, 1.4, 16);
   ctx.fillStyle = gold;
   ctx.fillRect(-2.6, -3, 5.2, 2);
-  drawFlame(ctx, 0, -16, 1, t, p.torchFlicker || 1);
+  if (p.torchLit === false) {
+    // A doused brand: charred head, and a thread of smoke still coming off it.
+    ctx.fillStyle = '#241d18';
+    ctx.beginPath();
+    ctx.ellipse(0, -15, 2.6, 3.4, 0, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = rgba('#7b7167', 0.3);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, -18);
+    ctx.quadraticCurveTo(Math.sin(t * 1.4) * 3, -23, Math.sin(t * 0.9) * 4, -28);
+    ctx.stroke();
+  } else {
+    drawFlame(ctx, 0, -16, 1, t, p.torchFlicker || 1);
+  }
   ctx.restore();
 
   // Sword hand: rests at the hip, swings on attack. A wounded arm hangs.

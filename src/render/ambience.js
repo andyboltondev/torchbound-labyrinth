@@ -188,16 +188,23 @@ export class Ambience {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     for (const s of world.level.sconces) {
-      if (Math.abs(s.x - p.x) + Math.abs(s.y - p.y) > 11) continue;
+      if (s.lit === false) continue;
+      const reach = (s.radius || 3.6) + 5;
+      if (Math.abs(s.x - p.x) + Math.abs(s.y - p.y) > reach) continue;
       if (world.layerAt(Math.floor(s.y)) !== world.playerLayer) continue;
       if (world.vis.lightAt(Math.floor(s.x), Math.floor(s.y)) < 0.03) continue;
+      // Three sines at unrelated rates, offset by the fire's own seed: no two
+      // flames in a hall ever pulse together, which is what stops a row of
+      // braziers reading as one blinking light.
       const flick = 0.78 + Math.sin(t * 7.3 + s.seed * 30) * 0.12
-        + Math.sin(t * 13.1 + s.seed * 11) * 0.06;
+        + Math.sin(t * 13.1 + s.seed * 11) * 0.06
+        + Math.sin(t * 2.9 + s.seed * 57) * 0.05;
       const sx = screenX(s.x, s.y), sy = screenY(s.x, s.y);
-      const r = TILE_W * 1.5 * flick;
+      const r = TILE_W * ((s.radius || 3.6) / 3.6) * 1.4 * flick;
       const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, r);
-      g.addColorStop(0, rgba('#ffa54a', 0.2 * flick));
-      g.addColorStop(0.55, rgba('#ff7a2a', 0.06 * flick));
+      const strength = 0.16 + (s.intensity || 0.6) * 0.16;
+      g.addColorStop(0, rgba('#ffa54a', strength * flick));
+      g.addColorStop(0.55, rgba('#ff7a2a', strength * 0.3 * flick));
       g.addColorStop(1, rgba('#ff7a2a', 0));
       ctx.save();
       ctx.translate(sx, sy);

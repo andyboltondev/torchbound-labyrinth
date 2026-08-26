@@ -301,6 +301,83 @@ test('a lone pillar is not mistaken for a doorway', () => {
     'the assist shunted the player round an obstacle rather than through a door');
 });
 
+test('dousing the torch costs sight and buys hearing, and is reversible', () => {
+  const { world } = makeWorld(4, 'torch-1');
+  step(world, 10);
+  const litRadius = world.torchRadius;
+  const litHearing = world.hearingScale;
+  assert(litRadius > 5, 'a lit torch should reach a useful distance');
+
+  world.toggleTorch();
+  step(world, 10);
+  assert(!world.torchLit, 'the torch did not go out');
+  assert(world.torchRadius < litRadius * 0.5,
+    `dousing barely changed the torch radius (${litRadius} -> ${world.torchRadius})`);
+  assert(world.hearingScale > litHearing, 'going dark did not sharpen hearing');
+
+  world.torchToggleCooldown = 0;
+  world.toggleTorch();
+  step(world, 10);
+  assert(world.torchLit && world.torchRadius > litRadius * 0.9,
+    'relighting did not restore the torch');
+});
+
+test('a cold fire can be lit, but not by a torchbearer with no torch', () => {
+  const { world, level } = makeWorld(4, 'fire-1');
+  const fire = { kind: 'brazier', x: 0, y: 0, seed: 0.5, lit: false, radius: 4.4, intensity: 0.7, id: 'test_fire' };
+  const cell = level.floorCells.find((c) => world.layerAt(c.y) === 0);
+  fire.x = cell.x + 0.5; fire.y = cell.y + 0.5;
+  level.sconces.push(fire);
+  place(world, cell.x, cell.y);
+  clearArena(world, cell.x, cell.y, 2);
+
+  world.toggleTorch();          // go dark first
+  step(world, 6);
+  world.updateInteractTarget();
+  assert(world.interactTarget && world.interactTarget.type === 'fire',
+    'standing on a cold fire offered no action');
+  assert(!world.interactTarget.enabled, 'a doused torchbearer was allowed to light a fire');
+  world.interact();
+  assert(!fire.lit, 'the fire lit itself with nothing to light it from');
+
+  world.torchToggleCooldown = 0;
+  world.toggleTorch();
+  step(world, 6);
+  world.updateInteractTarget();
+  assert(world.interactTarget.enabled, 'a lit torch was still refused');
+  world.interact();
+  assert(fire.lit, 'the fire did not catch');
+  // ...and it now lights the room it is standing in.
+  world.refreshVisibility(0);
+  assert(world.vis.lightAt(Math.floor(fire.x) + 2, Math.floor(fire.y)) > 0,
+    'a lit fire threw no light');
+});
+
+test('blood is left where things bleed, and carried a few tiles on the boots', () => {
+  const { world, level } = makeWorld(4, 'gore-1');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 5);
+  place(world, cx, cy);
+
+  const enemy = spawnAt(world, 'draugr_thrall', cx + 1, cy);
+  enemy.hp = 1;
+  world.player.faceX = 1; world.player.faceY = 0;
+  step(world, 40, { moveX: 0, moveY: 0, slash: true, fire: false });
+  assert(world.gore.stains.length > 0, 'a kill left no blood at all');
+  assert(world.gore.corpses.length === 1, 'a kill left no body');
+
+  // Walk over the pool and away from it: the first tiles carry prints.
+  world.gore.stains.length = 0;
+  world.gore.pool(cx + 0.5, cy + 0.5, '#7a1f1c', 1);
+  const before = world.gore.stains.length;
+  world.player.mover.heading = null;
+  step(world, 90, { moveX: 1, moveY: 0, slash: false, fire: false });
+  const prints = world.gore.stains.filter((s) => s.print);
+  assert(prints.length > 0, 'walking out of a pool of blood left no prints');
+  assert(prints.length <= 6, `prints did not wear off: ${prints.length} of them`);
+  assert(world.gore.stains.length > before, 'no new stains were recorded at all');
+});
+
 // --- keys, gates and the exit ----------------------------------------------
 
 test('a gate stays shut without its key and opens with it', () => {

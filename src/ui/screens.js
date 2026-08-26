@@ -147,7 +147,8 @@ export class Screens {
     controls.style.marginTop = '16px';
     controls.appendChild(el('p', 'hint', 'Move with WASD or the arrow keys: they walk the '
       + 'dungeon’s compass, so Up is north and the corridors run with your keys. '
-      + 'Space or J to slash, F or K to loose a bolt, E to act, Esc to pause. '
+      + 'Space or J to slash, F or K to loose a bolt, E to act, T to put out '
+      + 'your torch or light it again, Esc to pause. '
       + 'On a touch screen the controls appear on the glass.'));
     panel.appendChild(controls);
     panel.appendChild(this._buildStamp());

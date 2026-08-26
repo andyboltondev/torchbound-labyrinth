@@ -670,6 +670,20 @@ function addProps(level, rng, depth, ctx) {
   }
   if (staged && rng.bool(0.5)) place('shrine', { flavour: 'blessing', used: false });
 
+  addFires(level, rng, depth, candidates, mark);
+  addDecor(level, rng, candidates);
+}
+
+// Fire in the labyrinth, in four sizes.
+//
+// Wall sconces are the small one and have always been here. Above them sit
+// braziers, firepits and campfires, which are placed on the floor of the
+// rooms big enough to swallow a torch, and which throw enough light to make a
+// hall read as a hall. Some are cold: a torchbearer can light those, and once
+// lit they stay lit, so a room the player has warmed stays warm on the chart.
+function addFires(level, rng, depth, candidates, mark) {
+  const { grid } = level;
+
   // Wall sconces: atmosphere, but they cast a little real light.
   for (let y = 1; y < grid.h - 1; y++) {
     for (let x = 1; x < grid.w - 1; x++) {
@@ -677,21 +691,87 @@ function addProps(level, rng, depth, ctx) {
       let dir = null, floors = 0;
       for (const [dx, dy] of N4)
         if (grid.get(x + dx, y + dy) === T.FLOOR) { floors++; dir = [dx, dy]; }
-      if (floors !== 1 || !rng.bool(0.028)) continue;
-      level.sconces.push({ x: x + 0.5 + dir[0] * 0.3, y: y + 0.5 + dir[1] * 0.3, seed: rng.next() });
+      if (floors !== 1 || !rng.bool(0.032)) continue;
+      // Roughly a third of them have gone out over the centuries.
+      const lit = rng.bool(0.66);
+      level.sconces.push({
+        kind: 'sconce', x: x + 0.5 + dir[0] * 0.3, y: y + 0.5 + dir[1] * 0.3,
+        seed: rng.next(), lit, radius: 3.6, intensity: 0.6,
+        id: 'fire_s' + level.sconces.length,
+      });
     }
   }
 
-  // Scatter decoration -- never on a cell that matters for play.
-  for (const c of candidates) {
-    if (!rng.bool(0.07)) continue;
-    level.decor.push({
-      type: rng.weighted(['bones', 'urn', 'rubble', 'banner', 'statue', 'grass'],
-        (t) => (t === 'statue' ? 0.4 : t === 'banner' ? 0.6 : 1.6)),
-      x: c.x + 0.5 + rng.float(-0.22, 0.22),
-      y: c.y + 0.5 + rng.float(-0.22, 0.22),
-      seed: rng.next(),
+  // The bigger fires want the middle of a big room, and nothing else wants
+  // to be standing there.
+  const halls = level.rooms
+    .filter((r) => r.kind !== 'vault')
+    .map((r) => ({ room: r, area: (r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1) }))
+    .filter((h) => h.area >= 20)
+    .sort((a, b) => b.area - a.area);
+
+  for (const h of halls) {
+    const r = h.room;
+    const cx = Math.floor((r.x0 + r.x1) / 2), cy = Math.floor((r.y0 + r.y1) / 2);
+    if (grid.get(cx, cy) !== T.FLOOR) continue;
+    if (level._reserved.has(grid.idx(cx, cy))) continue;
+    // The largest halls almost always have something burning in them; a
+    // middling room is a coin toss, so the labyrinth is never uniformly lit.
+    const chance = h.area >= 42 ? 0.85 : h.area >= 28 ? 0.55 : 0.3;
+    if (!rng.bool(chance)) continue;
+    const kind = h.area >= 42 ? rng.weighted(['firepit', 'campfire'], (k) => (k === 'firepit' ? 2 : 1))
+      : rng.weighted(['brazier', 'firepit'], (k) => (k === 'brazier' ? 2 : 1));
+    const size = kind === 'campfire' ? { radius: 6.4, intensity: 0.95 }
+      : kind === 'firepit' ? { radius: 5.4, intensity: 0.85 }
+        : { radius: 4.4, intensity: 0.7 };
+    level.sconces.push({
+      kind, x: cx + 0.5, y: cy + 0.5, seed: rng.next(),
+      // Deeper down, more of them have gone cold.
+      lit: rng.bool(Math.max(0.32, 0.78 - depth * 0.03)),
+      radius: size.radius, intensity: size.intensity,
+      id: 'fire_b' + level.sconces.length,
     });
+    mark(cx, cy, 1);
+    for (let i = candidates.length - 1; i >= 0; i--) {
+      if (Math.abs(candidates[i].x - cx) <= 1 && Math.abs(candidates[i].y - cy) <= 1) {
+        candidates.splice(i, 1);
+      }
+    }
+  }
+}
+
+// Scatter decoration -- never on a cell that matters for play.
+//
+// Density matters more than variety here. A labyrinth of bare floor reads as
+// unfinished whatever is standing in it, so most free floor gets something,
+// and most of that something is small.
+function addDecor(level, rng, candidates) {
+  const { grid } = level;
+  const add = (type, x, y, extra) => {
+    level.decor.push({ type, x, y, seed: rng.next(), ...extra });
+  };
+
+  for (const c of candidates) {
+    if (!rng.bool(0.19)) continue;
+    add(rng.weighted(
+      ['bones', 'urn', 'rubble', 'banner', 'statue', 'grass', 'debris', 'skull', 'crate', 'chain'],
+      (t) => (t === 'statue' ? 0.3 : t === 'banner' ? 0.5 : t === 'crate' ? 0.7
+        : t === 'chain' ? 0.6 : t === 'debris' ? 2.4 : t === 'skull' ? 1.1 : 1.4)),
+    c.x + 0.5 + rng.float(-0.24, 0.24), c.y + 0.5 + rng.float(-0.24, 0.24));
+  }
+
+  // Cobwebs want corners: a floor tile with two walls meeting on it. Placed
+  // separately because the scatter above would put them in the open, and a
+  // cobweb in the middle of a room is strung between nothing.
+  for (const { x, y } of level.floorCells) {
+    if (!rng.bool(0.16)) continue;
+    let wallX = 0, wallY = 0;
+    if (grid.get(x - 1, y) === T.WALL) wallX = -1;
+    else if (grid.get(x + 1, y) === T.WALL) wallX = 1;
+    if (grid.get(x, y - 1) === T.WALL) wallY = -1;
+    else if (grid.get(x, y + 1) === T.WALL) wallY = 1;
+    if (!wallX || !wallY) continue;
+    add('cobweb', x + 0.5 + wallX * 0.34, y + 0.5 + wallY * 0.34, { wallX, wallY });
   }
 }
 
