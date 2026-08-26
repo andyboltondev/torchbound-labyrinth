@@ -19,10 +19,24 @@
   --shadow: 0 18px 46px rgba(0, 0, 0, .6);
   --display: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
   --ui: "Trebuchet MS", "Segoe UI", system-ui, -apple-system, sans-serif;
+  /* How far a dungeon axis leans off horizontal once the camera has drawn it:
+     atan(TILE_H / TILE_W) for the 64x32 tiles in render/iso.js. The pad's
+     arrows are aimed with this, so they lean exactly as the corridors do. */
+  --iso-tilt: 26.565deg;
   color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
+
+/* The browser hides [hidden] with `display: none` at user-agent weight, which
+   any author `display` here outranks -- so a rule as ordinary as
+   `.chip { display: inline-flex }` quietly re-showed the elements the HUD had
+   just hidden. That left an empty key chip, an ammo count for a crossbow the
+   player has not found, an empty action prompt pinned to the foot of the
+   screen, and a FIRE button that could be pressed with nothing to fire.
+   State the intent once, at author weight, and let every `display` rule below
+   be written without having to remember this. */
+[hidden] { display: none !important; }
 
 /* One visible focus ring for every interactive element. The old rule set
    `outline: none` and leaned on a border-colour change, which is close to
@@ -42,11 +56,17 @@ html, body {
   overscroll-behavior: none;
   -webkit-tap-highlight-color: transparent;
   -webkit-user-select: none; user-select: none;
-  touch-action: none;
+  /* Not `none`: the effective touch-action is the intersection of every
+     ancestor's, so forbidding panning here forbids it inside the menus too,
+     and a settings list taller than the screen could never be scrolled with
+     a thumb. The play surfaces opt out individually instead. */
+  touch-action: manipulation;
 }
+/* Text fields still need a caret and a selection on iOS. */
+input, textarea { -webkit-user-select: text; user-select: text; }
 
 #app { position: fixed; inset: 0; }
-#game { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#game { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
 
 /* ---------------------------------------------------------------- HUD */
 .hud {
@@ -55,7 +75,6 @@ html, body {
            max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
   display: flex; flex-direction: column;
 }
-.hud[hidden] { display: none; }
 .hud-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .hud-left, .hud-right { display: flex; flex-direction: column; gap: 8px; }
 .hud-right { align-items: flex-end; }
@@ -125,7 +144,6 @@ html, body {
   font-size: 11.5px; letter-spacing: .04em; color: var(--stone);
   text-shadow: 0 1px 3px #000;
 }
-.hazard-chip[hidden] { display: none; }
 .hazard-chip b {
   color: var(--parchment); font-weight: 600; font-size: 11px;
   letter-spacing: .14em; text-transform: uppercase; flex: 0 0 auto;
@@ -144,28 +162,39 @@ html, body {
 .streak-bar > div { height: 100%; background: var(--ember); transform-origin: right center; }
 
 .hud-buttons { display: flex; gap: 8px; margin-top: 8px; pointer-events: auto; }
+/* The icons are drawn, not typed. A font glyph for `pause` picks up whatever
+   the platform happens to have -- another weight, another baseline, an emoji
+   for the skull -- and a <button> does not inherit the page font, so the
+   labels came out in the UA default. That is why this row never lined up. */
 .icon-btn {
-  width: 40px; height: 40px; border-radius: 4px; cursor: pointer;
+  width: 40px; height: 40px; padding: 0; border-radius: 4px; cursor: pointer;
   background: rgba(10, 13, 19, .85); border: 1px solid var(--panel-edge);
-  color: var(--stone); font-size: 15px; display: grid; place-items: center;
+  color: var(--stone); font-family: var(--ui); line-height: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
   transition: background .15s, color .15s, border-color .15s;
 }
-.icon-btn:hover { background: #1c2431; color: var(--gold); border-color: var(--gold-dim); }
+.icon-btn .ico { width: 19px; height: 19px; display: block; flex: 0 0 auto; fill: currentColor; }
 .icon-btn::after { content: ''; }
+/* Hover is guarded: on a touch screen it sticks after the tap. */
+@media (hover: hover) {
+  .icon-btn:hover { background: #1c2431; color: var(--gold); border-color: var(--gold-dim); }
+}
+.icon-btn:active { background: #1c2431; color: var(--gold); border-color: var(--gold-dim); }
 /* On a touch screen the target grows and takes a word with it -- there is no
    hover to reveal the title attribute and no keyboard shortcut to lean on.
+   Both buttons take one width, so the row reads as a pair rather than as two
+   sizes of the same thing.
    On a pointer device the glyph plus its tooltip is enough. */
 @media (pointer: coarse) {
-  .hud-buttons .icon-btn {
-    width: auto; min-width: 52px; height: 48px; padding: 0 12px;
-    display: flex; flex-direction: column; gap: 1px; line-height: 1;
-  }
+  .hud-buttons { gap: 10px; }
+  .hud-buttons .icon-btn { width: 64px; height: 52px; padding: 0 3px; gap: 3px; }
+  .icon-btn .ico { width: 21px; height: 21px; }
   .icon-btn::after {
     content: attr(data-label);
-    font-size: 8px; letter-spacing: .14em; text-transform: uppercase;
-    color: var(--stone-dim);
+    font-size: 8px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--stone-dim); line-height: 1;
   }
-  .icon-btn:hover::after, .icon-btn:active::after { color: inherit; }
+  .icon-btn:active::after { color: inherit; }
 }
 
 .hazard-banner {
@@ -217,7 +246,6 @@ html, body {
 
 /* ------------------------------------------------------- touch controls */
 .touch { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
-.touch[hidden] { display: none; }
 /* The whole lower-left of the screen is the movement surface: the pad jumps
    to wherever the thumb lands, which is far easier to hit than a fixed
    circle you have to look down for. */
@@ -267,37 +295,50 @@ html, body {
      is 40% wider than the pad once rotated. */
   pointer-events: none; touch-action: none;
 }
-.diamond[hidden] { display: none; }
 .dbtn, .diamond-hub {
-  position: absolute; width: 62px; height: 62px;
-  display: grid; place-content: center; gap: 1px;
+  position: absolute; width: 62px; height: 62px; padding: 0;
+  display: grid; place-content: center; justify-items: center; gap: 3px;
   border-radius: 8px; transform: rotate(-45deg);
   background: rgba(20,26,36,.82); border: 1px solid rgba(143,160,184,.34);
-  color: var(--parchment); cursor: pointer; pointer-events: auto;
+  color: var(--parchment); font-family: var(--ui); cursor: pointer; pointer-events: auto;
   touch-action: none; transition: transform .07s, background .1s, border-color .1s;
 }
 .dbtn.north { top: 0; left: 53px; }
 .dbtn.east { top: 53px; right: 0; }
 .dbtn.south { bottom: 0; left: 53px; }
 .dbtn.west { top: 53px; left: 0; }
+/* A drawn arrow, not a glyph: it has to be rotated, and a glyph's ink is not
+   centred in its own box, so a rotated one sits visibly off the middle of the
+   button. Every one of these used to be the same upward glyph under the same
+   rotation, which pointed all four of them north.
+   The button is counter-rotated upright for the thumb, so the angle written
+   here is the arrow's true angle on screen -- and the angle it is given is
+   the one the camera actually draws that axis at. That is not 45deg: the view
+   is 2:1 isometric, so a corridor running north leaves the player at 26.6deg
+   above the horizontal, not 45. The pad stays a square diamond because that
+   is what a thumb wants; only the arrows carry the real bearing. */
 .dbtn-arrow {
-  font-style: normal; font-size: 22px; line-height: .9; color: var(--gold);
-  /* Undo the button's counter-rotation so the glyph follows the frame and
-     points along the true on-screen direction of that dungeon axis. */
-  transform: rotate(45deg);
-  display: block;
+  width: 21px; height: 21px; display: block; background: var(--gold);
+  clip-path: polygon(50% 0, 100% 50%, 67% 50%, 67% 100%, 33% 100%, 33% 50%, 0 50%);
+  transition: background .1s;
 }
+/* The art points up at 0deg, so each rotation is the screen bearing + 90. */
+.dbtn.north .dbtn-arrow { transform: rotate(calc(90deg - var(--iso-tilt))); }
+.dbtn.east  .dbtn-arrow { transform: rotate(calc(90deg + var(--iso-tilt))); }
+.dbtn.south .dbtn-arrow { transform: rotate(calc(270deg - var(--iso-tilt))); }
+.dbtn.west  .dbtn-arrow { transform: rotate(calc(270deg + var(--iso-tilt))); }
 .dbtn em {
-  font-style: normal; font-size: 8.5px; font-weight: 700;
-  letter-spacing: .16em; color: var(--stone-dim);
+  font-style: normal; font-size: 8.5px; font-weight: 700; line-height: 1;
+  letter-spacing: .16em; text-indent: .08em; color: var(--stone-dim);
 }
 .dbtn:active, .dbtn.down {
   transform: rotate(-45deg) scale(.93);
   background: rgba(60,44,20,.92); border-color: rgba(232,180,92,.7);
 }
 .dbtn.down em, .dbtn:active em { color: var(--gold); }
+.dbtn.down .dbtn-arrow, .dbtn:active .dbtn-arrow { background: #ffd694; }
 .diamond-hub {
-  top: 53px; left: 53px; width: 62px; height: 62px;
+  top: 64px; left: 64px; width: 40px; height: 40px;
   background: rgba(6,8,12,.42); border-color: rgba(143,160,184,.1);
   pointer-events: none; cursor: default;
 }
@@ -309,8 +350,9 @@ html, body {
   pointer-events: auto;
 }
 .tbtn {
-  width: 74px; height: 74px; border-radius: 50%; cursor: pointer;
-  font-family: var(--ui); font-size: 12px; letter-spacing: .1em; font-weight: 700;
+  width: 74px; height: 74px; padding: 0; border-radius: 50%; cursor: pointer;
+  display: grid; place-items: center; line-height: 1;
+  font-family: var(--ui); font-size: 12px; letter-spacing: .1em; text-indent: .05em; font-weight: 700;
   color: var(--parchment); background: rgba(20,26,36,.82);
   border: 2px solid rgba(143,160,184,.35);
   touch-action: none; transition: transform .06s, background .1s;
@@ -322,17 +364,37 @@ html, body {
 
 /* -------------------------------------------------------------- screens */
 #screens { position: absolute; inset: 0; z-index: 10; pointer-events: none; }
+/* The screen is the scroller, not the panel. A panel that scrolled inside a
+   fixed height left its carved inner border (::before, positioned against the
+   padding box) sliding away from the frame, and pinned its own height to a
+   `vh` unit -- which on a phone measures the viewport *without* the browser
+   chrome, so the last settings row sat under the address bar with no way to
+   reach it. Scrolling the whole panel instead needs no height at all: it is
+   as tall as its content, and the screen scrolls to whatever will not fit. */
 .screen {
   position: absolute; inset: 0; display: none;
-  align-items: center; justify-content: center; padding: 20px;
+  align-items: flex-start; justify-content: center;
+  padding: max(clamp(12px, 2.4vw, 20px), env(safe-area-inset-top))
+           max(clamp(12px, 2.4vw, 20px), env(safe-area-inset-right))
+           max(clamp(12px, 2.4vw, 20px), env(safe-area-inset-bottom))
+           max(clamp(12px, 2.4vw, 20px), env(safe-area-inset-left));
   background: radial-gradient(ellipse at 50% 30%, rgba(24,18,10,.55), rgba(5,6,10,.93) 68%);
-  backdrop-filter: blur(3px); pointer-events: auto; overflow-y: auto;
+  backdrop-filter: blur(3px); pointer-events: auto;
+  overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin; scrollbar-color: var(--gold-dim) transparent;
 }
+.screen::-webkit-scrollbar { width: 10px; }
+.screen::-webkit-scrollbar-thumb { background: var(--gold-dim); border-radius: 5px;
+  border: 3px solid transparent; background-clip: content-box; }
 .screen.active { display: flex; animation: screenIn .28s ease-out; }
 @keyframes screenIn { from { opacity: 0; } }
 
 .panel {
-  width: min(760px, 100%); max-height: calc(100vh - 40px); overflow-y: auto;
+  width: min(760px, 100%);
+  /* Auto margins centre the panel while it fits and collapse to zero once it
+     does not, which keeps the top of a tall panel reachable -- centring it
+     with align-items would push the head of it above the scroll origin. */
+  margin: auto;
   background: var(--panel); border: 1px solid var(--panel-edge);
   border-radius: 6px; box-shadow: var(--shadow); padding: clamp(18px, 3.5vw, 34px);
   position: relative;
@@ -455,7 +517,15 @@ h2.screen-title {
 .legend-swatch.mem { background: linear-gradient(135deg, #2b3542, #1b212a); border-color: rgba(120,150,190,.22); }
 .legend-swatch.dark { background: #06080c; border-color: rgba(255,255,255,.04); }
 
-table.board { width: 100%; border-collapse: collapse; font-size: 14px; }
+/* Seven columns will not fit a phone. The narrow rules below drop the ones
+   that are flavour rather than rank, and the wrapper carries whatever is
+   left: a table that scrolls in its own strip never widens the panel, so the
+   rest of the screen stays put. */
+.board-wrap {
+  margin-top: 4px; overflow-x: auto; overscroll-behavior-x: contain;
+  scrollbar-width: thin; scrollbar-color: var(--gold-dim) transparent;
+}
+table.board { width: 100%; min-width: 240px; border-collapse: collapse; font-size: 14px; }
 table.board td.mode { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--stone-dim); }
 table.board td.mode.ashenvow { color: var(--blood); }
 table.board td.mode.torchbound { color: var(--gold-dim); }
@@ -532,16 +602,43 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
 .beast-stats b { color: var(--parchment); font-weight: 600; }
 
 /* ---------------------------------------------------------- settings */
-.setting { display: flex; align-items: center; gap: 14px; padding: 11px 0; border-bottom: 1px solid rgba(43,52,68,.5); }
-.setting label { flex: 1 1 auto; font-size: 14px; }
-.setting input[type=range] { flex: 0 0 190px; accent-color: var(--gold); }
-.setting .value { flex: 0 0 46px; text-align: right; font-variant-numeric: tabular-nums; color: var(--gold); font-size: 13px; }
-.seg { display: flex; border: 1px solid var(--panel-edge); border-radius: 4px; overflow: hidden; }
-.seg button {
-  padding: 7px 13px; font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
-  background: transparent; border: 0; color: var(--stone); cursor: pointer;
+/* Every row wraps rather than squeezing. The control was previously free to
+   shrink below its own contents and `.seg` clips what overflows, so on a
+   phone a four-way choice showed as a 60px sliver with three of its options
+   cut off the side. Nothing here shrinks past its content: when the label and
+   the control cannot share a line, the control takes the next one. */
+.setting {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 10px 14px; padding: 12px 0; border-bottom: 1px solid rgba(43,52,68,.5);
 }
-.seg button.on { background: rgba(232,180,92,.16); color: var(--gold); }
+.setting-label { flex: 1 1 220px; min-width: 0; font-size: 14px; }
+.setting-label .hint { margin-top: 3px; }
+.setting input[type=range] { flex: 1 1 170px; min-width: 140px; max-width: 230px; accent-color: var(--gold); }
+.setting .value { flex: 0 0 46px; text-align: right; font-variant-numeric: tabular-nums; color: var(--gold); font-size: 13px; }
+
+/* The 1px gaps are the container's background showing through, which draws
+   the dividers in both axes -- so the group still reads as one control after
+   it wraps onto a second row. */
+.seg {
+  flex: 0 1 auto; display: flex; flex-wrap: wrap; gap: 1px;
+  background: var(--panel-edge);
+  border: 1px solid var(--panel-edge); border-radius: 4px; overflow: hidden;
+}
+.seg button {
+  flex: 1 1 auto; min-height: 38px; padding: 8px 14px;
+  font-family: var(--ui); font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+  background: rgba(12,16,23,.72); border: 0; color: var(--stone); cursor: pointer;
+  transition: background .14s, color .14s;
+}
+@media (hover: hover) {
+  .seg button:hover { background: rgba(30,38,52,.8); color: var(--parchment); }
+}
+/* Layered so the tint sits on the button's own ground rather than on the
+   divider colour showing through it. */
+.seg button.on {
+  background: linear-gradient(rgba(232,180,92,.18), rgba(232,180,92,.18)), rgba(12,16,23,.72);
+  color: var(--gold);
+}
 
 /* ------------------------------------------------------------- misc */
 .kv { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 14px; }
@@ -576,6 +673,25 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .flavour { font-family: var(--display); font-style: italic; color: var(--stone); font-size: 15px; line-height: 1.7; }
 
+/* Menu controls under a thumb. Sized to be hit, not to dominate: 44px for
+   anything that sits in a row of its own kind, where an oversized target is
+   as easy to hit by accident as a small one is to miss, and a little more for
+   the full-width menu buttons, which have no neighbour to be confused with. */
+@media (pointer: coarse) {
+  .seg button { min-height: 44px; padding: 10px 15px; font-size: 11.5px; }
+  .setting input[type=range] { height: 40px; }
+  .btn { padding: 15px 22px; min-height: 50px; }
+  .btn.small { padding: 12px 14px; min-height: 44px; }
+}
+
+/* Once the label and its control no longer share a line, the control spans
+   the row: a full-width segment is both easier to read and easier to hit
+   than one hugging the left edge. */
+@media (max-width: 560px) {
+  .setting { gap: 8px 12px; }
+  .setting .seg { flex: 1 1 100%; }
+}
+
 @media (max-width: 640px) {
   .panel { padding: 18px 16px; }
   .relic-grid { grid-template-columns: 1fr; gap: 10px; }
@@ -589,10 +705,21 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
   .beast-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
   /* The hint is the reminder; the name alone still carries the warning. */
   .hazard-chip span { display: none; }
-  table.board td.mode { display: none; }
-  table.board th:nth-child(4) { display: none; }
+  /* Mode, then great foes: the rank, the name and the score are what the
+     board is for. */
+  table.board td.mode, table.board th:nth-child(4) { display: none; }
+  table.board td:nth-child(6), table.board th:nth-child(6) { display: none; }
+  table.board th, table.board td { padding-left: 6px; padding-right: 6px; }
+}
+@media (max-width: 430px) {
+  /* Build is the last thing to go; below this the name would start eliding. */
+  table.board td:nth-child(3), table.board th:nth-child(3) { display: none; }
+  table.board { font-size: 13px; }
 }
 @media (max-height: 520px) {
+  .panel { padding: 14px 16px; }
+  h1.title { font-size: clamp(24px, 5vw, 38px); }
+  .menu { margin-top: 16px; gap: 8px; }
   .dpad { width: 122px; height: 122px; }
   .dpad-stick { width: 54px; height: 54px; margin: -27px 0 0 -27px; }
   .diamond { width: 140px; height: 140px; }
@@ -601,8 +728,8 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
   .dbtn.east { top: 44px; }
   .dbtn.south { left: 44px; }
   .dbtn.west { top: 44px; }
-  .diamond-hub { top: 44px; left: 44px; }
-  .dbtn-arrow { font-size: 19px; }
+  .diamond-hub { top: 54px; left: 54px; width: 32px; height: 32px; }
+  .dbtn-arrow { width: 18px; height: 18px; }
   .tbtn { width: 62px; height: 62px; }
   .buttons { grid-template-columns: repeat(2, 62px); }
 }

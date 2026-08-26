@@ -39,10 +39,13 @@ Stairs never trigger by walking onto them -- they always require an explicit
 Action press, so you cannot fall into the next depth by accident.
 
 On a touch screen the default movement pad is a **diamond**: four buttons on a
-frame rotated 45 degrees, so each one sits exactly where the view draws the
-corridor it walks -- the top-right button is north, and north is drawn up and
-to the right. Its arrows are turned to match, and it is immune to the
-*Direction keys* setting, because its buttons are already on the dungeon axes.
+frame rotated 45 degrees, so each one sits on the side of the pad the corridor
+it walks runs off towards -- the top-right button is north, and north is drawn
+up and to the right. Each button's arrow is turned to the bearing the camera
+actually draws that axis at, which is 26.6 degrees off the horizontal rather
+than 45 (see below); the pad stays a square diamond because that is the shape a
+thumb wants. The diamond is immune to the *Direction keys* setting, because its
+buttons are already on the dungeon axes.
 
 The older **floating stick** is still available under *Settings > Touch pad*:
 the whole lower left of the glass becomes the movement surface and the pad
@@ -67,8 +70,11 @@ Corridors run along those axes, so one key walks a passage end to end. Holding
 two keys gives the four diagonals: `Up`+`Right` is north-east, and so on.
 
 North being drawn up-and-to-the-right is the isometric projection doing its
-job, not a mapping error -- a 2:1 view rotates the world 45 degrees, so the
-dungeon's axes land on the screen's diagonals.
+job, not a mapping error. The tiles are 64x32, so the projection lays each
+dungeon axis down at `atan(32/64)` -- 26.6 degrees off the horizontal. It is
+often described as putting the axes "on the diagonals", and for placing things
+that is close enough, but anything that has to *point* along an axis -- the
+d-pad arrows, an aim reticle -- wants the real 26.6, not 45.
 
 Because diagonals may not cut corners, blocking a cardinal also blocks both
 diagonals beside it. That gives a useful guarantee: **a cardinal key either
@@ -78,7 +84,8 @@ you east when you pressed north. There are tests for this.
 Two settings cover the rest, under Settings:
 
 * **Direction keys** -- *Dungeon axes* (default) or *Screen direction*, which
-  makes `Up` move straight up the display instead. Applies to the touch pad too.
+  makes `Up` move straight up the display instead. Also applies to the floating
+  stick; the diamond ignores it, as above.
 * **Blocked direction** -- whether a blocked *diagonal* takes the nearest way
   round or simply stops.
 * **Touch pad** -- *Diamond* (default) or *Floating stick*.

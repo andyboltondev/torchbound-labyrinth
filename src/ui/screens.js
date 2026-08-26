@@ -242,7 +242,9 @@ export class Screens {
       tr.appendChild(el('td', 'num', formatScore(entry.score)));
       table.appendChild(tr);
     });
-    panel.appendChild(table);
+    const wrap = el('div', 'board-wrap');
+    wrap.appendChild(table);
+    panel.appendChild(wrap);
     panel.appendChild(el('p', 'hint',
       'Hearthlight descents are not carved here: a run that cannot be lost '
       + 'cannot be ranked against one that can.'));
@@ -345,7 +347,7 @@ export class Screens {
 
     const slider = (label, key, min = 0, max = 1, step = 0.05, format = (v) => Math.round(v * 100) + '%') => {
       const row = el('div', 'setting');
-      const name = el('label', null, label);
+      const name = el('label', 'setting-label', label);
       name.htmlFor = 'setting-' + key;
       row.appendChild(name);
       const input = el('input');
@@ -375,14 +377,9 @@ export class Screens {
 
     const segmented = (labelText, key, options, hint) => {
       const row = el('div', 'setting');
-      const label = el('div');
-      label.style.flex = '1 1 auto';
+      const label = el('div', 'setting-label');
       label.appendChild(el('div', null, labelText));
-      if (hint) {
-        const h = el('div', 'hint', hint);
-        h.style.marginTop = '2px';
-        label.appendChild(h);
-      }
+      if (hint) label.appendChild(el('div', 'hint', hint));
       row.appendChild(label);
       const group = el('div', 'seg');
       group.setAttribute('role', 'group');
@@ -453,7 +450,7 @@ export class Screens {
       + 'your thumb lands.');
 
     const seg = el('div', 'setting');
-    seg.appendChild(el('label', null, 'Touch controls'));
+    seg.appendChild(el('label', 'setting-label', 'Touch controls'));
     const group = el('div', 'seg');
     group.setAttribute('role', 'group');
     group.setAttribute('aria-label', 'Touch controls');
