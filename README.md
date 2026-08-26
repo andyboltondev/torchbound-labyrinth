@@ -135,7 +135,13 @@ quiver caps, shield-relic probabilities measured over 200k rolls, contextual
 relic offers, hazard mechanics, encounter sealing, flawless forfeiture, boss
 phases and arena gating, memory decay, and score arithmetic.
 
-Current status: 35/35 passing.
+It finishes with an **autopilot completability test**: a pathfinding bot plays
+24 generated levels across depths 1-14 from entrance to exit, routing to each
+key, unlocking each gate, fighting its way out of rooms that seal behind it,
+and taking the stairs. It is the practical counterpart to the validator -- the
+validator proves a route exists, the bot walks it.
+
+Current status: 36/36 passing.
 
 ---
 

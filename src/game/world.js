@@ -685,12 +685,8 @@ export class World {
     this.shake(5);
     ring(this.particles, gate.x + 0.5, gate.y + 0.5, col.glow, 20, 1.0, 0.8);
     this.particles.text(gate.x + 0.5, gate.y + 0.5, col.name.toUpperCase() + ' GATE OPEN', col.glow, 15, 1.6);
-    // The bars rise over the next second.
-    const animate = () => {
-      gate.openAmount = Math.min(1, gate.openAmount + 0.022);
-      if (gate.openAmount < 1) requestAnimationFrame(animate);
-    };
-    animate();
+    // The bars rise over the next second, advanced by the simulation clock so
+    // that pausing genuinely pauses it.
     this.flow = null;
     this.emit('gateOpened', { gate });
     return true;
@@ -802,6 +798,17 @@ export class World {
         continue;
       }
       // Active.
+      enc.activeTime = (enc.activeTime || 0) + dt;
+      // Failsafe: a sealed room must never become a permanent cage. If the
+      // fight somehow cannot resolve, the doors open anyway (without paying
+      // out the bonus, so it is never worth waiting one out).
+      if (enc.seal && enc.activeTime > 150) {
+        const stranded = this.enemies.some((e) => e.encounter === enc.id && !e.dead);
+        if (stranded) {
+          this.releaseSeal(enc);
+          enc.flawlessIntact = false;
+        }
+      }
       if (enc.type === 'survival') {
         enc.waveTimer -= dt;
         const alive = this.enemies.some((e) => e.encounter === enc.id && !e.dead);
@@ -821,6 +828,7 @@ export class World {
   triggerEncounter(enc) {
     enc.state = 'active';
     enc.flawlessIntact = true;
+    enc.activeTime = 0;
     for (const e of this.enemies) {
       if (e.encounter !== enc.id) continue;
       e.sealed = false;
@@ -871,14 +879,18 @@ export class World {
     }
   }
 
+  releaseSeal(enc) {
+    if (!enc.sealedCells) return;
+    for (const c of enc.sealedCells) this.sealBlocks.delete(this.grid.idx(c.x, c.y));
+    enc.sealedCells = null;
+    this.flow = null;
+    this.playSfx('gateUnlock');
+  }
+
   clearEncounter(enc) {
     if (enc.state === 'cleared') return;
     enc.state = 'cleared';
-    if (enc.sealedCells) {
-      for (const c of enc.sealedCells) this.sealBlocks.delete(this.grid.idx(c.x, c.y));
-      enc.sealedCells = null;
-      this.flow = null;
-    }
+    this.releaseSeal(enc);
     const mods = this.run.mods;
     let text = 'CLEARED';
     if (enc.scoreBonus) {

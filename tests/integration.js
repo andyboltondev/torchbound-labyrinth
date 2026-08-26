@@ -11,6 +11,7 @@ import { World } from '../src/game/world.js';
 import { Enemy } from '../src/game/enemies.js';
 import { RELICS, RELIC_BY_ID, computeMods, offerRelics } from '../src/game/relics.js';
 import { T } from '../src/gen/tiles.js';
+import { bfsField, N4 } from '../src/gen/grid.js';
 import { RNG } from '../src/core/rng.js';
 import { hazardBudget, HAZARDS } from '../src/gen/biomes.js';
 
@@ -661,6 +662,170 @@ test('the Ashen Hourglass roughly doubles the time bonus', () => {
   const boostedTime = (boostedRows.find((r) => r.label === 'Time Bonus') || { value: 0 }).value;
   assert(plainTime > 0, 'no time bonus was awarded at all');
   assertNear(boostedTime / plainTime, 2, 0.15, 'Ashen Hourglass time multiplier');
+});
+
+// --- autopilot -------------------------------------------------------------
+// A crude but honest player: it routes to the objective it actually needs
+// next, swings at anything in reach, and presses Action whenever the game
+// offers it something. If this can finish a level, a person can.
+
+function objectiveFor(world) {
+  const held = world.run.keys;
+  // The first locked gate on the route decides what we need next.
+  for (const gate of world.level.gates) {
+    if (gate.open) continue;
+    if (!held.has(gate.colourIndex)) {
+      const key = world.level.keys.find((k) => k.colourIndex === gate.colourIndex && !k.taken);
+      if (key) return { x: key.x, y: key.y, kind: 'key' };
+      // Carried by an enemy: go to the carrier.
+      const carrier = world.enemies.find((e) => !e.dead && e.carriesKey === gate.colourIndex);
+      if (carrier) return { x: Math.floor(carrier.x), y: Math.floor(carrier.y), kind: 'carrier' };
+    }
+    return { x: gate.x, y: gate.y, kind: 'gate' };
+  }
+  return { x: world.level.stairs.x, y: world.level.stairs.y, kind: 'stairs' };
+}
+
+function passableForAuto(world) {
+  return (x, y, t) => {
+    if (world.sealBlocks.has(world.grid.idx(x, y))) return false;
+    if (t === T.FLOOR || t === T.STAIRS || t === T.ENTRANCE) return true;
+    if (t === T.GATE) {
+      const g = world.gateAt(x, y);
+      return !!(g && (g.open || world.run.keys.has(g.colourIndex)));
+    }
+    return false;
+  };
+}
+
+// A sealed room has to be fought out of before anything else matters.
+function sealedObjective(world) {
+  for (const enc of world.level.encounters) {
+    if (enc.state !== 'active' || !enc.sealedCells) continue;
+    if (!world.playerInRoom(enc.room, 1)) continue;
+    let nearest = null, best = Infinity;
+    for (const e of world.enemies) {
+      if (e.dead || e.encounter !== enc.id) continue;
+      const d = Math.hypot(e.x - world.player.x, e.y - world.player.y);
+      if (d < best) { best = d; nearest = e; }
+    }
+    if (nearest) return { x: Math.floor(nearest.x), y: Math.floor(nearest.y), kind: 'fight' };
+  }
+  return null;
+}
+
+// Runs the level until the exit is used, the player dies, or time runs out.
+function autoplayLevel(world, maxSeconds = 240) {
+  const dt = 1 / 60;
+  let field = null;
+  let refresh = 0;
+  let goal = null;
+  let stuckFor = 0;
+  let lastPos = { x: world.player.x, y: world.player.y };
+
+  for (let frame = 0; frame < maxSeconds * 60; frame++) {
+    if (world.finished) return { ok: true, frames: frame };
+    if (world.playerDead) return { ok: false, reason: 'died', frames: frame };
+
+    refresh -= dt;
+    const want = sealedObjective(world) || objectiveFor(world);
+    if (!field || refresh <= 0 || !goal || goal.x !== want.x || goal.y !== want.y) {
+      goal = want;
+      field = bfsField(world.grid, [{ x: goal.x, y: goal.y }], passableForAuto(world));
+      refresh = 0.4;
+    }
+
+    // Walk downhill toward the objective.
+    const gx = Math.floor(world.player.x), gy = Math.floor(world.player.y);
+    let mx = 0, my = 0;
+    const here = field[world.grid.idx(gx, gy)];
+    if (here > 0) {
+      let best = here, bestCell = null;
+      for (const [dx, dy] of N4) {
+        const nx = gx + dx, ny = gy + dy;
+        if (!world.grid.inBounds(nx, ny)) continue;
+        const d = field[world.grid.idx(nx, ny)];
+        if (d >= 0 && d < best) { best = d; bestCell = { x: nx, y: ny }; }
+      }
+      if (bestCell) {
+        mx = bestCell.x + 0.5 - world.player.x;
+        my = bestCell.y + 0.5 - world.player.y;
+        const m = Math.hypot(mx, my) || 1;
+        mx /= m; my /= m;
+      }
+    } else if (here < 0) {
+      // Unreachable: something has sealed the way. Go and hit whatever is
+      // holding the doors shut.
+      let closest = null, cd = Infinity;
+      for (const e of world.enemies) {
+        if (e.dead) continue;
+        const d = Math.hypot(e.x - world.player.x, e.y - world.player.y);
+        if (d < cd) { cd = d; closest = e; }
+      }
+      if (closest) {
+        mx = closest.x - world.player.x;
+        my = closest.y - world.player.y;
+        const m = Math.hypot(mx, my) || 1;
+        mx /= m; my /= m;
+      }
+    }
+
+    // Face and swing at whatever is closest.
+    let slash = false;
+    let nearest = null, nd = Infinity;
+    for (const e of world.enemies) {
+      if (e.dead || e.dormant || e.sealed) continue;
+      const d = Math.hypot(e.x - world.player.x, e.y - world.player.y);
+      if (d < nd) { nd = d; nearest = e; }
+    }
+    if (nearest && nd < 1.7) {
+      world.player.faceX = (nearest.x - world.player.x) / (nd || 1);
+      world.player.faceY = (nearest.y - world.player.y) / (nd || 1);
+      slash = true;
+      mx = 0; my = 0;
+    } else if (world.actionableSecret) {
+      slash = true;
+    }
+
+    world.update(dt, { moveX: mx, moveY: my, slash, fire: false });
+    if (world.interactTarget && world.interactTarget.enabled) world.interact();
+
+    // Detect being wedged and jiggle out of it.
+    if (frame % 30 === 0) {
+      const moved = Math.hypot(world.player.x - lastPos.x, world.player.y - lastPos.y);
+      stuckFor = moved < 0.15 ? stuckFor + 1 : 0;
+      lastPos = { x: world.player.x, y: world.player.y };
+      if (stuckFor > 6) {
+        const a = Math.random() * Math.PI * 2;
+        for (let i = 0; i < 20; i++) {
+          world.update(dt, { moveX: Math.cos(a), moveY: Math.sin(a), slash: false, fire: false });
+        }
+        stuckFor = 0;
+        field = null;
+      }
+    }
+  }
+  return { ok: false, reason: 'timeout', frames: maxSeconds * 60 };
+}
+
+test('an autopilot can actually finish generated levels, keys, gates and all', () => {
+  // This asserts levels are *completable*, so combat is taken out of the
+  // equation -- a bot that swings at whatever is nearest is no measure of
+  // whether a route through the labyrinth exists.
+  const failures = [];
+  let completed = 0;
+  for (const depth of [1, 2, 3, 4, 6, 8, 11, 14]) {
+    for (let s = 0; s < 3; s++) {
+      const seed = `autoplay-${depth}-${s}`;
+      const { world } = makeWorld(depth, seed);
+      world.damagePlayer = () => {};
+      const result = autoplayLevel(world, 260);
+      if (result.ok) completed++;
+      else failures.push(`depth ${depth} seed ${s}: ${result.reason} at frame ${result.frames}`);
+    }
+  }
+  assert(failures.length === 0,
+    `${failures.length} of ${completed + failures.length} levels could not be finished -- ${failures.join('; ')}`);
 });
 
 // --- runner -----------------------------------------------------------------
