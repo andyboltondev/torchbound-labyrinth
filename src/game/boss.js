@@ -53,7 +53,13 @@ export class Boss {
     if (this.dead) return;
     this.hp -= amount;
     this.hurtFlash = 1;
-    this.awake = true;
+    // A bolt from across the hall wakes it just as surely as walking in does,
+    // and it has to wake the same way -- with the roar, the shake and the
+    // music, not silently.
+    if (!this.awake) {
+      this.awake = true;
+      world.onBossAwake(this);
+    }
     const frac = this.hp / this.maxHp;
     while (this.phase < PHASE_THRESHOLDS.length && frac <= PHASE_THRESHOLDS[this.phase]) {
       this.phase++;

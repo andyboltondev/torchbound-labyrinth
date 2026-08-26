@@ -11,7 +11,7 @@ import { Player } from './player.js';
 import { Enemy } from './enemies.js';
 import { Boss } from './boss.js';
 import { ENEMIES, enemyPoolFor } from './enemyData.js';
-import { moveEntity, hasLineOfSight, tileBlocks } from './physics.js';
+import { hasLineOfSight, tileBlocks } from './physics.js';
 import { probeAcoustics, spaceProfile, blendSpace, DEFAULT_SPACE } from '../audio/space.js';
 import { clamp } from '../core/util.js';
 import { RNG } from '../core/rng.js';
@@ -88,11 +88,24 @@ export class World {
     this.acousticProfile = 'chamber';
     this.acousticTimer = 0;
     this.ambientTimer = 1.5;
+    this.disposed = false;
+    this._timers = [];
 
     this._spawnEntities();
     this._applyRelicReveals();
     this.updateHazard();
     this.refreshVisibility(0);
+  }
+
+  // Deferred presentation (a death throe that plays out over a second) has to
+  // be cancellable: the player can be on the next depth before it finishes.
+  later(fn, ms) {
+    if (this.disposed) return;
+    const id = setTimeout(() => {
+      if (this.disposed) return;
+      fn();
+    }, ms);
+    this._timers.push(id);
   }
 
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
@@ -196,6 +209,9 @@ export class World {
 
     this._refreshOccupancy();
     this.player.update(dt, this, intent);
+    // Burning is applied inside the player's own update, so this is the tick
+    // where a damage-over-time death has to be noticed.
+    this.checkPlayerDeath();
     this.updateFlow(dt);
     this.refreshVisibility(dt);
 
@@ -650,11 +666,18 @@ export class World {
     if (source && source.def && source.def.chills) this.player.slowTimer = 2.4;
     if (source && source.def && source.def.burns) this.player.burnTimer = 2.2;
 
-    if (this.run.hp <= 0) {
-      this.playerDead = true;
-      this.playSfx('death');
-      this.emit('playerDied', {});
-    }
+    this.checkPlayerDeath();
+  }
+
+  // The one place a run ends. Damage over time (burning) deliberately bypasses
+  // damagePlayer -- a burn must not be blocked by a shield or shrugged off by
+  // invulnerability frames -- so the death test cannot live in there.
+  checkPlayerDeath() {
+    if (this.playerDead || this.finished || this.run.hp > 0) return false;
+    this.playerDead = true;
+    this.playSfx('death');
+    this.emit('playerDied', {});
+    return true;
   }
 
   // --- kills and rewards --------------------------------------------------
@@ -1250,8 +1273,7 @@ export class World {
         '+' + mended + ' VIGOUR', '#6fce87', 17, 2.2);
     }
     for (let i = 0; i < 5; i++) {
-      setTimeout(() => {
-        if (!this.particles) return;
+      this.later(() => {
         ring(this.particles, boss.x + (Math.random() - 0.5) * 2, boss.y + (Math.random() - 0.5) * 2,
           boss.def.palette.trim, 20, 1.4, 0.8);
       }, i * 140);
@@ -1276,6 +1298,9 @@ export class World {
   }
 
   dispose() {
+    this.disposed = true;
+    for (const id of this._timers) clearTimeout(id);
+    this._timers.length = 0;
     this.listeners.clear();
     this.particles.clear();
     this.enemies.length = 0;

@@ -312,6 +312,7 @@ export class AudioEngine {
     const minGap = THROTTLE[name] || 0;
     if (minGap && now - last < minGap) return;
     this.lastPlayed.set(key, now);
+    if (this.lastPlayed.size > THROTTLE_KEYS) this._pruneThrottle(now);
 
     const fn = EFFECTS[name];
     if (!fn) return;
@@ -324,6 +325,21 @@ export class AudioEngine {
       this._dest = null;
     }
   }
+
+  // Throttling is keyed per source -- 'alert' + enemy id and the like -- so
+  // the table grows by one entry for every creature that ever made a noise.
+  // Anything older than the longest gap can never suppress a sound again, so
+  // sweeping those out is free. A burst big enough to survive the sweep gets
+  // the table dropped wholesale rather than left to be rescanned on every
+  // subsequent call: the only cost of forgetting is that one sound may repeat
+  // a few milliseconds sooner than it strictly should.
+  _pruneThrottle(now) {
+    const cutoff = now - MAX_THROTTLE;
+    for (const [key, when] of this.lastPlayed) {
+      if (when < cutoff) this.lastPlayed.delete(key);
+    }
+    if (this.lastPlayed.size > THROTTLE_KEYS) this.lastPlayed.clear();
+  }
 }
 
 // Random variation helpers, used to keep repeated sounds alive.
@@ -334,6 +350,10 @@ const THROTTLE = {
   enemyDeath: 0.03, arrowHit: 0.03, alert: 0.18, windup: 0.08, enemyShot: 0.06,
   drip: 0.25, emberPop: 0.2,
 };
+
+const MAX_THROTTLE = Math.max(...Object.values(THROTTLE));
+// Comfortably more live sources than a level can hold, so the sweep is rare.
+const THROTTLE_KEYS = 512;
 
 // --- material tables -------------------------------------------------------
 // What the blade lands on decides the sound far more than how hard it landed,

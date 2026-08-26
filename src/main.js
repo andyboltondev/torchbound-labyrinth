@@ -122,6 +122,7 @@ class Game {
     const chosen = difficultyId || profile.settings.difficulty || 'torchbound';
     this.run = new Run(seed || makeSeed(), chosen);
     this.run.refreshMods();
+    this.runEnded = false;
     this.screens.hide();
     this.loadLevel();
   }
@@ -246,6 +247,11 @@ class Game {
   }
 
   endRun(reason) {
+    // Banking the level score and recording the run are both one-way. Two
+    // routes reach this (abandoning, and dying), so make a second call inert
+    // rather than paying the score out twice.
+    if (this.runEnded || !this.run) return;
+    this.runEnded = true;
     this.state = STATE.BUSY;
     this.hud.hide();
     this.touch.setVisible(false);
@@ -427,10 +433,16 @@ class Game {
     this.backdropT = (this.backdropT || 0) + dt;
     const t = this.backdropT;
     const w = this.renderer.width, h = this.renderer.height;
-    const g = ctx.createRadialGradient(w * 0.5, h * 0.34, 0, w * 0.5, h * 0.34, Math.max(w, h) * 0.72);
-    g.addColorStop(0, 'rgba(62,34,12,0.5)');
-    g.addColorStop(1, 'rgba(6,7,11,0)');
-    ctx.fillStyle = g;
+    // The wash is fixed to the viewport, so it only needs rebuilding when the
+    // viewport changes rather than on every frame the menu sits there.
+    if (!this._backdrop || this._backdropW !== w || this._backdropH !== h) {
+      this._backdrop = ctx.createRadialGradient(
+        w * 0.5, h * 0.34, 0, w * 0.5, h * 0.34, Math.max(w, h) * 0.72);
+      this._backdrop.addColorStop(0, 'rgba(62,34,12,0.5)');
+      this._backdrop.addColorStop(1, 'rgba(6,7,11,0)');
+      this._backdropW = w; this._backdropH = h;
+    }
+    ctx.fillStyle = this._backdrop;
     ctx.fillRect(0, 0, w, h);
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
