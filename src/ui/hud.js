@@ -4,6 +4,11 @@
 import { keyColour } from '../gen/tiles.js';
 import { depthLabel, formatScore } from '../core/util.js';
 
+function clock(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+
 const $ = (id) => document.getElementById(id);
 
 export class Hud {
@@ -12,7 +17,15 @@ export class Hud {
     this.healthFill = $('healthFill');
     this.healthText = $('healthText');
     this.healthBar = this.healthFill.parentElement;
+    this.healthMeter = $('healthMeter');
     this.depthChip = $('depthChip');
+    this.timeChip = $('timeChip');
+    this.timeText = $('timeText');
+    this.timeParText = $('timeParText');
+    this.hazardChip = $('hazardChip');
+    this.hazardDot = $('hazardDot');
+    this.hazardChipName = $('hazardChipName');
+    this.hazardChipHint = $('hazardChipHint');
     this.objective = $('objective');
     this.objectiveDot = $('objectiveDot');
     this.objectiveText = $('objectiveText');
@@ -27,6 +40,7 @@ export class Hud {
     this.hazardName = $('hazardName');
     this.hazardHint = $('hazardHint');
     this.bossBar = $('bossBar');
+    this.bossMeter = $('bossMeter');
     this.bossName = $('bossName');
     this.bossFill = $('bossFill');
     this.actionPrompt = $('actionPrompt');
@@ -78,12 +92,25 @@ export class Hud {
     while (this.toastStack.children.length > 4) this.toastStack.firstChild.remove();
   }
 
+  // The banner is the announcement -- it fires once and slides away. The chip
+  // is the reminder, and it stays for as long as the hazard is actually
+  // acting on the player: a rule you cannot see is a rule you cannot play to.
   announceHazard(hazard) {
-    if (!hazard || hazard.id === 'clear') { this.hazardBanner.hidden = true; return; }
+    if (!hazard || hazard.id === 'clear') {
+      this.hazardBanner.hidden = true;
+      this.hazardChip.hidden = true;
+      return;
+    }
     this.hazardName.textContent = hazard.name;
     this.hazardHint.textContent = hazard.hint || '';
     this.hazardBanner.hidden = false;
     this._hazardTimer = 4.5;
+
+    this.hazardChipName.textContent = hazard.name;
+    this.hazardChipHint.textContent = hazard.hint || '';
+    this.hazardDot.style.color = hazard.tint || '#8fa0b8';
+    this.hazardChip.title = hazard.hint || hazard.name;
+    this.hazardChip.hidden = false;
   }
 
   update(world, run, dt) {
@@ -91,14 +118,45 @@ export class Hud {
 
     const hpFrac = Math.max(0, run.hp / Math.max(1, run.maxHp));
     if (c.hpFrac !== hpFrac) {
+      const hp = Math.ceil(run.hp);
+      const maxHp = Math.round(run.maxHp);
       this.healthFill.style.transform = `scaleX(${hpFrac})`;
-      this.healthText.textContent = `${Math.ceil(run.hp)} / ${Math.round(run.maxHp)}`;
+      this.healthText.textContent = `${hp} / ${maxHp}`;
       this.healthBar.classList.toggle('low', hpFrac < 0.3);
+      this.healthMeter.setAttribute('aria-valuemax', String(maxHp));
+      this.healthMeter.setAttribute('aria-valuenow', String(hp));
+      this.healthMeter.setAttribute('aria-valuetext', `${hp} of ${maxHp} vitality`);
       c.hpFrac = hpFrac;
     }
 
     const depth = 'Depth ' + depthLabel(run.depth) + (world.level.isBoss ? '  \u2022  Boss' : '');
     if (c.depth !== depth) { this.depthChip.textContent = depth; c.depth = depth; }
+
+    // Elapsed against par. The time bonus is a real decision only if the
+    // player can see the clock they are being paid against.
+    const par = world.level.parTime || 0;
+    if (par > 0) {
+      const elapsed = clock(world.elapsed);
+      if (c.time !== elapsed) {
+        this.timeChip.hidden = false;
+        this.timeText.textContent = elapsed;
+        c.time = elapsed;
+      }
+      if (c.par !== par) {
+        this.timeParText.textContent = ' / ' + clock(par);
+        c.par = par;
+      }
+      const over = world.elapsed > par;
+      if (c.timeOver !== over) {
+        this.timeChip.classList.toggle('over', over);
+        this.timeChip.title = over
+          ? 'Past par. The time bonus for this depth is spent.'
+          : 'Reach the stair inside par for the largest time bonus.';
+        c.timeOver = over;
+      }
+    } else if (!this.timeChip.hidden) {
+      this.timeChip.hidden = true;
+    }
 
     const objective = world.currentObjective();
     if (c.objective !== objective.text) {
@@ -128,6 +186,8 @@ export class Hud {
           pip.className = 'key-pip';
           pip.style.color = keyColour(idx).hex;
           pip.title = keyColour(idx).name + ' Key';
+          pip.setAttribute('role', 'listitem');
+          pip.setAttribute('aria-label', keyColour(idx).name + ' key');
           this.keysChip.appendChild(pip);
         }
       } else {
@@ -160,7 +220,10 @@ export class Hud {
         this.bossName.textContent = world.boss.def.name;
         c.bossName = world.boss.def.name;
       }
-      this.bossFill.style.transform = `scaleX(${Math.max(0, world.boss.hp / world.boss.maxHp)})`;
+      const frac = Math.max(0, world.boss.hp / world.boss.maxHp);
+      this.bossFill.style.transform = `scaleX(${frac})`;
+      this.bossMeter.setAttribute('aria-valuenow', String(Math.round(frac * 100)));
+      this.bossMeter.setAttribute('aria-label', world.boss.def.name);
     } else if (!this.bossBar.hidden) {
       this.bossBar.hidden = true;
       c.bossName = null;

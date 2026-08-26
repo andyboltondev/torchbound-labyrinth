@@ -32,6 +32,11 @@ export class Input {
     this.edge = new Set();          // actions pressed since last consume
     this.stick = { x: 0, y: 0 };    // analogue axis from the touch d-pad
     this.stickActive = false;
+    // Which frame of reference the current stick vector is expressed in, or
+    // null to follow the player's own setting. The diamond pad pins this to
+    // 'dungeon': its buttons sit on the dungeon axes by construction, so the
+    // screen-direction setting must not be applied to them a second time.
+    this.stickFrame = null;
     this.lastDeviceTouch = false;
     this.enabled = true;
     this._bind();
@@ -66,6 +71,7 @@ export class Input {
     this.virtual.clear();
     this.stick.x = 0; this.stick.y = 0;
     this.stickActive = false;
+    this.stickFrame = null;
   }
 
   // --- touch / UI driven state -------------------------------------------
@@ -78,9 +84,15 @@ export class Input {
     }
   }
 
-  setStick(x, y) {
+  setStick(x, y, frame = null) {
     this.stick.x = x; this.stick.y = y;
     this.stickActive = (x !== 0 || y !== 0);
+    this.stickFrame = this.stickActive ? frame : null;
+  }
+
+  // The frame the current movement vector should be read in.
+  frameFor(setting) {
+    return this.stickActive && this.stickFrame ? this.stickFrame : setting;
   }
 
   // --- queries ------------------------------------------------------------

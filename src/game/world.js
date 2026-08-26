@@ -107,11 +107,11 @@ export class World {
   _spawnEntities() {
     for (const spawn of this.level.spawns) {
       if (spawn.isBoss) {
-        this.boss = new Boss(this.level.boss, spawn, this.level.depth, this.rng);
+        this.boss = new Boss(this.level.boss, spawn, this.level.depth, this.rng, run.mods);
         continue;
       }
       if (!ENEMIES[spawn.defId]) continue;
-      const e = new Enemy(spawn, this.level.depth, this.rng);
+      const e = new Enemy(spawn, this.level.depth, this.rng, this.run.mods);
       if (spawn.encounter) {
         const enc = this.level.encounters.find((x) => x.id === spawn.encounter);
         if (enc && enc.state === 'idle') e.sealed = enc.type !== 'guardedKey' ? true : false;
@@ -1001,7 +1001,7 @@ export class World {
       const e = new Enemy({
         defId: def.id, x: sx, y: sy, elite: this.rng.bool(0.15), dormant: false,
         zone: this.zoneAt(sx, sy), anchor: { x: sx, y: sy },
-      }, this.level.depth, this.rng);
+      }, this.level.depth, this.rng, this.run.mods);
       e.alert(this, 'ambush');
       this.enemies.push(e);
       burstStone(this.particles, sx, sy, '#3a3a3a');
@@ -1110,7 +1110,7 @@ export class World {
       const e = new Enemy({
         defId: def.id, x, y, elite: this.rng.bool(0.1 + enc.waveIndex * 0.06),
         dormant: false, zone: room.zone, encounter: enc.id, anchor: { x, y },
-      }, this.level.depth, this.rng);
+      }, this.level.depth, this.rng, this.run.mods);
       e.alert(this, 'wave');
       this.enemies.push(e);
       burstStone(this.particles, x, y, '#3a3a3a');

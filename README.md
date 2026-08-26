@@ -28,7 +28,7 @@ Any equivalent works too, for example `npx serve` or `python -m http.server`.
 
 | Action | Keyboard | Touch |
 | --- | --- | --- |
-| Move | `WASD` **and** arrow keys (both always active), 8-way | floating d-pad |
+| Move | `WASD` **and** arrow keys (both always active), 8-way | diamond pad |
 | Slash | `Space` / `J` | SLASH |
 | Fire crossbow | `F` / `K` | FIRE (appears once you own one) |
 | Action (doors, gates, stairs, chests, shrines) | `E` / `Enter` | ACT |
@@ -38,10 +38,19 @@ Any equivalent works too, for example `npx serve` or `python -m http.server`.
 Stairs never trigger by walking onto them -- they always require an explicit
 Action press, so you cannot fall into the next depth by accident.
 
-On a touch screen the movement pad is not fixed in a corner: the whole lower
-left of the glass is the movement surface, and the pad anchors wherever your
-thumb lands. The action buttons stay put on the right, because those you want
-in the same place every time.
+On a touch screen the default movement pad is a **diamond**: four buttons on a
+frame rotated 45 degrees, so each one sits exactly where the view draws the
+corridor it walks -- the top-right button is north, and north is drawn up and
+to the right. Its arrows are turned to match, and it is immune to the
+*Direction keys* setting, because its buttons are already on the dungeon axes.
+
+The older **floating stick** is still available under *Settings > Touch pad*:
+the whole lower left of the glass becomes the movement surface and the pad
+anchors wherever your thumb lands.
+
+The action buttons stay put on the right either way, because those you want in
+the same place every time. On a touch screen the HUD's own buttons grow and
+take a word with them -- there is no hover there to reveal a tooltip.
 
 ### What the direction keys do
 
@@ -72,6 +81,29 @@ Two settings cover the rest, under Settings:
   makes `Up` move straight up the display instead. Applies to the touch pad too.
 * **Blocked direction** -- whether a blocked *diagonal* takes the nearest way
   round or simply stops.
+* **Touch pad** -- *Diamond* (default) or *Floating stick*.
+
+---
+
+## Difficulty
+
+Chosen once per descent, on the way in. Every mode is expressed as multipliers
+folded into the same modifier bundle the relics write to, so nothing downstream
+needs to know a difficulty exists.
+
+| Mode | What changes | Hall of Fame |
+| --- | --- | --- |
+| **Hearthlight** | Foes have less health and hit softer. Death offers the stair again, as often as you need it. | No |
+| **Torchbound** | Nothing. This is the measure everything else is set against. | Yes |
+| **Ashenvow** | Shorter torch, wider enemy detection, tougher and harder-hitting foes. Deeds are worth 20% more. | Yes |
+
+A retried depth is re-cut from a fresh seed: your relics, crossbow and the
+score from the depths above come back down with you, but everything the failed
+attempt had banked is forfeit.
+
+A mode that hands the stair back on death cannot be ranked against one that
+does not, so Hearthlight is unranked -- and it does not set the *deepest* or
+*best score* records on the home screen either. There is a test for that.
 
 ---
 
@@ -101,7 +133,7 @@ src/
   core/      rng, fixed-timestep loop, input, storage, events, math
   gen/       tiles, biomes/hazards, grid queries, the generator, the validator
   game/      run state, world runtime, player, enemy AI, bosses, relics,
-             scoring, physics, persistence, enemy data
+             difficulty modes, scoring, physics, persistence, enemy data
   render/    isometric projection, baked tile sprites, lighting/FOV,
              particles, actors, props, ambience, post-processing,
              the scene renderer, minimap
@@ -386,6 +418,11 @@ relic offers, hazard mechanics, encounter sealing, flawless forfeiture, boss
 phases and arena gating, ladders into vaults (and the vaults being unwalkable
 into), memory decay, and score arithmetic.
 
+It also pins the difficulty modes: that each one actually reaches the enemy
+health, enemy damage, torch radius and detection range it claims to change,
+that its multipliers survive a relic recompute without stacking, and that no
+mode offering a retry can also claim a place on the board.
+
 It also pins the control mapping: each direction key is measured against the
 compass direction it is supposed to walk, with the drift-free guarantee
 checked against a deliberately walled-off direction, and the screen-relative
@@ -401,7 +438,7 @@ key, unlocking each gate, fighting its way out of rooms that seal behind it,
 and taking the stairs. It is the practical counterpart to the validator -- the
 validator proves a route exists, the bot walks it.
 
-Current status: 44/44 passing.
+Current status: 47/47 passing.
 
 ---
 

@@ -45,44 +45,56 @@ export const BIOMES = {
 // --- Environmental hazards ------------------------------------------------
 // `threat` feeds the generation difficulty budget (section 38): hazards may
 // overlap, but not to the point of unfair stacking.
+//
+// `tint` is the interface colour for the persistent HUD indicator. It is
+// interface-only, but it lives here so that a hazard can never be added
+// without deciding how the player is told about it (design rule 10).
 
 export const HAZARDS = {
   clear: {
     id: 'clear', name: 'Still Air', threat: 0, hint: '',
+    tint: '#8fa0b8',
     mods: {},
   },
   rain: {
     id: 'rain', name: 'Rain', threat: 2,
+    tint: '#8fb4c4',
     hint: 'Rain weakens your torch',
     mods: { torchRadius: 0.72, torchInstability: 2.2, footstepSplash: true },
   },
   fog: {
     id: 'fog', name: 'Fog', threat: 2,
+    tint: '#9aa7bb',
     hint: 'Your memory of the map fades fast',
     mods: { memoryDecay: 2.8, sightHaze: 0.35 },
   },
   dust: {
     id: 'dust', name: 'Dust', threat: 0,
+    tint: '#c2ab7d',
     hint: 'Disturbed dust betrays movement in the dark',
     mods: { revealMovers: 9.5 },
   },
   embers: {
     id: 'embers', name: 'Embers', threat: 3,
+    tint: '#ff7a3a',
     hint: 'The heat drives the dead into a frenzy',
     mods: { enemySpeed: 1.2, enemyAttackRate: 1.2, enemyAggro: 1.15 },
   },
   ice: {
     id: 'ice', name: 'Ice', threat: 2,
+    tint: '#a8d8ef',
     hint: 'The floor gives no grip',
     mods: { slide: true, friction: 1.6 },
   },
   mud: {
     id: 'mud', name: 'Mud', threat: 2,
+    tint: '#a07a4a',
     hint: 'Thick mud drags at your legs',
     mods: { playerSpeed: 0.62, footprints: true },
   },
   vines: {
     id: 'vines', name: 'Overgrowth', threat: 2,
+    tint: '#7fa657',
     hint: 'Creepers foul your swing',
     mods: { attackSpeed: 0.62 },
   },

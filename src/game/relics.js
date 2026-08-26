@@ -13,7 +13,7 @@ export function baseMods() {
     moveSpeed: 1, maxHpBonus: 0, damageTaken: 1,
     healing: 1, levelHeal: 1, lifesteal: 0, lifestealAmount: 0,
     shield: false, streakWindow: 3.5,
-    enemyAggro: 1, enemySpeed: 1,
+    enemyAggro: 1, enemySpeed: 1, enemyHp: 1, enemyDamage: 1,
     timeBonus: 1, scoreMult: 1,
     crossbowDamage: 1, crossbowRangeBonus: 0, crossbowCapacity: 0,
     boltSpeed: 1, reclaim: 0,

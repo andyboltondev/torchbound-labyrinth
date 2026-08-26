@@ -2,6 +2,7 @@
 // bestiary, settings, pause, relic choice, score summary and run end.
 
 import { profile, DEFAULT_SETTINGS } from '../game/profile.js';
+import { DIFFICULTY_LIST, difficultyById } from '../game/difficulty.js';
 import { ENEMY_LIST, BOSSES, ENEMIES } from '../game/enemyData.js';
 import { RELIC_BY_ID } from '../game/relics.js';
 import { formatScore, depthLabel } from '../core/util.js';
@@ -39,6 +40,17 @@ export class Screens {
     if (!builder) return;
     const screen = el('div', 'screen active');
     const panel = builder.call(this, data);
+    // Every screen is a modal over live game state, and assistive technology
+    // has no other way to know that. The title doubles as the accessible name.
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
+    const heading = panel.querySelector('h1, h2');
+    if (heading) {
+      if (!heading.id) heading.id = 'screen-title-' + name;
+      panel.setAttribute('aria-labelledby', heading.id);
+    } else {
+      panel.setAttribute('aria-label', name);
+    }
     screen.appendChild(panel);
     this.root.appendChild(screen);
     this.node = screen;
@@ -47,6 +59,30 @@ export class Screens {
     const focus = panel.querySelector('.btn.primary, input, .btn');
     if (focus) setTimeout(() => focus.focus({ preventScroll: true }), 40);
     return panel;
+  }
+
+  // The three states a tile can be in (section 17). Shown while the player is
+  // still learning to read them, and kept in Settings as a reference.
+  _visibilityLegend() {
+    const wrap = el('div', 'legend');
+    wrap.appendChild(el('div', 'legend-title', 'Reading the dark'));
+    const row = el('div', 'legend-row');
+    const item = (cls, name, text) => {
+      const d = el('div', 'legend-item');
+      const sw = el('i', 'legend-swatch ' + cls);
+      sw.setAttribute('aria-hidden', 'true');
+      d.appendChild(sw);
+      const body = el('div');
+      body.appendChild(el('b', null, name));
+      body.appendChild(el('span', null, text));
+      d.appendChild(body);
+      row.appendChild(d);
+    };
+    item('lit', 'Torchlit', 'Where you are now. Full detail, and the only place you can be surprised in colour.');
+    item('mem', 'Remembered', 'Walked already. Cold, flat and fading -- fog eats it faster.');
+    item('dark', 'Unseen', 'Never lit. Drawn as nothing at all.');
+    wrap.appendChild(row);
+    return wrap;
   }
 
   click(fn) {
@@ -65,20 +101,24 @@ export class Screens {
 
     const flavour = el('p', 'flavour');
     flavour.style.textAlign = 'center';
-    flavour.style.marginTop = '22px';
+    flavour.style.margin = '16px 0 0';
     flavour.textContent = FLAVOUR[Math.floor(Math.random() * FLAVOUR.length)];
     panel.appendChild(flavour);
 
+    const columns = el('div', 'home-split');
+
     const menu = el('div', 'menu');
-    menu.appendChild(button('Begin the Descent', 'btn primary', this.click(() => this.host.start())));
-    menu.appendChild(button('Hall of Fame', 'btn', this.click(() => this.show('hall'))));
+    menu.appendChild(button('Begin the Descent', 'btn primary',
+      this.click(() => this.show('difficulty'))));
     menu.appendChild(button('Bestiary', 'btn', this.click(() => this.show('bestiary', { from: 'home' }))));
     menu.appendChild(button('Settings', 'btn ghost', this.click(() => this.show('settings', { from: 'home' }))));
-    panel.appendChild(menu);
+    columns.appendChild(menu);
+    columns.appendChild(this._hallPreview());
+    panel.appendChild(columns);
 
     const stats = el('div', 'kv');
     stats.style.justifyContent = 'center';
-    stats.style.marginTop = '24px';
+    stats.style.marginTop = '20px';
     const add = (label, value) => {
       const d = el('div');
       d.appendChild(el('b', null, value));
@@ -92,12 +132,83 @@ export class Screens {
     panel.appendChild(stats);
 
     const controls = el('div');
-    controls.style.marginTop = '22px';
+    controls.style.marginTop = '16px';
     controls.appendChild(el('p', 'hint', 'Move with WASD or the arrow keys: they walk the '
       + 'dungeon’s compass, so Up is north and the corridors run with your keys. '
       + 'Space or J to slash, F or K to loose a bolt, E to act, Esc to pause. '
       + 'On a touch screen the controls appear on the glass.'));
     panel.appendChild(controls);
+    return panel;
+  }
+
+  // The five loudest names, inline. A leaderboard the player never opens is a
+  // leaderboard that motivates nobody.
+  _hallPreview() {
+    const wrap = el('aside', 'hall-preview');
+    const head = el('div', 'hall-preview-head');
+    head.appendChild(el('span', 'eyebrow', 'Hall of Fame'));
+    head.appendChild(el('span', 'hall-preview-sub', 'Deepest names still spoken'));
+    wrap.appendChild(head);
+
+    const board = profile.board.slice().sort((a, b) => b.score - a.score).slice(0, 5);
+    const list = el('ol', 'hall-preview-list');
+    if (!board.length) {
+      list.appendChild(el('li', 'empty', 'No names carved yet.'));
+    }
+    board.forEach((entry, i) => {
+      const li = el('li');
+      li.appendChild(el('i', 'rank', String(i + 1)));
+      const who = el('div', 'who');
+      who.appendChild(el('b', null, entry.name));
+      const diff = difficultyById(entry.diff);
+      who.appendChild(el('small', null, 'Depth ' + entry.depth + '  ·  ' + diff.name));
+      li.appendChild(who);
+      li.appendChild(el('strong', null, formatScore(entry.score)));
+      list.appendChild(li);
+    });
+    wrap.appendChild(list);
+    wrap.appendChild(button('View the full hall', 'btn ghost small',
+      this.click(() => this.show('hall'))));
+    return wrap;
+  }
+
+  // -------------------------------------------------- difficulty choice
+  screen_difficulty() {
+    const panel = el('div', 'panel wide');
+    panel.appendChild(el('h2', 'screen-title', 'How will you go down?'));
+    panel.appendChild(el('p', 'screen-sub',
+      'Chosen once, for the whole descent. The labyrinth does not renegotiate.'));
+
+    const grid = el('div', 'difficulty-grid');
+    for (const diff of DIFFICULTY_LIST) {
+      const card = el('button', 'difficulty-card'
+        + (profile.settings.difficulty === diff.id ? ' last-used' : ''));
+      card.type = 'button';
+      if (profile.settings.difficulty === diff.id) {
+        card.appendChild(el('span', 'difficulty-last', 'last chosen'));
+      }
+      card.appendChild(el('span', 'difficulty-name', diff.name));
+      card.appendChild(el('span', 'difficulty-tagline', diff.tagline));
+      card.appendChild(el('span', 'difficulty-text', diff.text));
+      card.appendChild(el('span', 'difficulty-cost', diff.cost));
+      const marks = el('span', 'difficulty-marks');
+      marks.appendChild(el('i', diff.ranked ? 'yes' : 'no',
+        diff.ranked ? 'Hall of Fame' : 'Unranked'));
+      if (diff.retry) marks.appendChild(el('i', 'yes', 'Stair on death'));
+      card.appendChild(marks);
+      card.addEventListener('click', () => {
+        profile.settings.difficulty = diff.id;
+        profile.saveSettings();
+        if (this.host.audio) this.host.audio.play('relicTake');
+        this.host.start(diff.id);
+      });
+      grid.appendChild(card);
+    }
+    panel.appendChild(grid);
+
+    const row = el('div', 'btn-row');
+    row.appendChild(button('Back', 'btn ghost', this.click(() => this.show('home'))));
+    panel.appendChild(row);
     return panel;
   }
 
@@ -109,22 +220,32 @@ export class Screens {
 
     const table = el('table', 'board');
     const head = el('tr');
-    for (const h of ['', 'Name', 'Build', 'Depth', 'Bosses', 'Score']) head.appendChild(el('th', null, h));
+    for (const h of ['', 'Name', 'Build', 'Mode', 'Depth', 'Bosses', 'Score']) {
+      head.appendChild(el('th', null, h));
+    }
     table.appendChild(head);
 
     const board = profile.board.slice().sort((a, b) => b.score - a.score).slice(0, 10);
     board.forEach((entry, i) => {
       const tr = el('tr');
-      if (data.highlight !== undefined && data.highlight === i) tr.className = 'you';
+      if (data.highlight !== undefined && data.highlight === i) {
+        tr.className = 'you';
+        tr.setAttribute('aria-current', 'true');
+      }
+      const diff = difficultyById(entry.diff);
       tr.appendChild(el('td', 'rank', String(i + 1)));
       tr.appendChild(el('td', null, entry.name));
       tr.appendChild(el('td', null, entry.build || 'Torchbearer'));
+      tr.appendChild(el('td', 'mode ' + diff.id, diff.name));
       tr.appendChild(el('td', 'num', 'D' + entry.depth));
       tr.appendChild(el('td', 'num', String(entry.bosses || 0)));
       tr.appendChild(el('td', 'num', formatScore(entry.score)));
       table.appendChild(tr);
     });
     panel.appendChild(table);
+    panel.appendChild(el('p', 'hint',
+      'Hearthlight descents are not carved here: a run that cannot be lost '
+      + 'cannot be ranked against one that can.'));
 
     const row = el('div', 'btn-row');
     row.appendChild(button('Back', 'btn', this.click(() => this.show(data.from || 'home'))));
@@ -224,9 +345,12 @@ export class Screens {
 
     const slider = (label, key, min = 0, max = 1, step = 0.05, format = (v) => Math.round(v * 100) + '%') => {
       const row = el('div', 'setting');
-      row.appendChild(el('label', null, label));
+      const name = el('label', null, label);
+      name.htmlFor = 'setting-' + key;
+      row.appendChild(name);
       const input = el('input');
       input.type = 'range';
+      input.id = 'setting-' + key;
       input.min = min; input.max = max; input.step = step;
       input.value = profile.settings[key];
       const value = el('span', 'value', format(profile.settings[key]));
@@ -261,13 +385,22 @@ export class Screens {
       }
       row.appendChild(label);
       const group = el('div', 'seg');
+      group.setAttribute('role', 'group');
+      group.setAttribute('aria-label', labelText);
       for (const opt of options) {
-        const b = el('button', profile.settings[key] === opt.value ? 'on' : '', opt.label);
+        const on = profile.settings[key] === opt.value;
+        const b = el('button', on ? 'on' : '', opt.label);
+        b.type = 'button';
+        b.setAttribute('aria-pressed', String(on));
         b.addEventListener('click', () => {
           profile.settings[key] = opt.value;
           profile.saveSettings();
-          for (const other of group.children) other.className = '';
+          for (const other of group.children) {
+            other.className = '';
+            other.setAttribute('aria-pressed', 'false');
+          }
           b.className = 'on';
+          b.setAttribute('aria-pressed', 'true');
           if (this.host.onSettingChanged) this.host.onSettingChanged(key);
           if (this.host.audio) this.host.audio.play('uiClick');
         });
@@ -311,16 +444,33 @@ export class Screens {
       + 'axes a blocked cardinal always stops you either way, so this only '
       + 'changes diagonal presses.');
 
+    segmented('Touch pad', 'touchPad', [
+      { value: 'diamond', label: 'Diamond' },
+      { value: 'stick', label: 'Floating stick' },
+    ], 'The diamond is turned to match the view: its four buttons sit on the '
+      + 'screen diagonals, which is where the isometric camera draws the four '
+      + 'dungeon axes. The stick is a continuous pad that anchors wherever '
+      + 'your thumb lands.');
+
     const seg = el('div', 'setting');
     seg.appendChild(el('label', null, 'Touch controls'));
     const group = el('div', 'seg');
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', 'Touch controls');
     for (const mode of ['auto', 'always', 'never']) {
-      const b = el('button', profile.settings.touchControls === mode ? 'on' : '', mode);
+      const on = profile.settings.touchControls === mode;
+      const b = el('button', on ? 'on' : '', mode);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(on));
       b.addEventListener('click', () => {
         profile.settings.touchControls = mode;
         profile.saveSettings();
-        for (const other of group.children) other.className = '';
+        for (const other of group.children) {
+          other.className = '';
+          other.setAttribute('aria-pressed', 'false');
+        }
         b.className = 'on';
+        b.setAttribute('aria-pressed', 'true');
         if (this.host.onTouchModeChange) this.host.onTouchModeChange();
         if (this.host.audio) this.host.audio.play('uiClick');
       });
@@ -347,6 +497,7 @@ export class Screens {
     }
     controls.appendChild(grid);
     panel.appendChild(controls);
+    panel.appendChild(this._visibilityLegend());
 
     const row = el('div', 'btn-row');
     row.appendChild(button('Back', 'btn', this.click(() => {
@@ -486,11 +637,51 @@ export class Screens {
     return panel;
   }
 
+  // ------------------------------------------------ fallen (Hearthlight)
+  // Death without the run ending. Offered only where the difficulty allows
+  // it, so the roguelite promise still holds everywhere else.
+  screen_fallen(data) {
+    const { run } = data;
+    const panel = el('div', 'panel');
+    panel.appendChild(el('h2', 'screen-title', 'The torch gutters'));
+    panel.appendChild(el('p', 'screen-sub',
+      'You went down at Depth ' + depthLabel(run.depth) + '. The hearth is still lit above.'));
+    panel.appendChild(el('p', 'flavour',
+      FALLEN_LINES[Math.floor(Math.random() * FALLEN_LINES.length)]));
+
+    const stats = el('div', 'kv');
+    const add = (label, value) => {
+      const d = el('div');
+      d.appendChild(el('b', null, value));
+      d.appendChild(document.createTextNode(label));
+      stats.appendChild(d);
+    };
+    add('run score', formatScore(run.score.total));
+    add('this depth', 'forfeit');
+    add('stairs taken back', String(run.retries));
+    panel.appendChild(stats);
+    panel.appendChild(el('p', 'hint',
+      'The depth is re-cut from fresh stone, and everything it had banked for '
+      + 'you is gone. Your relics, your crossbow and the score from the depths '
+      + 'above all come back down with you.'));
+
+    const row = el('div', 'btn-row');
+    row.appendChild(button('Take the stair again', 'btn primary',
+      this.click(() => this.host.retry())));
+    // The player died -- ending here is still a death, not an abandonment,
+    // and the run-end screen should say so.
+    row.appendChild(button('End the descent', 'btn ghost',
+      this.click(() => this.host.quit('death'))));
+    panel.appendChild(row);
+    return panel;
+  }
+
   // -------------------------------------------------------- run ending
   screen_gameover(data) {
     const { run, reason } = data;
     const score = run.score.total;
-    const rank = profile.rankFor(score);
+    const ranked = run.difficulty.ranked;
+    const rank = ranked ? profile.rankFor(score) : null;
     const panel = el('div', 'panel');
 
     panel.appendChild(el('h2', 'screen-title',
@@ -513,6 +704,8 @@ export class Screens {
     add('creatures slain', String(run.score.runBest.kills));
     add('best streak', String(run.score.runBest.streak));
     add('path', run.build);
+    add('mode', run.difficulty.name);
+    if (run.retries) add('stairs retaken', String(run.retries));
     panel.appendChild(stats);
     panel.appendChild(this._relicList(run));
 
@@ -521,14 +714,19 @@ export class Screens {
         `That is ${ordinal(rank)} place. The hall wants your name.`));
       const entry = el('div', 'name-entry');
       const input = el('input');
+      input.id = 'hall-name';
       input.maxLength = 14;
       input.placeholder = 'Your name';
+      input.setAttribute('aria-label', 'Your name for the Hall of Fame');
+      input.autocomplete = 'nickname';
+      input.enterKeyHint = 'done';
       input.value = localStorage.getItem('torchbound.lastName') || '';
       const submit = button('Carve it', 'btn primary', () => {
         const name = (input.value || 'Nameless').trim().slice(0, 14) || 'Nameless';
         try { localStorage.setItem('torchbound.lastName', name); } catch (e) { /* ignore */ }
         const placed = profile.submit({
-          name, score, depth: run.depth, bosses: run.bossesDefeated, build: run.build,
+          name, score, depth: run.depth, bosses: run.bossesDefeated,
+          build: run.build, diff: run.difficulty.id,
         });
         if (this.host.audio) this.host.audio.play('fanfare');
         this.show('hall', { highlight: placed - 1, from: 'home' });
@@ -538,7 +736,20 @@ export class Screens {
       entry.appendChild(submit);
       panel.appendChild(entry);
       const row = el('div', 'btn-row');
-      row.appendChild(button('Skip', 'btn ghost', this.click(() => this.show('home'))));
+      row.appendChild(button('Descend Again', 'btn', this.click(() => this.host.start())));
+      row.appendChild(button('Skip the hall', 'btn ghost', this.click(() => this.show('home'))));
+      panel.appendChild(row);
+    } else if (!ranked) {
+      const note = el('div', 'near-miss');
+      note.appendChild(el('div', 'place', run.difficulty.name));
+      note.appendChild(el('div', 'gap',
+        'A descent with a way back is not carved into the hall. Walk down '
+        + 'Torchbound or Ashenvow when you want a name on the stone.'));
+      panel.appendChild(note);
+      const row = el('div', 'btn-row');
+      row.appendChild(button('Descend Again', 'btn primary', this.click(() => this.host.start())));
+      row.appendChild(button('Change Mode', 'btn', this.click(() => this.show('difficulty'))));
+      row.appendChild(button('Home', 'btn ghost', this.click(() => this.show('home'))));
       panel.appendChild(row);
     } else {
       const miss = profile.shortfall(score);
@@ -561,10 +772,17 @@ export class Screens {
     const panel = el('div', 'panel');
     panel.style.textAlign = 'center';
     const wrap = el('div', 'loading');
-    wrap.appendChild(el('div', 'spinner'));
+    const spinner = el('div', 'spinner');
+    spinner.setAttribute('aria-hidden', 'true');
+    wrap.appendChild(spinner);
     wrap.appendChild(el('h2', 'screen-title', data.title || 'Descending'));
     wrap.appendChild(el('p', 'flavour', data.text || ''));
     panel.appendChild(wrap);
+    // Three states of stone is the game's central idea and nothing else
+    // explains it. Shown while it is still new, then left to Settings.
+    if (data.depth !== undefined && data.depth <= 2) {
+      panel.appendChild(this._visibilityLegend());
+    }
     return panel;
   }
 }
@@ -574,6 +792,13 @@ function ordinal(n) {
   const v = n % 100;
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
+
+const FALLEN_LINES = [
+  'Someone up there is still feeding the fire. Go back down.',
+  'The labyrinth forgets a Hearthlight death almost immediately.',
+  'It re-cuts the stone while you catch your breath. It always did.',
+  'You have been here before. It has not.',
+];
 
 const DEATH_LINES = [
   'The dark did not need long.',

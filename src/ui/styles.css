@@ -24,6 +24,15 @@
 
 * { box-sizing: border-box; }
 
+/* One visible focus ring for every interactive element. The old rule set
+   `outline: none` and leaned on a border-colour change, which is close to
+   invisible against a dark panel. */
+:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
 html, body {
   margin: 0; padding: 0; height: 100%;
   background: var(--ink);
@@ -98,6 +107,35 @@ html, body {
   box-shadow: 0 0 8px currentColor; background: currentColor;
 }
 
+/* Elapsed against par. The time bonus is only a decision if the clock it is
+   paid against is on screen while there is still time to act on it. */
+.chip.time { color: var(--parchment); font-variant-numeric: tabular-nums; }
+.chip.time small { color: var(--stone-dim); letter-spacing: .1em; }
+.chip.time.over { color: var(--stone-dim); border-color: rgba(194,69,47,.34); }
+.chip.time.over small { color: rgba(194,69,47,.75); }
+.ico-glass {
+  width: 9px; height: 11px; display: inline-block; background: var(--gold-dim);
+  clip-path: polygon(0 0, 100% 0, 100% 12%, 58% 50%, 100% 88%, 100% 100%, 0 100%, 0 88%, 42% 50%, 0 12%);
+}
+
+/* The hazard banner announces; this reminds. It stays for exactly as long as
+   the hazard is acting on the player (design rule 10). */
+.hazard-chip {
+  display: flex; align-items: center; gap: 7px; max-width: min(420px, 52vw);
+  font-size: 11.5px; letter-spacing: .04em; color: var(--stone);
+  text-shadow: 0 1px 3px #000;
+}
+.hazard-chip[hidden] { display: none; }
+.hazard-chip b {
+  color: var(--parchment); font-weight: 600; font-size: 11px;
+  letter-spacing: .14em; text-transform: uppercase; flex: 0 0 auto;
+}
+.hazard-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hz-dot {
+  width: 7px; height: 7px; flex: 0 0 auto; background: currentColor;
+  box-shadow: 0 0 7px currentColor; transform: rotate(45deg);
+}
+
 .score-block { text-align: right; }
 .score { font-family: var(--display); font-size: clamp(20px, 3.4vw, 32px); color: var(--gold);
   letter-spacing: .06em; text-shadow: 0 2px 10px rgba(0,0,0,.8); line-height: 1; }
@@ -113,6 +151,22 @@ html, body {
   transition: background .15s, color .15s, border-color .15s;
 }
 .icon-btn:hover { background: #1c2431; color: var(--gold); border-color: var(--gold-dim); }
+.icon-btn::after { content: ''; }
+/* On a touch screen the target grows and takes a word with it -- there is no
+   hover to reveal the title attribute and no keyboard shortcut to lean on.
+   On a pointer device the glyph plus its tooltip is enough. */
+@media (pointer: coarse) {
+  .hud-buttons .icon-btn {
+    width: auto; min-width: 52px; height: 48px; padding: 0 12px;
+    display: flex; flex-direction: column; gap: 1px; line-height: 1;
+  }
+  .icon-btn::after {
+    content: attr(data-label);
+    font-size: 8px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--stone-dim);
+  }
+  .icon-btn:hover::after, .icon-btn:active::after { color: inherit; }
+}
 
 .hazard-banner {
   align-self: center; margin-top: 10px; padding: 6px 16px;
@@ -197,6 +251,57 @@ html, body {
   box-shadow: 0 6px 18px rgba(0,0,0,.55);
   transition: transform .06s linear;
 }
+/* --- diamond pad ---
+   The frame is rotated 45deg, so buttons placed at its top/right/bottom/left
+   land on the screen diagonals -- and the isometric camera draws the four
+   dungeon axes as exactly those diagonals. Each button is counter-rotated
+   back to an upright square for the thumb; only the arrow inside stays turned,
+   so it points down the corridor it actually walks. */
+.diamond {
+  position: absolute; width: 168px; height: 168px;
+  left: max(26px, calc(env(safe-area-inset-left) + 14px));
+  bottom: max(30px, calc(env(safe-area-inset-bottom) + 18px));
+  transform: rotate(45deg);
+  /* The frame is only a rotation: taps in the gaps between the four buttons
+     must fall through rather than being swallowed by its bounding box, which
+     is 40% wider than the pad once rotated. */
+  pointer-events: none; touch-action: none;
+}
+.diamond[hidden] { display: none; }
+.dbtn, .diamond-hub {
+  position: absolute; width: 62px; height: 62px;
+  display: grid; place-content: center; gap: 1px;
+  border-radius: 8px; transform: rotate(-45deg);
+  background: rgba(20,26,36,.82); border: 1px solid rgba(143,160,184,.34);
+  color: var(--parchment); cursor: pointer; pointer-events: auto;
+  touch-action: none; transition: transform .07s, background .1s, border-color .1s;
+}
+.dbtn.north { top: 0; left: 53px; }
+.dbtn.east { top: 53px; right: 0; }
+.dbtn.south { bottom: 0; left: 53px; }
+.dbtn.west { top: 53px; left: 0; }
+.dbtn-arrow {
+  font-style: normal; font-size: 22px; line-height: .9; color: var(--gold);
+  /* Undo the button's counter-rotation so the glyph follows the frame and
+     points along the true on-screen direction of that dungeon axis. */
+  transform: rotate(45deg);
+  display: block;
+}
+.dbtn em {
+  font-style: normal; font-size: 8.5px; font-weight: 700;
+  letter-spacing: .16em; color: var(--stone-dim);
+}
+.dbtn:active, .dbtn.down {
+  transform: rotate(-45deg) scale(.93);
+  background: rgba(60,44,20,.92); border-color: rgba(232,180,92,.7);
+}
+.dbtn.down em, .dbtn:active em { color: var(--gold); }
+.diamond-hub {
+  top: 53px; left: 53px; width: 62px; height: 62px;
+  background: rgba(6,8,12,.42); border-color: rgba(143,160,184,.1);
+  pointer-events: none; cursor: default;
+}
+
 .buttons {
   position: absolute; right: max(18px, env(safe-area-inset-right));
   bottom: max(18px, env(safe-area-inset-bottom));
@@ -262,7 +367,7 @@ h2.screen-title {
   transition: border-color .16s, color .16s, transform .08s, background .16s;
   position: relative;
 }
-.btn:hover, .btn:focus-visible { border-color: var(--gold-dim); color: var(--gold); outline: none; }
+.btn:hover, .btn:focus-visible { border-color: var(--gold-dim); color: var(--gold); }
 .btn:active { transform: translateY(1px); }
 .btn.primary {
   background: linear-gradient(180deg, rgba(96,66,26,.92), rgba(46,32,14,.92));
@@ -273,7 +378,87 @@ h2.screen-title {
 .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 22px; }
 .btn-row .btn { flex: 1 1 160px; }
 
+/* ------------------------------------------------------ home layout */
+.home-split { display: grid; grid-template-columns: 1fr minmax(240px, 300px); gap: 22px; margin-top: 20px; align-items: start; }
+.home-split .menu { margin-top: 0; }
+
+.hall-preview {
+  padding: 14px 15px 15px; border: 1px solid var(--panel-edge); border-radius: 5px;
+  background: linear-gradient(180deg, rgba(24,20,14,.72), rgba(12,15,21,.72));
+}
+.hall-preview-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.eyebrow {
+  font-size: 9.5px; letter-spacing: .22em; text-transform: uppercase;
+  color: var(--gold); font-weight: 700;
+}
+.hall-preview-sub { font-size: 11px; color: var(--stone-dim); }
+.hall-preview-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; }
+.hall-preview-list li {
+  display: grid; grid-template-columns: 20px 1fr auto; align-items: center; gap: 9px;
+  padding: 7px 0; border-bottom: 1px solid rgba(43,52,68,.5); font-size: 13px;
+}
+.hall-preview-list li:last-child { border-bottom: 0; }
+.hall-preview-list li.empty { display: block; color: var(--stone-dim); font-style: italic; font-size: 12px; }
+.hall-preview-list .rank { font-family: var(--display); font-style: normal; color: var(--gold-dim); text-align: right; }
+.hall-preview-list li:first-child .rank { color: var(--gold); }
+.hall-preview-list .who { min-width: 0; }
+.hall-preview-list .who b { display: block; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hall-preview-list .who small { font-size: 10px; color: var(--stone-dim); letter-spacing: .04em; }
+.hall-preview-list strong { font-family: var(--display); color: var(--gold); font-weight: 400; font-variant-numeric: tabular-nums; }
+.btn.small { padding: 9px 14px; font-size: 11px; width: 100%; }
+
+/* ------------------------------------------------------- difficulty */
+.difficulty-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin-top: 22px; }
+.difficulty-card {
+  position: relative; text-align: left; padding: 20px 18px 18px; cursor: pointer;
+  display: flex; flex-direction: column; gap: 9px;
+  background: linear-gradient(180deg, rgba(34,42,56,.92), rgba(16,21,29,.92));
+  border: 1px solid var(--panel-edge); border-radius: 5px; color: inherit;
+  font-family: var(--ui); transition: transform .14s, border-color .14s, box-shadow .14s;
+}
+.difficulty-card:hover, .difficulty-card:focus-visible {
+  transform: translateY(-3px); border-color: var(--gold-dim);
+  box-shadow: 0 12px 30px rgba(0,0,0,.5), 0 0 0 1px rgba(232,180,92,.15);
+}
+.difficulty-card.last-used { border-color: rgba(232,180,92,.42); }
+.difficulty-last {
+  position: absolute; top: 9px; right: 11px; font-size: 9px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--gold-dim);
+}
+.difficulty-name {
+  font-family: var(--display); font-size: 22px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--gold);
+}
+.difficulty-tagline { font-family: var(--display); font-style: italic; font-size: 14px; color: var(--parchment); line-height: 1.45; }
+.difficulty-text { font-size: 12.5px; line-height: 1.55; color: var(--stone); }
+.difficulty-cost { font-size: 12px; line-height: 1.5; color: var(--blood); }
+.difficulty-marks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 4px; }
+.difficulty-marks i {
+  font-style: normal; font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 999px; border: 1px solid var(--panel-edge); color: var(--stone-dim);
+}
+.difficulty-marks i.yes { color: var(--good); border-color: rgba(111,206,135,.36); }
+.difficulty-marks i.no { color: var(--stone-dim); }
+
+/* ----------------------------------------------------------- legend */
+.legend { margin-top: 22px; padding: 14px 16px; border: 1px solid var(--panel-edge); border-radius: 5px; background: rgba(8,10,15,.5); text-align: left; }
+.legend-title { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: var(--gold-dim); margin-bottom: 10px; }
+.legend-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px 18px; }
+.legend-item { display: flex; gap: 10px; align-items: flex-start; }
+.legend-item b { display: block; font-size: 12px; font-weight: 600; letter-spacing: .06em; color: var(--parchment); }
+.legend-item span { display: block; font-size: 11.5px; line-height: 1.45; color: var(--stone-dim); margin-top: 2px; }
+.legend-swatch {
+  width: 26px; height: 15px; flex: 0 0 auto; margin-top: 2px; border-radius: 2px;
+  transform: skewX(-20deg); border: 1px solid rgba(255,255,255,.06);
+}
+.legend-swatch.lit { background: linear-gradient(135deg, #c99a5a, #6f6455); box-shadow: 0 0 10px rgba(255,150,70,.28); }
+.legend-swatch.mem { background: linear-gradient(135deg, #2b3542, #1b212a); border-color: rgba(120,150,190,.22); }
+.legend-swatch.dark { background: #06080c; border-color: rgba(255,255,255,.04); }
+
 table.board { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.board td.mode { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--stone-dim); }
+table.board td.mode.ashenvow { color: var(--blood); }
+table.board td.mode.torchbound { color: var(--gold-dim); }
 table.board th {
   text-align: left; font-weight: 400; font-size: 10px; letter-spacing: .18em;
   text-transform: uppercase; color: var(--stone-dim); padding: 0 10px 8px; border-bottom: 1px solid var(--panel-edge);
@@ -294,7 +479,7 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
   display: flex; flex-direction: column; gap: 8px;
 }
 .relic-card:hover, .relic-card:focus-visible {
-  transform: translateY(-3px); border-color: var(--gold-dim); outline: none;
+  transform: translateY(-3px); border-color: var(--gold-dim);
   box-shadow: 0 12px 30px rgba(0,0,0,.5), 0 0 0 1px rgba(232,180,92,.15);
 }
 .relic-tag {
@@ -394,15 +579,30 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
 @media (max-width: 640px) {
   .panel { padding: 18px 16px; }
   .relic-grid { grid-template-columns: 1fr; gap: 10px; }
+  .difficulty-grid { grid-template-columns: 1fr; gap: 10px; }
+  .difficulty-card { padding: 15px 14px; gap: 7px; }
   .relic-card { padding: 14px; }
-  .hud-buttons .icon-btn { width: 36px; height: 36px; }
+  .home-split { grid-template-columns: 1fr; gap: 18px; }
+  .legend-row { grid-template-columns: 1fr; }
   .toast-stack { top: 15%; }
   .action-prompt { margin-bottom: 178px; }
   .beast-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  /* The hint is the reminder; the name alone still carries the warning. */
+  .hazard-chip span { display: none; }
+  table.board td.mode { display: none; }
+  table.board th:nth-child(4) { display: none; }
 }
 @media (max-height: 520px) {
   .dpad { width: 122px; height: 122px; }
   .dpad-stick { width: 54px; height: 54px; margin: -27px 0 0 -27px; }
+  .diamond { width: 140px; height: 140px; }
+  .dbtn, .diamond-hub { width: 52px; height: 52px; }
+  .dbtn.north { left: 44px; }
+  .dbtn.east { top: 44px; }
+  .dbtn.south { left: 44px; }
+  .dbtn.west { top: 44px; }
+  .diamond-hub { top: 44px; left: 44px; }
+  .dbtn-arrow { font-size: 19px; }
   .tbtn { width: 62px; height: 62px; }
   .buttons { grid-template-columns: repeat(2, 62px); }
 }

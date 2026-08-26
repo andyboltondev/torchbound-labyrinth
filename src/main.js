@@ -34,9 +34,10 @@ class Game {
     this.touch = new TouchControls(this.input);
     this.screens = new Screens({
       audio: this.audio,
-      start: () => this.startRun(),
+      start: (difficultyId) => this.startRun(null, difficultyId),
+      retry: () => this.retryDepth(),
       resume: () => this.resume(),
-      quit: () => this.endRun('quit'),
+      quit: (reason) => this.endRun(reason || 'quit'),
       chooseRelic: (relic) => this.chooseRelic(relic),
       afterSummary: () => this.showRelicChoice(),
       onTouchModeChange: () => this.refreshTouchMode(),
@@ -93,7 +94,7 @@ class Game {
   }
 
   applySettings(key) {
-    if (key === 'touchControls') this.refreshTouchMode();
+    if (key === 'touchControls' || key === 'touchPad') this.refreshTouchMode();
     if (key === 'graphics') {
       this.perf.setMode(profile.settings.graphics);
       this.renderer.tier = this.perf.tier;
@@ -107,17 +108,19 @@ class Game {
   refreshTouchMode() {
     const mode = profile.settings.touchControls;
     const on = mode === 'always' || (mode === 'auto' && isTouchDevice());
+    this.touch.setPad(profile.settings.touchPad || 'diamond');
     this.touch.setVisible(on && this.state === STATE.PLAYING);
     this.hud.setTouchMode(on);
     this.touchEnabled = on;
   }
 
   // ---------------------------------------------------------- run flow
-  startRun(seed) {
+  startRun(seed, difficultyId) {
     this.audio.init();
     this.audio.setReverbEnabled(profile.settings.reverb !== false);
     this.audio.resume();
-    this.run = new Run(seed || makeSeed());
+    const chosen = difficultyId || profile.settings.difficulty || 'torchbound';
+    this.run = new Run(seed || makeSeed(), chosen);
     this.run.refreshMods();
     this.screens.hide();
     this.loadLevel();
@@ -130,6 +133,7 @@ class Game {
     const depth = this.run.depth;
     const isBoss = this.run.isBossDepth(depth);
     this.screens.show('loading', {
+      depth,
       title: isBoss ? 'Something waits below' : 'Depth ' + depth,
       text: isBoss ? 'The stair opens into a hall that is already occupied.'
         : DESCENT_FLAVOUR[(depth - 1) % DESCENT_FLAVOUR.length],
@@ -139,7 +143,7 @@ class Game {
     setTimeout(() => {
       const level = generateLevel({
         depth,
-        seed: this.run.seed,
+        seed: this.run.levelSeed(),
         context: this.run.levelContext(),
       });
       if (this.world) this.world.dispose();
@@ -147,6 +151,9 @@ class Game {
       this.world = new World(this.run, level, this.run.rng.fork('level' + depth));
       this.world.strictMovement = profile.settings.movementAssist === 'strict';
       this.world.on((type, data) => this.onWorldEvent(type, data));
+      // The world settles its opening hazard inside its own constructor, so
+      // the first zone's effect would otherwise never reach the interface.
+      this.hud.announceHazard(this.world.currentHazard);
       this.minimap.bind(level);
       this.renderer.cameraReady = false;
       this.renderer.onLevel(level);
@@ -230,6 +237,14 @@ class Game {
     this.loadLevel();
   }
 
+  // Hearthlight only. The run total survives; this depth's earnings do not.
+  retryDepth() {
+    if (this.audio.ready) this.audio.master.gain.value = profile.settings.master;
+    this.run.retryDepth();
+    this.screens.hide();
+    this.loadLevel();
+  }
+
   endRun(reason) {
     this.state = STATE.BUSY;
     this.hud.hide();
@@ -253,6 +268,7 @@ class Game {
       score: this.run.score.total,
       depth: this.run.depth,
       kills: this.run.score.runBest.kills,
+      ranked: this.run.difficulty.ranked,
     });
     this.screens.show('gameover', { run: this.run, reason });
   }
@@ -302,7 +318,11 @@ class Game {
         this.state = STATE.BUSY;
         this.hud.hide();
         this.touch.setVisible(false);
-        setTimeout(() => this.endRun('death'), 1500);
+        setTimeout(() => {
+          // Hearthlight keeps the run alive and offers the stair again.
+          if (this.run.difficulty.retry) this.screens.show('fallen', { run: this.run });
+          else this.endRun('death');
+        }, 1500);
         break;
       default: break;
     }
@@ -320,7 +340,9 @@ class Game {
     }
 
     const axis = this.input.axis();
-    const dir = inputDirToGrid(axis.x, axis.y, profile.settings.movementFrame);
+    // The diamond pad speaks in dungeon axes whatever the key setting says.
+    const frame = this.input.frameFor(profile.settings.movementFrame);
+    const dir = inputDirToGrid(axis.x, axis.y, frame);
     const intent = {
       moveX: dir.x,
       moveY: dir.y,
