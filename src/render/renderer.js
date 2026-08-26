@@ -245,7 +245,7 @@ export class Renderer {
     }
     this.drawVignette(world);
     if (tier.grade && level.biome.grade) {
-      this.post.grade(ctx, this.width, this.height, level.biome.grade, 0.16);
+      this.post.grade(ctx, this.width, this.height, level.biome.grade, 0.11);
     }
   }
 

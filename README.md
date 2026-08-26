@@ -103,12 +103,17 @@ src/
   game/      run state, world runtime, player, enemy AI, bosses, relics,
              scoring, physics, persistence, enemy data
   render/    isometric projection, baked tile sprites, lighting/FOV,
-             particles, actors, props, the scene renderer, minimap
-  audio/     synthesised sound effects, adaptive procedural music
+             particles, actors, props, ambience, post-processing,
+             the scene renderer, minimap
+  audio/     synthesised sound effects, acoustic probe, procedural impulse
+             responses, adaptive procedural music
   ui/        HUD, screens, touch controls, styles
 tests/       seeded generation suite, gameplay integration suite
 tools/       dev server (also accepts frame uploads), dev harness
 ```
+
+`core/perf.js` is the one module every expensive part of the renderer answers
+to; see [Performance](#performance).
 
 ### Generation and the solvability guarantee
 
@@ -225,11 +230,141 @@ each wall cap and a catch-light along its upper edges. That is what keeps
 stone reading as solid objects at the edge of torchlight, where a purely
 photographic treatment would dissolve into mud.
 
+### Lighting the stone
+
+The baked lit/dark pair above only ever knows how *much* light reaches a tile.
+Direction is added on top: each wall carries a warm quad per visible face,
+blended additively in proportion to how squarely that face is turned toward the
+torch. The left face of a block looks along +y and the right face along +x, so
+the term is simply the dot product of the face normal with the direction to the
+flame -- and it is modulated by the torch's own flicker, so the walls breathe
+with it. Floors take the same warmth, plus a baked contact shadow keyed on
+which of their four neighbours are solid (sixteen combinations, one blit).
+
+Actor shadows lean away from the torch and lengthen with distance from it,
+which is most of what sells a light source somebody is carrying.
+
+Bloom is assembled out of the two things Canvas 2D accelerates: scaling and
+blend modes. The frame is scaled down (that is the blur), multiplied by itself
+three times (that is the threshold -- raising it to the fourth power leaves the
+flame, the sparks and the rune glow while throwing away lit stonework bright
+enough to fog the whole screen), softened, and added back.
+
+### Ambience
+
+`render/ambience.js` is a world-space layer of things that are alive rather
+than mechanical -- distinct from the hazard weather, which is screen-space and
+tied to a rule. Motes turn in the torchlight, water finds its way through a
+crypt ceiling and rings where it lands, embers lift off hot ground and burn out
+on the way up, spores drift over a tomb, rain stipples standing water, and the
+wall sconces cast pools of light that flicker on their own clocks.
+
+The mote field is deterministic -- positions come from a hash wrapped around
+the player -- so it allocates nothing and parallaxes correctly because it lives
+in grid space.
+
+### Performance
+
+30fps is the floor and 60fps is the target. A quality controller measures the
+real frame interval and compares it against **the display's own cadence**
+rather than an absolute millisecond figure: frames arrive on vsync boundaries,
+so on a 60Hz screen no amount of optimisation gets the average below 16.7ms,
+and a fixed target would mean quality could drop but never climb back. The
+controller tracks the best interval the display has managed and treats landing
+on it as headroom.
+
+Three tiers, also selectable by hand in Settings:
+
+| Tier | What it adds | 1280x800 | 2560x1600 |
+| --- | --- | --- | --- |
+| Low | the original renderer, sparse ambience | 0.9ms | 1.2ms |
+| Medium | torch-lit stonework, contact and soft shadows, sconce pools | 1.4ms | 1.6ms |
+| High | bloom, colour grade, full ambience and weather | 2.7ms | 3.2ms |
+
+Measured with a pipeline flush (`getImageData`) after each batch, so the
+figures include GPU work rather than just command submission.
+
 ### Readability
 
 Walls are cut away automatically when they would cover the player, an enemy, a
 key, a gate, a discovered cracked wall, a pickup or the exit. The test is a real
 screen-space overlap, so only what is genuinely in the way fades.
+
+## Sound
+
+Nothing is downloaded. Every effect is built from oscillators and filtered
+noise at the moment it plays, which means it can be parameterised by where it
+happened and what kind of place it happened in.
+
+### The room
+
+Eight rays are cast from the listener a few times a second and the geometry
+they find is reduced to three numbers: how big the space is, how corridor-like
+it is, and how close the nearest wall is. That picks one of six impulse
+responses, each generated as an array of numbers at runtime:
+
+| Space | Length | Character |
+| --- | --- | --- |
+| closet | 0.42s | dense, dark, gone almost at once |
+| corridor | 1.0s | barely diffuse -- mostly a slap repeating every 19ms |
+| gallery | 1.7s | a long hall you can see the end of; slower slapback |
+| chamber | 1.1s | ordinary room |
+| hall | 2.1s | later buildup, more air |
+| cavern | 3.4s | boss arenas |
+
+Two convolvers run in parallel so the impulse can change without a click: the
+idle one is loaded with the new room and the pair is crossfaded over a second.
+Around that, wet level, send and a damping filter move continuously with the
+geometry -- and with the hazard, because fog and mud swallow reflections while
+ice and bare crypt stone keep them bright.
+
+A passage genuinely rings rather than merely being shorter. Its impulse is
+deliberately undiffused, so what comes back is the same sound bouncing between
+two flat faces; autocorrelation of the generated impulse peaks at exactly its
+19ms tap spacing, where the chamber shows no structure at all. The same sword
+swing measures a 430ms tail in a closet, 900ms in a corridor, 1730ms in a hall
+and 2530ms in the boss arena.
+
+### The sword
+
+The whoosh leaves the blade before anything is hit, so all it can know is
+whether the arc has room to finish -- a swing into a wall is shorter and
+duller than the same swing across a hall, and in a tight space it answers
+itself almost at once.
+
+What happens next depends on what the blade found:
+
+- **nothing** -- the whoosh and the room, and no impact at all
+- **stone** -- a bright transient, a long metal ring, a dull thud through the
+  wall and a little falling grit, plus sparks and a short jarring hitstop
+- **an enemy** -- an impact chosen by that creature's material: flesh, bone,
+  armour, ethereal, ice, ember or wood. The same lookup picks the colour of
+  what the hit throws, so a Bone Slinger sheds pale chips and a Frost Revenant
+  sheds ice.
+
+Footsteps are chosen by surface -- stone, cold crypt flagstone, wet, mud, ice,
+ash, moss -- with the hazard winning over the biome, because the hazard is the
+thing that also changed how walking *feels*. Every repeat is varied in pitch
+and level so a run down a corridor is not a machine gun.
+
+### Position
+
+Sounds carry a position. They are panned across the isometric view (screen
+left/right is `dx - dy`), attenuated and dulled with distance, muffled further
+when something is in the way, and pushed further into the reverb the further
+off they are -- a door heard across a hall is nearly all room.
+
+### The score
+
+`audio/music.js` runs a small set of layers continuously and crossfades them;
+there are no tracks to cut between. Biome picks the scale, hazard colours the
+mix, threat drives intensity -- and the geometry now rebalances the layers too.
+A corridor keeps the drone and the drum forward; a hall lets the pad and the
+horn open out and lengthens their tails. Each biome has a written four-note
+motif rather than a die rolled every fourth beat, and a bass layer sits under
+the chord roots.
+
+Room reverb can be turned off in Settings for a dry mix.
 
 ---
 
