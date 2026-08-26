@@ -252,6 +252,55 @@ test('a blocked diagonal takes the nearest way round, unless told to stop', () =
     'strict mode deflected a blocked diagonal');
 });
 
+test('a doorway one tile off the line pulls you through it', () => {
+  const { world, level } = makeWorld(3, 'doorway-1');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 4);
+  // A wall across the north of the arena with a single gap, one tile west of
+  // where the player stands. Pressing north alone should find it.
+  for (let x = cx - 4; x <= cx + 4; x++) level.grid.set(x, cy - 1, T.WALL);
+  level.grid.set(cx - 1, cy - 1, T.FLOOR);
+
+  world.strictMovement = false;
+  place(world, cx, cy);
+  world.player.mover.heading = null;
+  step(world, 60, { moveX: 0, moveY: -1, slash: false, fire: false });
+  assert(world.player.mover.tileY < cy,
+    `holding north beside a doorway left the player at ${world.player.mover.tileX},`
+    + `${world.player.mover.tileY} instead of walking through it`);
+  assert(world.player.mover.tileX === cx - 1,
+    'the player went through something other than the doorway');
+
+  // ...but only one tile of tolerance. Two tiles off is a wall, not a near miss.
+  place(world, cx + 1, cy);
+  world.player.mover.heading = null;
+  step(world, 60, { moveX: 0, moveY: -1, slash: false, fire: false });
+  assert(world.player.mover.tileY === cy,
+    'the assist reached across two tiles to find a doorway');
+
+  // Strict movement means exactly what was pressed, including the refusal.
+  world.strictMovement = true;
+  place(world, cx, cy);
+  world.player.mover.heading = null;
+  step(world, 60, { moveX: 0, moveY: -1, slash: false, fire: false });
+  assert(world.player.mover.tileX === cx && world.player.mover.tileY === cy,
+    'strict movement still slid the player sideways into a doorway');
+});
+
+test('a lone pillar is not mistaken for a doorway', () => {
+  const { world, level } = makeWorld(3, 'doorway-2');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 4);
+  level.grid.set(cx, cy - 1, T.WALL);   // one block, open ground either side
+
+  world.strictMovement = false;
+  place(world, cx, cy);
+  world.player.mover.heading = null;
+  step(world, 60, { moveX: 0, moveY: -1, slash: false, fire: false });
+  assert(world.player.mover.tileX === cx && world.player.mover.tileY === cy,
+    'the assist shunted the player round an obstacle rather than through a door');
+});
+
 // --- keys, gates and the exit ----------------------------------------------
 
 test('a gate stays shut without its key and opens with it', () => {

@@ -85,6 +85,9 @@ export class Player {
       speed,
       ice,
       strict: world.strictMovement,
+      // Pressing into a wall beside a doorway steps you into the doorway.
+      // Strict movement means exactly what was pressed, so it opts out.
+      doorAssist: !world.strictMovement,
       onEnterTile: (x, y) => world.onPlayerEnterTile(x, y),
     });
 

@@ -7,6 +7,7 @@ import { ENEMY_LIST, BOSSES, ENEMIES } from '../game/enemyData.js';
 import { RELIC_BY_ID } from '../game/relics.js';
 import { formatScore, depthLabel } from '../core/util.js';
 import { drawEnemy, drawBoss } from '../render/actors.js';
+import { BUILD_STRING, BUILD_DETAIL } from '../core/version.js';
 
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -85,6 +86,17 @@ export class Screens {
     return wrap;
   }
 
+  // The build stamp, shown on the home screen and in the pause menu. The
+  // detail line names the commit (and pull request, when the build came from
+  // one) so a report of "it did this on build X" can be traced to the code.
+  _buildStamp() {
+    const p = el('p', 'build-stamp');
+    p.appendChild(el('b', null, BUILD_STRING));
+    if (BUILD_DETAIL) p.appendChild(el('small', null, BUILD_DETAIL));
+    p.title = BUILD_STRING + '  ·  ' + BUILD_DETAIL;
+    return p;
+  }
+
   click(fn) {
     return (e) => {
       if (this.host.audio) this.host.audio.play('uiClick');
@@ -138,6 +150,7 @@ export class Screens {
       + 'Space or J to slash, F or K to loose a bolt, E to act, Esc to pause. '
       + 'On a touch screen the controls appear on the glass.'));
     panel.appendChild(controls);
+    panel.appendChild(this._buildStamp());
     return panel;
   }
 
@@ -437,9 +450,10 @@ export class Screens {
     segmented('Blocked direction', 'movementAssist', [
       { value: 'corridor', label: 'Take the nearest way' },
       { value: 'strict', label: 'Stop' },
-    ], 'What happens when the way you pressed is a wall. Under the dungeon '
-      + 'axes a blocked cardinal always stops you either way, so this only '
-      + 'changes diagonal presses.');
+    ], 'What happens when the way you pressed is a wall. Taking the nearest '
+      + 'way also lines you up with doorways: press into the stone beside an '
+      + 'opening and you sidestep into it rather than standing there. Stop '
+      + 'means exactly what you pressed, or nothing.');
 
     segmented('Touch pad', 'touchPad', [
       { value: 'diamond', label: 'Diamond' },
@@ -521,6 +535,7 @@ export class Screens {
     menu.appendChild(button('Settings', 'btn', this.click(() => this.show('settings', { from: 'pause' }))));
     menu.appendChild(button('Abandon Run', 'btn ghost', this.click(() => this.show('confirmQuit'))));
     panel.appendChild(menu);
+    panel.appendChild(this._buildStamp());
     return panel;
   }
 

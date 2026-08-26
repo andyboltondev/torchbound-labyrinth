@@ -1,0 +1,20 @@
+# Keeps the in-game build number honest on every pull request.
+name: Version stamp
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      # Only the semantic version is compared: the timestamp and commit in the
+      # stamp are expected to differ between a developer tree and this checkout.
+      - name: Stamp matches version.json
+        run: python3 tools/stamp_version.py --check
