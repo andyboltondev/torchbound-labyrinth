@@ -8,16 +8,16 @@ import { burstStone, ring, burstSparks } from '../render/particles.js';
 const PHASE_THRESHOLDS = [0.66, 0.33];
 
 export class Boss {
-  constructor(def, spawn, depth, rng) {
+  constructor(def, spawn, depth, rng, mods = null) {
     this.def = def;
     this.x = spawn.x;
     this.y = spawn.y;
     this.home = { x: spawn.x, y: spawn.y };
     this.radius = def.radius;
     this.scale = 2.0 + def.radius * 0.5;
-    this.maxHp = def.scaledHp || def.hp;
+    this.maxHp = Math.max(1, Math.round((def.scaledHp || def.hp) * ((mods && mods.enemyHp) || 1)));
     this.hp = this.maxHp;
-    this.damage = def.scaledDamage || def.damage;
+    this.damage = (def.scaledDamage || def.damage) * ((mods && mods.enemyDamage) || 1);
     this.speed = def.speed;
     this.depth = depth;
     this.rng = rng;

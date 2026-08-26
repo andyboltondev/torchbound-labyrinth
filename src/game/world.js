@@ -12,11 +12,19 @@ import { Enemy } from './enemies.js';
 import { Boss } from './boss.js';
 import { ENEMIES, enemyPoolFor } from './enemyData.js';
 import { moveEntity, hasLineOfSight, tileBlocks } from './physics.js';
+import { probeAcoustics, spaceProfile, blendSpace, DEFAULT_SPACE } from '../audio/space.js';
 import { clamp } from '../core/util.js';
 import { RNG } from '../core/rng.js';
 
 const FLOW_INTERVAL = 0.14;
 const FLOW_RADIUS = 30;
+
+// Not everything in the labyrinth bleeds. The spark colour a hit throws is
+// the visual half of the same material lookup the mixer uses for the sound.
+const IMPACT_SPARK = {
+  bone: '#d8cfae', armour: '#ffd27a', ethereal: '#9fb8ff',
+  ice: '#bfe8ff', ember: '#ff9a3a', wood: '#6d8447', stone: '#9a9184',
+};
 
 export class World {
   constructor(run, level, rng) {
@@ -73,6 +81,13 @@ export class World {
     this.listeners = new Set();
     this.damageTakenThisLevel = 0;
     this.shakeRequest = 0;
+    // What the level sounds like where the player is standing. Re-probed a
+    // few times a second and eased, so a doorway is a slide rather than a cut.
+    this.acoustics = { ...DEFAULT_SPACE };
+    this.acousticTarget = { ...DEFAULT_SPACE };
+    this.acousticProfile = 'chamber';
+    this.acousticTimer = 0;
+    this.ambientTimer = 1.5;
 
     this._spawnEntities();
     this._applyRelicReveals();
@@ -83,16 +98,20 @@ export class World {
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   emit(type, data) { for (const fn of this.listeners) fn(type, data || {}); }
   shake(amount) { this.shakeRequest = Math.max(this.shakeRequest, amount); }
-  playSfx(name, opts) { this.emit('sfx', { name, ...opts }); }
+  // Sounds default to the player's own position, which is also the listener,
+  // so anything player-centric lands dead centre and unattenuated.
+  playSfx(name, opts) {
+    this.emit('sfx', { name, x: this.player.x, y: this.player.y, ...opts });
+  }
 
   _spawnEntities() {
     for (const spawn of this.level.spawns) {
       if (spawn.isBoss) {
-        this.boss = new Boss(this.level.boss, spawn, this.level.depth, this.rng);
+        this.boss = new Boss(this.level.boss, spawn, this.level.depth, this.rng, run.mods);
         continue;
       }
       if (!ENEMIES[spawn.defId]) continue;
-      const e = new Enemy(spawn, this.level.depth, this.rng);
+      const e = new Enemy(spawn, this.level.depth, this.rng, this.run.mods);
       if (spawn.encounter) {
         const enc = this.level.encounters.find((x) => x.id === spawn.encounter);
         if (enc && enc.state === 'idle') e.sealed = enc.type !== 'guardedKey' ? true : false;
@@ -171,6 +190,7 @@ export class World {
     if (!this.finished && !this.playerDead) this.elapsed += dt;
 
     this.updateHazard();
+    this.updateAcoustics(dt);
     this.torch.update(dt, this.hazardMods);
     this.player.torchFlicker = this.torch.flicker;
 
@@ -187,6 +207,7 @@ export class World {
     this.updatePickups();
     this.updateSecretAwareness();
     this.updateInteractTarget();
+    this.updateAmbience(dt);
     this.run.score.update(dt, this.run.mods.streakWindow);
 
     const frac = this.run.hp / Math.max(1, this.run.maxHp);
@@ -224,7 +245,7 @@ export class World {
     const hz = this.hazardMods;
     const colour = hz.footstepSplash ? '#8fb4c4' : hz.footprints ? '#4a3722' : '#6f6a5e';
     footDust(this.particles, x + 0.5, y + 0.5, colour);
-    this.playSfx(hz.footstepSplash ? 'stepWet' : hz.playerSpeed ? 'stepMud' : 'step');
+    this.playSfx('step', { surface: this.surfaceAt() });
   }
 
   // Knockback is presentation only: shoving a grid mover off its lane would
@@ -251,6 +272,88 @@ export class World {
     this.torch.instability = mods.torchInstability;
     this.torchRadius = this.torch.effectiveRadius(this.hazardMods);
     this.revealRadius = this.hazardMods.revealMovers || 0;
+  }
+
+  // --- acoustics ----------------------------------------------------------
+  // Rooms and corridors are genuinely different places to make a noise in, so
+  // the mixer is told about the geometry rather than about the room's name.
+  updateAcoustics(dt) {
+    this.acousticTimer -= dt;
+    if (this.acousticTimer <= 0) {
+      this.acousticTimer = 0.2;
+      const extra = (x, y) => {
+        if (this.sealBlocks.has(this.grid.idx(x, y))) return true;
+        const g = this.gateAt(x, y);
+        return !!(g && !g.open);
+      };
+      this.acousticTarget = probeAcoustics(this.grid, this.player.x, this.player.y, extra);
+    }
+    // Ease toward the probe so the reverb never snaps mid-stride.
+    this.acoustics = blendSpace(this.acoustics, this.acousticTarget, Math.min(1, dt * 3.2));
+    this.acousticProfile = spaceProfile(this.acoustics);
+  }
+
+  // How the mixer should colour the room: fog and mud swallow reflections,
+  // ice and bare crypt stone keep them bright.
+  acousticMods() {
+    const hz = this.currentHazard.id;
+    const biome = this.level.biome.id;
+    let absorb = 0;
+    let brightness = 1;
+    if (hz === 'fog') { absorb = 0.55; brightness = 0.55; }
+    else if (hz === 'mud') { absorb = 0.4; brightness = 0.6; }
+    else if (hz === 'vines') { absorb = 0.5; brightness = 0.7; }
+    else if (hz === 'dust') { absorb = 0.15; brightness = 0.85; }
+    else if (hz === 'ice') { absorb = -0.05; brightness = 1.35; }
+    else if (hz === 'rain') { absorb = 0.2; brightness = 1.1; }
+    else if (hz === 'embers') { absorb = 0.2; brightness = 0.9; }
+    if (biome === 'crypt') brightness *= 1.15;
+    if (biome === 'tomb') { absorb += 0.15; brightness *= 0.85; }
+    return { absorb: Math.max(0, absorb), brightness };
+  }
+
+  // What the player is walking on. Hazards win over the biome, because the
+  // hazard is the thing that also changed how walking feels.
+  surfaceAt() {
+    const hz = this.hazardMods;
+    if (hz.footstepSplash) return 'wet';
+    if (hz.slide) return 'ice';
+    if (hz.footprints) return 'mud';
+    const info = this.level.zoneInfo[this.zoneAt(this.player.x, this.player.y)];
+    const id = (info && info.biome && info.biome.id) || this.level.biome.id;
+    if (id === 'crypt') return 'crypt';
+    if (id === 'tomb') return 'moss';
+    if (id === 'embers') return 'ash';
+    if (id === 'rainruins') return 'wet';
+    return 'stone';
+  }
+
+  // Occasional, quiet, and always sourced from somewhere the player could
+  // plausibly be hearing: a drip in a wet hall, a settling ember, wind down a
+  // long gallery. Never fires during a fight.
+  updateAmbience(dt) {
+    this.ambientTimer -= dt;
+    if (this.ambientTimer > 0) return;
+    const s = this.acoustics;
+    const biome = this.level.biome.id;
+    const hazard = this.currentHazard.id;
+    this.ambientTimer = 3.5 + Math.random() * 6;
+
+    const a = Math.random();
+    const spot = () => {
+      const ang = Math.random() * Math.PI * 2;
+      const r = 2 + Math.random() * 5;
+      return { x: this.player.x + Math.cos(ang) * r, y: this.player.y + Math.sin(ang) * r };
+    };
+    if (biome === 'rainruins' || hazard === 'rain' || biome === 'crypt') {
+      if (a < 0.6) { this.playSfx('drip', spot()); return; }
+    }
+    if (biome === 'embers' || hazard === 'embers') {
+      if (a < 0.6) { this.playSfx('emberPop', spot()); return; }
+    }
+    if (s.corridor > 0.4 && a < 0.45) { this.playSfx('gust'); return; }
+    if (s.size > 0.5 && a < 0.3) { this.playSfx('distantFall', spot()); return; }
+    this.ambientTimer = 2 + Math.random() * 4;
   }
 
   refreshVisibility(dt) {
@@ -335,7 +438,7 @@ export class World {
               Math.hypot(this.boss.x - p.x, this.boss.y - p.y) < this.boss.radius + 0.2) {
             this.boss.takeDamage(this.run.boltDamage(), this, 'bolt');
             burstSparks(this.particles, p.x, p.y, '#ffd27a', 8, 3);
-            this.playSfx('arrowHit');
+            this.playSfx('arrowHit', { x: p.x, y: p.y, material: 'armour' });
             p.dead = true;
           }
         } else if (Math.hypot(this.player.x - p.x, this.player.y - p.y) < this.player.radius + 0.2) {
@@ -357,17 +460,38 @@ export class World {
 
   onProjectileHitWall(p) {
     burstSparks(this.particles, p.x, p.y, p.friendly ? '#c9b48b' : (p.colour || '#cfc6b2'), 5, 2);
-    this.playSfx(p.friendly ? 'arrowWall' : 'shotWall');
+    this.playSfx(p.friendly ? 'arrowWall' : 'shotWall', { x: p.x, y: p.y });
   }
 
   // --- player combat ------------------------------------------------------
+  // The whoosh leaves the blade before anything is hit, so all it can know is
+  // whether the arc has room to finish. A swing into a wall is a shorter,
+  // duller sound than the same swing across an open hall.
   onSwing(player) {
-    this.playSfx('swing');
+    this.playSfx('swing', { blocked: !!this.swordWall(player) });
+  }
+
+  // The wall a swing would land on, if any: the tile in front of the player
+  // within reach that a blade could actually strike.
+  swordWall(player) {
+    const reach = player.swordReach();
+    for (const d of [0.55, 0.85, 1.0]) {
+      const wx = player.x + player.faceX * reach * d;
+      const wy = player.y + player.faceY * reach * d;
+      const gx = Math.floor(wx), gy = Math.floor(wy);
+      if (!this.grid.inBounds(gx, gy)) continue;
+      if (gx === Math.floor(player.x) && gy === Math.floor(player.y)) continue;
+      const t = this.grid.get(gx, gy);
+      if (t === T.WALL || t === T.SECRET || t === T.RUBBLE) return { x: gx, y: gy, tile: t };
+    }
+    return null;
   }
 
   resolveSlash(player) {
     const damage = player.swordDamage();
     let hitSomething = false;
+    let material = 'flesh';
+    let hitAt = null;
 
     for (const e of this.enemies) {
       if (e.dead || e.sealed) continue;
@@ -377,8 +501,10 @@ export class World {
       const dx = e.x - player.x, dy = e.y - player.y;
       const m = Math.hypot(dx, dy) || 1;
       this.knock(e, dx, dy, 0.3);
-      burstBlood(this.particles, e.x, e.y, dx / m, dy / m);
+      burstBlood(this.particles, e.x, e.y, dx / m, dy / m, IMPACT_SPARK[e.def.material]);
       this.particles.text(e.x, e.y, Math.round(damage), '#ffe0b0', 13);
+      material = e.def.material || 'flesh';
+      hitAt = { x: e.x, y: e.y };
     }
 
     if (this.boss && !this.boss.dead && player.hitsWithSword(this.boss.x, this.boss.y, this.boss.radius)) {
@@ -386,6 +512,8 @@ export class World {
       this.boss.takeDamage(damage, this, 'sword');
       burstBlood(this.particles, this.boss.x, this.boss.y - 0.2, player.faceX, player.faceY, '#7a2440');
       this.particles.text(this.boss.x, this.boss.y, Math.round(damage), '#ffe0b0', 14);
+      material = this.boss.def.material || 'armour';
+      hitAt = { x: this.boss.x, y: this.boss.y };
     }
 
     // Cracked walls break to the same swing -- no separate verb to learn.
@@ -395,9 +523,22 @@ export class World {
     }
 
     if (hitSomething) {
-      this.playSfx('hit');
+      this.playSfx('hit', { material, x: hitAt ? hitAt.x : player.x, y: hitAt ? hitAt.y : player.y });
       this.shake(4.5);
       this.emit('hitstop', { seconds: 0.055 });
+      return;
+    }
+
+    // Nothing to cut, but stone in the way: the blade rings off the masonry,
+    // strikes sparks and jars the swing short.
+    const wall = this.swordWall(player);
+    if (wall) {
+      const sx = player.x + player.faceX * player.swordReach() * 0.8;
+      const sy = player.y + player.faceY * player.swordReach() * 0.8;
+      burstSparks(this.particles, sx, sy, '#ffd9a0', 7, 2.6);
+      this.playSfx('swingWall', { x: sx, y: sy });
+      this.shake(1.6);
+      this.emit('hitstop', { seconds: 0.03 });
     }
   }
 
@@ -425,9 +566,10 @@ export class World {
     const damage = this.run.boltDamage();
     const wasAlive = !enemy.dead;
     enemy.takeDamage(damage, this, 'bolt');
-    burstBlood(this.particles, projectile.x, projectile.y, projectile.vx, projectile.vy);
+    burstBlood(this.particles, projectile.x, projectile.y, projectile.vx, projectile.vy,
+      IMPACT_SPARK[enemy.def.material]);
     this.particles.text(enemy.x, enemy.y, Math.round(damage), '#ffe0b0', 13);
-    this.playSfx('arrowHit');
+    this.playSfx('arrowHit', { x: enemy.x, y: enemy.y, material: enemy.def.material || 'flesh' });
     // Reclaimer: a killing bolt sometimes comes home.
     if (wasAlive && enemy.dead && this.rng.next() < this.run.mods.reclaim) {
       if (this.run.giveArrows(1)) {
@@ -456,7 +598,7 @@ export class World {
       colour: enemy.def.palette.eye,
       dead: false,
     });
-    this.playSfx('enemyShot');
+    this.playSfx('enemyShot', { x: enemy.x, y: enemy.y });
   }
 
   // --- damage to the player ----------------------------------------------
@@ -527,7 +669,8 @@ export class World {
     }
     burstBlood(this.particles, enemy.x, enemy.y, 0, -1);
     burstSparks(this.particles, enemy.x, enemy.y, enemy.def.palette.eye, 6, 2.4);
-    this.playSfx(enemy.elite ? 'eliteDeath' : 'enemyDeath');
+    this.playSfx(enemy.elite ? 'eliteDeath' : 'enemyDeath',
+      { x: enemy.x, y: enemy.y, material: enemy.def.material || 'flesh' });
     this.run.discover(enemy.def.id);
 
     if (source === 'sword' && mods.lifesteal > 0 && this.rng.next() < mods.lifesteal) {
@@ -558,12 +701,15 @@ export class World {
     this.checkEncounterProgress();
   }
 
-  onEnemyAlerted(enemy) { this.playSfx('alert'); this.emit('alert', { enemy }); }
-  onEnemyWindup(enemy) { this.playSfx('windup'); }
-  onEnemyMiss(enemy) { this.playSfx('swingMiss'); }
+  onEnemyAlerted(enemy) {
+    this.playSfx('alert', { x: enemy.x, y: enemy.y, key: 'alert' + enemy.id });
+    this.emit('alert', { enemy });
+  }
+  onEnemyWindup(enemy) { this.playSfx('windup', { x: enemy.x, y: enemy.y, key: 'windup' + enemy.id }); }
+  onEnemyMiss(enemy) { this.playSfx('swingMiss', { x: enemy.x, y: enemy.y }); }
   onAmbushWake(enemy) {
     burstStone(this.particles, enemy.x, enemy.y, '#4a5540');
-    this.playSfx('ambush');
+    this.playSfx('ambush', { x: enemy.x, y: enemy.y });
     this.shake(5);
   }
 
@@ -855,7 +1001,7 @@ export class World {
       const e = new Enemy({
         defId: def.id, x: sx, y: sy, elite: this.rng.bool(0.15), dormant: false,
         zone: this.zoneAt(sx, sy), anchor: { x: sx, y: sy },
-      }, this.level.depth, this.rng);
+      }, this.level.depth, this.rng, this.run.mods);
       e.alert(this, 'ambush');
       this.enemies.push(e);
       burstStone(this.particles, sx, sy, '#3a3a3a');
@@ -964,7 +1110,7 @@ export class World {
       const e = new Enemy({
         defId: def.id, x, y, elite: this.rng.bool(0.1 + enc.waveIndex * 0.06),
         dormant: false, zone: room.zone, encounter: enc.id, anchor: { x, y },
-      }, this.level.depth, this.rng);
+      }, this.level.depth, this.rng, this.run.mods);
       e.alert(this, 'wave');
       this.enemies.push(e);
       burstStone(this.particles, x, y, '#3a3a3a');

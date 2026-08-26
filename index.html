@@ -13,48 +13,61 @@
 </head>
 <body>
 <div id="app">
-  <canvas id="game" aria-label="Dungeon view"></canvas>
+  <canvas id="game" role="img"
+    aria-label="Isometric view of the labyrinth. Torchlight reveals the stone nearby; explored passages linger as fading memory."></canvas>
 
   <div id="hud" class="hud" hidden>
     <div class="hud-top">
       <div class="hud-left">
         <div class="vitals">
-          <div class="bar health"><div class="bar-fill" id="healthFill"></div><span id="healthText">100</span></div>
-          <div class="objective" id="objective" hidden>
-            <i class="obj-dot" id="objectiveDot"></i><span id="objectiveText"></span>
+          <div class="bar health" id="healthMeter" role="meter" aria-label="Vitality"
+               aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" aria-valuetext="100 of 100">
+            <div class="bar-fill" id="healthFill"></div><span id="healthText">100</span>
+          </div>
+          <div class="objective" id="objective" aria-live="polite" hidden>
+            <i class="obj-dot" id="objectiveDot" aria-hidden="true"></i><span id="objectiveText"></span>
+          </div>
+          <div class="hazard-chip" id="hazardChip" hidden>
+            <i class="hz-dot" id="hazardDot" aria-hidden="true"></i>
+            <b id="hazardChipName"></b><span id="hazardChipHint"></span>
           </div>
           <div class="chips">
             <span class="chip depth" id="depthChip">Depth I</span>
-            <span class="chip ammo" id="ammoChip" hidden><i class="ico-bolt"></i><span id="ammoText">0</span></span>
-            <span class="chip keys" id="keysChip" hidden></span>
+            <span class="chip time" id="timeChip" hidden>
+              <i class="ico-glass" aria-hidden="true"></i>
+              <span id="timeText">0:00</span><small id="timeParText"></small>
+            </span>
+            <span class="chip ammo" id="ammoChip" hidden><i class="ico-bolt" aria-hidden="true"></i><span id="ammoText">0</span></span>
+            <span class="chip keys" id="keysChip" role="list" aria-label="Keys held" hidden></span>
           </div>
         </div>
       </div>
       <div class="hud-right">
         <div class="score-block">
-          <div class="score" id="scoreText">0</div>
+          <div class="score" id="scoreText" aria-label="Score">0</div>
           <div class="streak" id="streakBlock" hidden>
             <span id="streakText">x1</span>
             <div class="streak-bar"><div id="streakFill"></div></div>
           </div>
         </div>
         <div class="hud-buttons">
-          <button class="icon-btn" id="btnBestiary" title="Bestiary (B)" aria-label="Bestiary">&#9763;</button>
-          <button class="icon-btn" id="btnPause" title="Pause (Esc)" aria-label="Pause">&#10073;&#10073;</button>
+          <button class="icon-btn" id="btnBestiary" data-label="Bestiary" title="Bestiary (B)" aria-label="Open the bestiary"><span aria-hidden="true">&#9763;</span></button>
+          <button class="icon-btn" id="btnPause" data-label="Pause" title="Pause (Esc)" aria-label="Pause the game"><span aria-hidden="true">&#10073;&#10073;</span></button>
         </div>
       </div>
     </div>
 
-    <div class="hazard-banner" id="hazardBanner" hidden>
+    <div class="hazard-banner" id="hazardBanner" role="status" hidden>
       <strong id="hazardName"></strong><span id="hazardHint"></span>
     </div>
 
     <div class="boss-bar" id="bossBar" hidden>
       <div class="boss-name" id="bossName"></div>
-      <div class="boss-track"><div class="boss-fill" id="bossFill"></div></div>
+      <div class="boss-track" id="bossMeter" role="meter" aria-label="Great foe"
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"><div class="boss-fill" id="bossFill"></div></div>
     </div>
 
-    <div class="toast-stack" id="toastStack"></div>
+    <div class="toast-stack" id="toastStack" role="status" aria-live="polite"></div>
 
     <div class="action-prompt" id="actionPrompt" hidden>
       <span class="key-cap" id="actionKey">E</span>
@@ -64,16 +77,35 @@
   </div>
 
   <div id="touch" class="touch" hidden>
-    <div class="dpad-zone" id="dpadZone" aria-label="Movement area">
+    <!-- Two movement surfaces, one shown at a time (Settings > Touch pad).
+         The diamond is the default: rotated 45 degrees, its four buttons sit
+         on the screen diagonals, which is exactly where the isometric view
+         draws the four dungeon axes. -->
+    <div class="dpad-zone" id="dpadZone" aria-label="Movement area" hidden>
       <div class="dpad" id="dpad">
         <div class="dpad-base"></div>
         <div class="dpad-stick" id="dpadStick"></div>
       </div>
     </div>
+    <div class="diamond" id="diamond" role="group" aria-label="Movement pad" hidden>
+      <button class="dbtn north" data-dir="north" type="button" aria-label="Walk north">
+        <i class="dbtn-arrow" aria-hidden="true">&#8593;</i><em>N</em>
+      </button>
+      <button class="dbtn east" data-dir="east" type="button" aria-label="Walk east">
+        <i class="dbtn-arrow" aria-hidden="true">&#8593;</i><em>E</em>
+      </button>
+      <button class="dbtn south" data-dir="south" type="button" aria-label="Walk south">
+        <i class="dbtn-arrow" aria-hidden="true">&#8593;</i><em>S</em>
+      </button>
+      <button class="dbtn west" data-dir="west" type="button" aria-label="Walk west">
+        <i class="dbtn-arrow" aria-hidden="true">&#8593;</i><em>W</em>
+      </button>
+      <span class="diamond-hub" aria-hidden="true"></span>
+    </div>
     <div class="buttons">
-      <button class="tbtn action" data-action="action" aria-label="Action">ACT</button>
-      <button class="tbtn fire" data-action="fire" id="touchFire" aria-label="Fire crossbow" hidden>FIRE</button>
-      <button class="tbtn slash" data-action="slash" aria-label="Slash">SLASH</button>
+      <button class="tbtn action" data-action="action" type="button" aria-label="Act on what is in front of you">ACT</button>
+      <button class="tbtn fire" data-action="fire" id="touchFire" type="button" aria-label="Loose a crossbow bolt" hidden>FIRE</button>
+      <button class="tbtn slash" data-action="slash" type="button" aria-label="Slash with the sword">SLASH</button>
     </div>
   </div>
 

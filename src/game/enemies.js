@@ -17,7 +17,11 @@ const STATE = {
 let nextId = 1;
 
 export class Enemy {
-  constructor(spawn, depth, rng) {
+  // `mods` is the run's modifier bundle. Only the difficulty writes to
+  // enemyHp/enemyDamage today, but reading it from mods keeps the door open
+  // for a relic that does the same, and keeps this constructor ignorant of
+  // which of the two set it.
+  constructor(spawn, depth, rng, mods = null) {
     this.id = nextId++;
     this.def = ENEMIES[spawn.defId];
     this.elite = !!spawn.elite;
@@ -31,9 +35,13 @@ export class Enemy {
     this.seed = rng ? rng.next() : Math.random();
 
     const scaleHp = 1 + Math.max(0, depth - this.def.minDepth) * 0.09;
-    this.maxHp = Math.round(this.def.hp * scaleHp * (this.elite ? ELITE_MOD.hp : 1));
+    const hpMod = (mods && mods.enemyHp) || 1;
+    const dmgMod = (mods && mods.enemyDamage) || 1;
+    this.maxHp = Math.max(1,
+      Math.round(this.def.hp * scaleHp * (this.elite ? ELITE_MOD.hp : 1) * hpMod));
     this.hp = this.maxHp;
-    this.damage = this.def.damage * (1 + Math.max(0, depth - 2) * 0.05) * (this.elite ? ELITE_MOD.damage : 1);
+    this.damage = this.def.damage * (1 + Math.max(0, depth - 2) * 0.05)
+      * (this.elite ? ELITE_MOD.damage : 1) * dmgMod;
     this.radius = this.def.radius * (this.elite ? ELITE_MOD.radius : 1);
     this.scale = (this.elite ? 1.2 : 1) * (0.94 + this.def.height * 0.12);
     this.scoreValue = this.def.score * (this.elite ? ELITE_MOD.score : 1);

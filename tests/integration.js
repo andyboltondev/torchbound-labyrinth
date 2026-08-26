@@ -15,6 +15,7 @@ import { inputDirToGrid, screenDirToGrid, screenX, screenY } from '../src/render
 import { bfsField, N4 } from '../src/gen/grid.js';
 import { RNG } from '../src/core/rng.js';
 import { hazardBudget, HAZARDS } from '../src/gen/biomes.js';
+import { DIFFICULTIES, DIFFICULTY_LIST } from '../src/game/difficulty.js';
 
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
@@ -883,6 +884,53 @@ test('the Ashen Hourglass roughly doubles the time bonus', () => {
   const boostedTime = (boostedRows.find((r) => r.label === 'Time Bonus') || { value: 0 }).value;
   assert(plainTime > 0, 'no time bonus was awarded at all');
   assertNear(boostedTime / plainTime, 2, 0.15, 'Ashen Hourglass time multiplier');
+});
+
+// --- difficulty -------------------------------------------------------------
+
+test('a difficulty actually reaches the things it claims to change', () => {
+  const easy = makeWorld(6, 'diff-seed', (r) => { r.difficulty = DIFFICULTIES.hearthlight; });
+  const mid = makeWorld(6, 'diff-seed', (r) => { r.difficulty = DIFFICULTIES.torchbound; });
+  const hard = makeWorld(6, 'diff-seed', (r) => { r.difficulty = DIFFICULTIES.ashenvow; });
+
+  const sample = (w) => {
+    const e = w.world.enemies.find((x) => x.def.id === mid.world.enemies[0].def.id);
+    return e ? { hp: e.maxHp, damage: e.damage } : null;
+  };
+  const a = sample(easy), b = sample(mid), c = sample(hard);
+  assert(a && b && c, 'the same enemy was not present in all three worlds');
+  assert(a.hp < b.hp && b.hp < c.hp, `enemy health did not scale with difficulty: ${a.hp}/${b.hp}/${c.hp}`);
+  assert(a.damage < b.damage && b.damage < c.damage, 'enemy damage did not scale with difficulty');
+
+  // Torch and detection are read from the same mods bundle, so a difficulty
+  // that says it dims the flame has to actually dim it.
+  assert(hard.world.torch.baseRadius < mid.world.torch.baseRadius,
+    'Ashenvow did not shorten the torch');
+  assert(hard.run.mods.enemyAggro > mid.run.mods.enemyAggro,
+    'Ashenvow did not widen enemy detection');
+  assertNear(mid.run.mods.enemyHp, 1, 0.0001, 'Torchbound must be the unmodified measure');
+  assertNear(mid.run.mods.torchRadius, 1, 0.0001, 'Torchbound must be the unmodified measure');
+});
+
+test('difficulty multipliers survive a relic recompute without stacking', () => {
+  const run = new Run('diff-stack');
+  run.difficulty = DIFFICULTIES.ashenvow;
+  run.refreshMods();
+  const once = run.mods.enemyHp;
+  run.refreshMods();
+  run.refreshMods();
+  assertNear(run.mods.enemyHp, once, 0.0001, 'difficulty was applied more than once');
+  assertNear(once, DIFFICULTIES.ashenvow.mods.enemyHp, 0.0001, 'difficulty multiplier was lost');
+});
+
+test('only a losable descent is offered to the Hall of Fame', () => {
+  for (const diff of DIFFICULTY_LIST) {
+    // A mode that hands the stair back on death cannot be ranked against one
+    // that does not, or the board stops meaning anything.
+    assert(!(diff.retry && diff.ranked),
+      `${diff.name} offers a retry and still claims a place on the board`);
+  }
+  assert(DIFFICULTY_LIST.some((d) => d.ranked), 'no difficulty can reach the Hall of Fame');
 });
 
 // --- autopilot -------------------------------------------------------------

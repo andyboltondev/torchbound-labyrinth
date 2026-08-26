@@ -9,9 +9,12 @@ import {
   TILE_W, TILE_H, HALF_W, HALF_H, WALL_H, screenX, screenY, toGrid,
 } from './iso.js';
 import { T } from '../gen/tiles.js';
-import { tileSet, VARIANTS, hazardOverlay } from './sprites.js';
+import { tileSet, VARIANTS, hazardOverlay, warmLightSprites, contactShadow } from './sprites.js';
+import { Ambience } from './ambience.js';
+import { PostFX } from './postfx.js';
+import { TIERS } from '../core/perf.js';
 import { rgba, shade } from './palette.js';
-import { drawPlayer, drawEnemy, drawBoss, drawFlame } from './actors.js';
+import { drawPlayer, drawEnemy, drawBoss, drawFlame, setShadowLight } from './actors.js';
 import { drawGate, drawKeyItem, drawProp, drawDecor, drawSconce } from './props.js';
 import { clamp, damp } from '../core/util.js';
 
@@ -34,6 +37,10 @@ export class Renderer {
     this.renderList = [];
     this.weatherT = 0;
     this.quality = 1;
+    this.tier = TIERS[TIERS.length - 1];
+    this.ambience = new Ambience();
+    this.post = new PostFX();
+    this.warm = null;
     this.resize();
   }
 
@@ -57,6 +64,23 @@ export class Renderer {
   }
 
   addShake(amount) { this.shake = Math.min(18, this.shake + amount); }
+
+  onLevel(level) {
+    this.ambience.bind(level);
+    this.weatherT = 0;
+  }
+
+  // Which sides of this floor tile have something solid standing on them.
+  // Bits: 1 west, 2 north, 4 east, 8 south -- the order `contactShadow` bakes.
+  aoMask(grid, x, y) {
+    const solid = (gx, gy) => {
+      if (!grid.inBounds(gx, gy)) return true;
+      const t = grid.get(gx, gy);
+      return t === T.WALL || t === T.SECRET || t === T.RUBBLE || t === T.GATE;
+    };
+    return (solid(x - 1, y) ? 1 : 0) | (solid(x, y - 1) ? 2 : 0)
+      | (solid(x + 1, y) ? 4 : 0) | (solid(x, y + 1) ? 8 : 0);
+  }
 
   updateCamera(world, dt) {
     const p = world.player;
@@ -193,11 +217,22 @@ export class Renderer {
     ctx.translate(-this.camera.x, -this.camera.y);
 
     const bounds = this.layerBounds(world, this.visibleBounds(level));
+    const tier = this.tier;
+    this.quality = tier.scale;
+    this.warm = tier.torchLight ? warmLightSprites() : null;
+    // Shadows fall away from the torch, which is the player's own hand.
+    setShadowLight(screenX(world.player.x, world.player.y),
+      screenY(world.player.x, world.player.y) - 24, tier.softShadows);
+
+    this.ambience.update(dt, world, tier);
     this.computeFades(world, bounds);
     this.drawFloors(world, bounds);
+    if (this.warm) this.drawFloorLight(world, bounds);
+    this.ambience.drawGround(ctx, world, tier);
     this.buildRenderList(world, bounds);
     this.drawRenderList(world, t);
     world.particles.draw(ctx, (x, y) => this.lightSample(world, x, y));
+    this.ambience.drawMotes(ctx, world, tier);
     this.drawGroundEffects(world, bounds, t);
     world.particles.drawTexts(ctx);
 
@@ -205,7 +240,39 @@ export class Renderer {
 
     this.drawTorchGlow(world);
     this.drawWeather(world, dt);
+    if (tier.bloom) {
+      this.post.bloom(ctx, this.canvas, this.width, this.height, tier.bloomDiv, 0.4);
+    }
     this.drawVignette(world);
+    if (tier.grade && level.biome.grade) {
+      this.post.grade(ctx, this.width, this.height, level.biome.grade, 0.11);
+    }
+  }
+
+  // A second pass over the floors that adds the torch's own warmth. Kept
+  // separate so the additive blend mode is set once rather than per tile.
+  drawFloorLight(world, bounds) {
+    const ctx = this.ctx;
+    const level = world.level;
+    const vis = world.vis;
+    const grid = level.grid;
+    const sprite = this.warm.floor;
+    const flicker = world.torch.flicker;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let y = bounds.y0; y <= bounds.y1; y++) {
+      for (let x = bounds.x0; x <= bounds.x1; x++) {
+        const i = grid.idx(x, y);
+        if (!vis.seen[i] || vis.visGen[i] !== vis.gen) continue;
+        const lit = vis.light[i];
+        if (lit <= 0.14) continue;
+        const tile = grid.cells[i];
+        if (tile === T.WALL || tile === T.SECRET || tile === T.RUBBLE) continue;
+        ctx.globalAlpha = Math.min(0.12, lit * lit * 0.085 * flicker);
+        ctx.drawImage(sprite, screenX(x, y) - HALF_W, screenY(x, y) - HALF_H);
+      }
+    }
+    ctx.restore();
   }
 
   lightSample(world, x, y) {
@@ -220,6 +287,7 @@ export class Renderer {
     const level = world.level;
     const vis = world.vis;
     const grid = level.grid;
+    const ao = this.tier.contactShadows;
     for (let y = bounds.y0; y <= bounds.y1; y++) {
       for (let x = bounds.x0; x <= bounds.x1; x++) {
         const i = grid.idx(x, y);
@@ -244,6 +312,16 @@ export class Renderer {
             ctx.globalAlpha = 1 - lit;
             ctx.drawImage(spr.dark, sx, sy);
             ctx.globalAlpha = 1;
+          }
+          // The crease where the ground meets a wall. One blit, and it is what
+          // stops the floor looking like a sticker under the masonry.
+          if (ao && tile !== T.STAIRS) {
+            const shadow = contactShadow(this.aoMask(grid, x, y));
+            if (shadow) {
+              ctx.globalAlpha = (0.4 + lit * 0.6) * 0.85;
+              ctx.drawImage(shadow, sx, sy);
+              ctx.globalAlpha = 1;
+            }
           }
         } else {
           // Remembered: solid until the memory itself starts to go.
@@ -393,6 +471,8 @@ export class Renderer {
         ctx.globalAlpha = (1 - entry.lit) * (faded ? FADE_ALPHA : 1);
         ctx.drawImage(spr.dark, sx, sy);
       }
+      ctx.globalAlpha = 1;
+      if (this.warm && entry.lit > 0.1) this.drawWallLight(world, entry, sx, sy, faded);
     } else {
       ctx.globalAlpha = Math.min(1, entry.mem * 2.6) * (faded ? FADE_ALPHA : 1);
       ctx.drawImage(spr.mem, sx, sy);
@@ -400,6 +480,28 @@ export class Renderer {
     ctx.globalAlpha = 1;
 
     if (tile === T.SECRET) this.drawSecretGlow(world, entry, t, faded);
+  }
+
+  // Directional torch light on the two faces the camera can see. The left
+  // face of a block looks along +y and the right face along +x, so how much
+  // each catches is simply how squarely it is turned toward the flame.
+  drawWallLight(world, entry, sx, sy, faded) {
+    const ctx = this.ctx;
+    const p = world.player;
+    const vx = p.x - (entry.x + 0.5);
+    const vy = p.y - (entry.y + 0.5);
+    const m = Math.hypot(vx, vy) || 1;
+    const strength = entry.lit * entry.lit * world.torch.flicker * (faded ? 0.35 : 1);
+    const left = Math.max(0, vy / m) * strength * 0.16;
+    const right = Math.max(0, vx / m) * strength * 0.16;
+    const top = strength * 0.06;
+    if (left < 0.015 && right < 0.015 && top < 0.015) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    if (left > 0.015) { ctx.globalAlpha = left; ctx.drawImage(this.warm.left, sx, sy); }
+    if (right > 0.015) { ctx.globalAlpha = right; ctx.drawImage(this.warm.right, sx, sy); }
+    if (top > 0.015) { ctx.globalAlpha = top; ctx.drawImage(this.warm.top, sx, sy); }
+    ctx.restore();
   }
 
   // Cracked walls announce themselves in amber, and turn green the moment a

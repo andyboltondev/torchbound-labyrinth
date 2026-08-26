@@ -38,6 +38,12 @@ export class Music {
     this.colour = HAZARD_COLOUR.clear;
     this.chordIndex = 0;
     this.nodes = {};
+    // How the room is playing the score back. A passage keeps the music
+    // close and dry; a hall lets the pad and the horn open out.
+    this.space = { size: 0.35, corridor: 0.3, tight: 0.4, ceiling: 0.5 };
+    this.openness = 0.4;
+    this.motif = [0, 2, 4, 2];
+    this.motifStep = 0;
   }
 
   start() {
@@ -57,6 +63,7 @@ export class Music {
     this.nodes.percGain = mk(0);
     this.nodes.textureGain = mk(0);
     this.nodes.combatGain = mk(0);
+    this.nodes.bassGain = mk(0);
 
     // Continuous drone: two saws a hair apart, heavily filtered.
     this.nodes.droneFilter = ctx.createBiquadFilter();
@@ -124,8 +131,34 @@ export class Music {
     }, 900);
   }
 
+  // A short phrase per biome, so the melodic layer reads as written rather
+  // than as a die being rolled every four beats.
+  _buildMotif(biomeId) {
+    const shapes = {
+      ruins: [0, 2, 4, 3], crypt: [0, 1, 4, 2], tomb: [0, 4, 2, 5],
+      embers: [0, 3, 2, 5], rainruins: [0, 2, 5, 4],
+    };
+    this.motif = shapes[biomeId] || shapes.ruins;
+    this.motifStep = 0;
+  }
+
+  // The geometry the listener is standing in. Layers are rebalanced rather
+  // than switched: the score never restarts, it just breathes differently.
+  setSpace(space) {
+    this.space = space;
+    this.openness += (space.size - this.openness) * 0.35;
+    if (!this.running) return;
+    const t = this.engine.ctx.currentTime;
+    if (this.nodes.textureFilter) {
+      // A tight passage narrows the wash; a hall lets it spread.
+      this.nodes.textureFilter.Q.linearRampToValueAtTime(0.6 + space.tight * 1.9, t + 1.5);
+    }
+    this.setIntensity(this.targetIntensity, this.boss);
+  }
+
   setBiome(biomeId, hazardId) {
     const scale = SCALES[biomeId] || SCALES.ruins;
+    this._buildMotif(biomeId);
     this.colour = HAZARD_COLOUR[hazardId] || HAZARD_COLOUR.clear;
     if (scale !== this.scale && this.running) {
       this.scale = scale;
@@ -169,11 +202,16 @@ export class Music {
       node.gain.setValueAtTime(Math.max(0.0001, node.gain.value), t);
       node.gain.linearRampToValueAtTime(Math.max(0.0001, value), t + ramp);
     };
-    set(this.nodes.droneGain, (0.16 + i * 0.07) * c.droneGain);
-    set(this.nodes.padGain, 0.05 + i * 0.09);
-    set(this.nodes.percGain, (0.02 + i * 0.16) * c.percussion);
-    set(this.nodes.textureGain, (0.035 + (1 - i) * 0.03) * c.texture);
+    // Space rebalances the layers: in a corridor the drone and the drum are
+    // what you hear; in a hall the pad and the horn have somewhere to go.
+    const open = 0.35 + this.openness * 0.9;
+    const close = 1 - this.openness * 0.4;
+    set(this.nodes.droneGain, (0.16 + i * 0.07) * c.droneGain * close);
+    set(this.nodes.padGain, (0.05 + i * 0.09) * open);
+    set(this.nodes.percGain, (0.02 + i * 0.16) * c.percussion * (1.15 - this.openness * 0.25));
+    set(this.nodes.textureGain, (0.035 + (1 - i) * 0.03) * c.texture * (0.7 + this.openness * 0.7));
     set(this.nodes.combatGain, Math.max(0, i - 0.45) * 0.26);
+    set(this.nodes.bassGain, (0.04 + i * 0.1) * (1.1 - this.openness * 0.2));
   }
 
   _tempo() {
@@ -213,16 +251,26 @@ export class Music {
     if (this.boss && step % 2 === 1) this._frame(time, 0.3);
 
     // --- chord change every 16 steps
+    const roots = [0, 5, 3, 6];
     if (step % 16 === 0) {
       this.chordIndex = (this.chordIndex + 1) % 4;
-      const roots = [0, 5, 3, 6];
-      this._pad(time, roots[this.chordIndex], beat * 16);
+      this._pad(time, roots[this.chordIndex], beat * 16 * (1 + this.openness * 0.2));
     }
 
-    // --- sparse melodic figure, more likely as things heat up
-    if (step % 4 === 0 && Math.random() < 0.16 + i * 0.3) {
-      const degree = [0, 2, 4, 6, 3][Math.floor(Math.random() * 5)];
-      this._horn(time, this._note(degree, 1), beat * (2 + Math.random() * 2));
+    // --- bass: the chord root, plucked on the downbeat and the half
+    if (step % 8 === 0 || (i > 0.5 && step % 8 === 5)) {
+      this._bass(time, this._note(roots[this.chordIndex], -1), beat * 2.2);
+    }
+
+    // --- the biome's phrase, one note at a time, with the odd octave leap.
+    // A hall gets the whole figure; a passage only lets a note or two out.
+    const melodyChance = (0.2 + i * 0.32) * (0.55 + this.openness * 0.75);
+    if (step % 4 === 0 && Math.random() < melodyChance) {
+      const degree = this.motif[this.motifStep % this.motif.length];
+      this.motifStep++;
+      const oct = Math.random() < 0.18 ? 2 : 1;
+      const tail = beat * (1.6 + this.openness * 2.4 + Math.random());
+      this._horn(time + (Math.random() - 0.5) * 0.02, this._note(degree, oct), tail);
     }
 
     // --- combat tension: a rising two-note figure
@@ -245,6 +293,26 @@ export class Music {
     g.connect(this.nodes.percGain);
     osc.start(time);
     osc.stop(time + 0.5);
+  }
+
+  // A short bowed pluck an octave under the drone. Present rather than heard.
+  _bass(time, freq, duration) {
+    const ctx = this.engine.ctx;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    const f = ctx.createBiquadFilter();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(freq * 1.01, time);
+    osc.frequency.exponentialRampToValueAtTime(freq, time + 0.09);
+    f.type = 'lowpass';
+    f.frequency.setValueAtTime(1200, time);
+    f.frequency.exponentialRampToValueAtTime(240, time + duration * 0.7);
+    g.gain.setValueAtTime(0.0001, time);
+    g.gain.exponentialRampToValueAtTime(0.5, time + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, time + duration);
+    osc.connect(f); f.connect(g); g.connect(this.nodes.bassGain);
+    osc.start(time);
+    osc.stop(time + duration + 0.1);
   }
 
   _frame(time, gainScale) {

@@ -1,6 +1,7 @@
 // Run state: the things that persist from depth to depth within one descent.
 
 import { computeMods, describeBuild, offerRelics, RELIC_BY_ID } from './relics.js';
+import { applyDifficulty, difficultyById, DEFAULT_DIFFICULTY } from './difficulty.js';
 import { ScoreTracker } from './scoring.js';
 import { profile } from './profile.js';
 import { RNG, makeSeed } from '../core/rng.js';
@@ -12,12 +13,17 @@ const BASE_BOLT_RANGE = 5;
 const DEPTH_VIGOUR = 6;   // max health gained for each depth survived
 
 export class Run {
-  constructor(seed) {
+  constructor(seed, difficultyId = DEFAULT_DIFFICULTY) {
     this.seed = seed || makeSeed();
     this.rng = new RNG(this.seed + ':run');
     this.depth = 1;
+    this.difficulty = difficultyById(difficultyId);
+    // Bumped every time a Hearthlight death sends the player back down, so a
+    // retried depth is a genuinely new labyrinth rather than the same trap.
+    this.attempt = 0;
+    this.retries = 0;
     this.relics = {};
-    this.mods = computeMods(this.relics);
+    this.mods = applyDifficulty(computeMods(this.relics), this.difficulty);
     // Health earned during the run: shrine blessings and depths survived.
     // Held separately from relic modifiers so recomputing those cannot wipe it.
     this.bonusHp = 0;
@@ -41,7 +47,7 @@ export class Run {
 
   refreshMods() {
     const previousMax = this.maxHp;
-    this.mods = computeMods(this.relics);
+    this.mods = applyDifficulty(computeMods(this.relics), this.difficulty);
     this.maxHp = Math.max(30, BASE_MAX_HP + this.bonusHp + this.mods.maxHpBonus);
     // Gaining max health should not silently heal; losing it should not kill.
     if (this.maxHp > previousMax) this.hp += this.maxHp - previousMax;
@@ -142,5 +148,21 @@ export class Run {
 
   levelContext() {
     return { hasCrossbow: this.hasCrossbow, relics: this.relics, depth: this.depth };
+  }
+
+  // Hearthlight only. Re-enters the current depth: the run total is kept, but
+  // everything this depth had banked is forfeit along with the attempt.
+  retryDepth() {
+    this.attempt++;
+    this.retries++;
+    this.keys.clear();
+    this.score.resetLevel();
+    this.hp = this.maxHp;
+    if (this.hasCrossbow) this.arrows = Math.max(this.arrows, 2);
+  }
+
+  // The seed the current attempt at this depth should generate from.
+  levelSeed() {
+    return this.attempt === 0 ? this.seed : this.seed + ':retry' + this.attempt;
   }
 }

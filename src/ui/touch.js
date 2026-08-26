@@ -1,5 +1,25 @@
-// On-screen controls for touch devices: an analogue d-pad and three large,
+// On-screen controls for touch devices: a movement pad and three large,
 // well-spaced action buttons that thumbs can find without looking.
+//
+// Two movement pads are offered, because they answer different questions.
+//
+//   diamond -- four buttons on a 45-degree rotated frame. The isometric view
+//              draws the dungeon's four axes as the four screen diagonals, so
+//              a rotated pad puts every button exactly where its corridor
+//              goes: the top-right button walks north, and north on screen is
+//              up and to the right. It maps one tap to one tile, which is
+//              what grid movement actually wants.
+//   stick   -- the older floating analogue pad, anchored wherever the thumb
+//              lands. Kept for players who prefer a continuous surface.
+
+// Dungeon-axis vectors. The diamond feeds these straight through in the
+// 'dungeon' frame, so the screen-direction setting never doubles up on them.
+const DIRS = {
+  north: { x: 0, y: -1 },
+  east: { x: 1, y: 0 },
+  south: { x: 0, y: 1 },
+  west: { x: -1, y: 0 },
+};
 
 export class TouchControls {
   constructor(input) {
@@ -8,21 +28,35 @@ export class TouchControls {
     this.zone = document.getElementById('dpadZone');
     this.dpad = document.getElementById('dpad');
     this.stick = document.getElementById('dpadStick');
+    this.diamond = document.getElementById('diamond');
     this.fireBtn = document.getElementById('touchFire');
     this.visible = false;
+    this.mode = 'diamond';
     this.pointerId = null;
     this.centre = { x: 0, y: 0 };
     this.maxRadius = 52;
     this.restStyle = null;
+    this.heldDirs = [];
     this._bindStick();
+    this._bindDiamond();
     this._bindButtons();
+    this.setPad('diamond');
   }
 
   setVisible(on) {
     if (this.visible === on) return;
     this.visible = on;
     this.root.hidden = !on;
-    if (!on) this._release();
+    if (!on) { this._release(); this._releaseDiamond(); }
+  }
+
+  // 'diamond' | 'stick'
+  setPad(mode) {
+    this.mode = mode === 'stick' ? 'stick' : 'diamond';
+    this.zone.hidden = this.mode !== 'stick';
+    this.diamond.hidden = this.mode !== 'diamond';
+    this._release();
+    this._releaseDiamond();
   }
 
   setCrossbow(on) { this.fireBtn.hidden = !on; }
@@ -46,12 +80,65 @@ export class TouchControls {
 
   _release() {
     this.pointerId = null;
-    this.input.setStick(0, 0);
+    if (this.mode === 'stick') this.input.setStick(0, 0);
     this.stick.style.transform = 'translate(0px, 0px)';
     this.dpad.classList.remove('active');
     this.dpad.style.left = '';
     this.dpad.style.top = '';
     this.dpad.style.bottom = '';
+  }
+
+  // --- diamond pad --------------------------------------------------------
+  // Presses stack rather than replace, so sliding a thumb from one button to
+  // the next never drops a frame of movement, and lifting the newer button
+  // falls back to the one still held.
+  _pressDir(name) {
+    const i = this.heldDirs.indexOf(name);
+    if (i >= 0) this.heldDirs.splice(i, 1);
+    this.heldDirs.push(name);
+    this._applyDiamond();
+  }
+
+  _releaseDir(name) {
+    const i = this.heldDirs.indexOf(name);
+    if (i >= 0) this.heldDirs.splice(i, 1);
+    this._applyDiamond();
+  }
+
+  _releaseDiamond() {
+    if (!this.heldDirs.length) return;
+    this.heldDirs.length = 0;
+    this._applyDiamond();
+  }
+
+  _applyDiamond() {
+    for (const btn of this.diamond.querySelectorAll('.dbtn')) {
+      btn.classList.toggle('down', this.heldDirs.includes(btn.dataset.dir));
+    }
+    const active = this.heldDirs[this.heldDirs.length - 1];
+    if (!active) { this.input.setStick(0, 0); return; }
+    const d = DIRS[active];
+    this.input.setStick(d.x, d.y, 'dungeon');
+  }
+
+  _bindDiamond() {
+    for (const btn of this.diamond.querySelectorAll('.dbtn')) {
+      const dir = btn.dataset.dir;
+      const down = (e) => { this._pressDir(dir); e.preventDefault(); };
+      const up = (e) => { this._releaseDir(dir); if (e) e.preventDefault(); };
+      btn.addEventListener('touchstart', down, { passive: false });
+      btn.addEventListener('touchend', up, { passive: false });
+      btn.addEventListener('touchcancel', up, { passive: false });
+      btn.addEventListener('mousedown', down);
+      btn.addEventListener('mouseup', up);
+      btn.addEventListener('mouseleave', () => {
+        if (btn.classList.contains('down')) up(null);
+      });
+      // A button dragged off-screen mid-press must not leave the player
+      // walking into a wall forever.
+      btn.addEventListener('contextmenu', (e) => e.preventDefault());
+    }
+    window.addEventListener('blur', () => this._releaseDiamond());
   }
 
   _bindStick() {
