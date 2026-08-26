@@ -1,0 +1,9 @@
+# Development screenshots captured by tools/serve.py
+shots/
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

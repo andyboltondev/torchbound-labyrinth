@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Torchbound Labyrinth &mdash; Generation Tests</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; background:#0b0d12; color:#d8d2c4;
+         font:14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding:24px; }
+  h1 { font-size:20px; letter-spacing:.16em; text-transform:uppercase; color:#e8b45c; margin:0 0 4px; }
+  h2 { font-size:13px; letter-spacing:.14em; text-transform:uppercase; color:#8fa0b8; margin:26px 0 8px; }
+  .sub { color:#6f7a8c; margin-bottom:18px; }
+  button { background:#1d2430; color:#e8b45c; border:1px solid #3a475c; padding:9px 18px;
+           border-radius:4px; cursor:pointer; font:inherit; letter-spacing:.08em; }
+  button:hover { background:#26303f; }
+  button:disabled { opacity:.5; cursor:default; }
+  table { border-collapse:collapse; width:100%; max-width:900px; margin-top:6px; }
+  th,td { text-align:right; padding:5px 10px; border-bottom:1px solid #1d232e; }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:#8fa0b8; font-weight:400; text-transform:uppercase; font-size:11px; letter-spacing:.1em; }
+  .pass { color:#6fce87; } .fail { color:#ff7a6a; } .warn { color:#e8b45c; }
+  .big { font-size:28px; letter-spacing:.04em; }
+  pre { background:#11151d; border:1px solid #1d232e; padding:12px; border-radius:4px;
+        overflow:auto; max-height:340px; white-space:pre-wrap; }
+  .row { display:flex; gap:26px; flex-wrap:wrap; align-items:baseline; margin-bottom:10px; }
+  .controls { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  label { color:#8fa0b8; }
+  input { background:#11151d; border:1px solid #2b3444; color:#d8d2c4; padding:6px 8px;
+          border-radius:4px; width:72px; font:inherit; }
+  canvas { border:1px solid #232b38; border-radius:4px; image-rendering:pixelated; background:#05070a; }
+  .maps { display:flex; gap:14px; flex-wrap:wrap; }
+  figure { margin:0; }
+  figcaption { color:#6f7a8c; font-size:11px; margin-top:4px; }
+</style>
+</head>
+<body>
+<h1>Torchbound Labyrinth &mdash; Procedural Generation Tests</h1>
+<div class="sub">Seeded batch generation across every depth band, asserting solvability, key/gate ordering, gate geometry and hazard budgets.</div>
+
+<div class="controls">
+  <button id="run">Run suite</button>
+  <label>seeds / depth <input id="seeds" type="number" value="30" min="1" max="400"></label>
+  <span id="status" class="sub" style="margin:0"></span>
+</div>
+
+<div id="out"></div>
+
+<h2>Gameplay integration</h2>
+<div class="controls">
+  <button id="runGame">Run gameplay tests</button>
+  <span id="gameStatus" class="sub" style="margin:0"></span>
+</div>
+<div id="gameOut"></div>
+
+<h2>Sample layouts</h2>
+<div class="maps" id="maps"></div>
+
+<script type="module">
+import { runGenerationTests, runDeterminismTest, runRngTest } from './tests/generation.js';
+import { runIntegrationTests } from './tests/integration.js';
+import { generateLevel } from './src/gen/dungeon.js';
+import { T } from './src/gen/tiles.js';
+
+const out = document.getElementById('out');
+const status = document.getElementById('status');
+const maps = document.getElementById('maps');
+
+const TILE_COLOUR = {
+  [T.WALL]: '#161b24', [T.FLOOR]: '#4c4a44', [T.GATE]: '#e05a3c',
+  [T.STAIRS]: '#6fce87', [T.SECRET]: '#e8b45c', [T.ENTRANCE]: '#4d86d6', [T.RUBBLE]: '#2a2f38',
+};
+
+function drawLevel(level, scale = 4) {
+  const c = document.createElement('canvas');
+  c.width = level.grid.w * scale; c.height = level.grid.h * scale;
+  const ctx = c.getContext('2d');
+  for (let y = 0; y < level.grid.h; y++) {
+    for (let x = 0; x < level.grid.w; x++) {
+      ctx.fillStyle = TILE_COLOUR[level.grid.get(x, y)] || '#f0f';
+      ctx.fillRect(x * scale, y * scale, scale, scale);
+    }
+  }
+  ctx.strokeStyle = 'rgba(143,160,184,.35)';
+  for (const z of level.zones)
+    ctx.strokeRect(z.x0 * scale, z.y0 * scale, (z.x1 - z.x0) * scale, (z.y1 - z.y0) * scale);
+  for (const k of level.keys) {
+    ctx.fillStyle = ['#e05a3c', '#4d86d6', '#4fae62', '#d9a441'][k.colourIndex % 4];
+    ctx.fillRect(k.x * scale - 1, k.y * scale - 1, scale + 2, scale + 2);
+  }
+  return c;
+}
+
+function samples() {
+  maps.innerHTML = '';
+  for (const depth of [1, 3, 5, 8, 12, 16]) {
+    const level = generateLevel({ depth, seed: 'showcase-' + depth, context: { hasCrossbow: depth > 6 } });
+    const fig = document.createElement('figure');
+    fig.appendChild(drawLevel(level));
+    const cap = document.createElement('figcaption');
+    cap.textContent = 'depth ' + depth + ' - ' + level.zones.length + ' zones, ' + level.gates.length
+      + ' gates, ' + level.secrets.length + ' secrets, ' + level.spawns.length + ' enemies'
+      + (level.isBoss ? ' - BOSS' : '');
+    fig.appendChild(cap);
+    maps.appendChild(fig);
+  }
+}
+
+function render(res, det, rng) {
+  const ok = res.failed === 0 && det.ok && rng.ok;
+  const L = [];
+  L.push('<div class="row"><div class="big ' + (ok ? 'pass' : 'fail') + '">' + (ok ? 'PASS' : 'FAIL') + '</div>');
+  L.push('<div>' + res.passed + '/' + res.total + ' levels clean</div>');
+  L.push('<div>' + (res.failed ? '<span class="fail">' + res.failed + ' failed</span>' : '') + '</div>');
+  L.push('<div>' + (res.fallbacks ? '<span class="warn">' + res.fallbacks + ' fallbacks</span>' : 'no fallbacks') + '</div>');
+  L.push('<div class="sub" style="margin:0">' + (res.totalMs / 1000).toFixed(2) + 's total, '
+    + (res.totalMs / res.total).toFixed(1) + 'ms/level</div></div>');
+
+  L.push('<h2>By depth</h2><table><tr><th>Depth</th><th>Runs</th><th>Pass</th><th>Fail</th>'
+    + '<th>Fallback</th><th>Avg attempts</th><th>Avg ms</th><th>Warnings</th></tr>');
+  for (const r of res.byDepth) {
+    L.push('<tr><td>' + r.depth + '</td><td>' + r.runs + '</td><td class="pass">' + r.passed + '</td>'
+      + '<td class="' + (r.failed ? 'fail' : '') + '">' + r.failed + '</td>'
+      + '<td class="' + (r.fallbacks ? 'warn' : '') + '">' + r.fallbacks + '</td>'
+      + '<td>' + r.avgAttempts.toFixed(2) + '</td><td>' + r.avgMs.toFixed(1) + '</td><td>' + r.warnings + '</td></tr>');
+  }
+  L.push('</table>');
+
+  const s = res.stats;
+  L.push('<h2>Content statistics</h2><table><tr><th>Metric</th><th>Value</th></tr>');
+  L.push('<tr><td>Average key to gate distance</td><td>' + s.avgKeyGateDist.toFixed(1) + ' tiles</td></tr>');
+  L.push('<tr><td>Closest key to gate seen</td><td>' + s.minKeyGateDist + ' tiles</td></tr>');
+  L.push('<tr><td>Secrets per level</td><td>' + (s.secrets / res.total).toFixed(2) + '</td></tr>');
+  L.push('<tr><td>Encounters per level</td><td>' + (s.encounters / res.total).toFixed(2) + '</td></tr>');
+  L.push('<tr><td>Enemies per level</td><td>' + (s.spawns / res.total).toFixed(1) + '</td></tr>');
+  L.push('<tr><td>Floor cells per level</td><td>' + Math.round(s.floorCells / res.total) + '</td></tr>');
+  L.push('<tr><td>Determinism (same seed, same level)</td><td class="' + (det.ok ? 'pass' : 'fail') + '">'
+    + (det.ok ? 'stable' : det.problems.join(', ')) + '</td></tr>');
+  L.push('<tr><td>RNG uniformity (worst bucket deviation)</td><td class="' + (rng.ok ? 'pass' : 'fail') + '">'
+    + (rng.worst * 100).toFixed(2) + '%</td></tr>');
+  L.push('<tr><td>Attempts histogram</td><td>' + JSON.stringify(res.attemptHistogram) + '</td></tr></table>');
+
+  if (res.failures.length) {
+    const lines = res.failures.slice(0, 60)
+      .map((f) => 'depth ' + f.depth + '  seed ' + f.seed + '\n  ' + f.check + ': ' + f.detail).join('\n\n');
+    L.push('<h2 class="fail">Failures (' + res.failures.length + ', showing '
+      + Math.min(60, res.failures.length) + ')</h2><pre>' + lines.replace(/</g, '&lt;') + '</pre>');
+  }
+  out.innerHTML = L.join('');
+}
+
+document.getElementById('runGame').addEventListener('click', async () => {
+  const btn = document.getElementById('runGame');
+  const status = document.getElementById('gameStatus');
+  const out = document.getElementById('gameOut');
+  btn.disabled = true;
+  status.textContent = 'running...';
+  out.innerHTML = '';
+  await new Promise((r) => setTimeout(r, 30));
+  try {
+    const res = runIntegrationTests();
+    const ok = res.failed === 0;
+    const L = [];
+    L.push('<div class="row"><div class="big ' + (ok ? 'pass' : 'fail') + '">' + (ok ? 'PASS' : 'FAIL') + '</div>');
+    L.push('<div>' + res.passed + ' passed</div>');
+    L.push('<div>' + (res.failed ? '<span class="fail">' + res.failed + ' failed</span>' : '') + '</div>');
+    L.push('<div>' + (res.skipped ? '<span class="warn">' + res.skipped + ' skipped</span>' : '') + '</div>');
+    L.push('<div class="sub" style="margin:0">' + (res.totalMs / 1000).toFixed(2) + 's</div></div>');
+    L.push('<table><tr><th>Test</th><th>Result</th><th>ms</th></tr>');
+    for (const r of res.results) {
+      const cls = r.status === 'pass' ? 'pass' : r.status === 'skip' ? 'warn' : 'fail';
+      L.push('<tr><td>' + r.name + (r.note ? '<br><span class="sub" style="margin:0">'
+        + r.note.replace(/</g, '&lt;') + '</span>' : '')
+        + '</td><td class="' + cls + '">' + r.status.toUpperCase() + '</td><td>' + r.ms.toFixed(1) + '</td></tr>');
+    }
+    L.push('</table>');
+    out.innerHTML = L.join('');
+    window.__gameResults = res;
+    status.textContent = 'done';
+  } catch (err) {
+    out.innerHTML = '<pre class="fail">' + String(err && err.stack || err).replace(/</g, '&lt;') + '</pre>';
+    window.__gameResults = { error: String(err && err.stack || err) };
+    status.textContent = 'error';
+  }
+  btn.disabled = false;
+});
+
+document.getElementById('run').addEventListener('click', async () => {
+  const btn = document.getElementById('run');
+  btn.disabled = true;
+  status.textContent = 'running...';
+  out.innerHTML = '';
+  await new Promise((r) => setTimeout(r, 30));
+  try {
+    const seedsPerDepth = Math.max(1, parseInt(document.getElementById('seeds').value, 10) || 30);
+    const res = runGenerationTests({ seedsPerDepth });
+    const det = runDeterminismTest();
+    const rng = runRngTest();
+    render(res, det, rng);
+    samples();
+    status.textContent = 'done';
+    window.__testResults = { res, det, rng };
+  } catch (err) {
+    out.innerHTML = '<pre class="fail">' + (err && err.stack || err) + '</pre>';
+    status.textContent = 'error';
+    window.__testResults = { error: String(err && err.stack || err) };
+  }
+  btn.disabled = false;
+});
+</script>
+</body>
+</html>
