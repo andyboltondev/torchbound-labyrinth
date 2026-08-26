@@ -136,6 +136,9 @@ function clearArena(world, cx, cy, radius = 3) {
   }
   world.sealBlocks.clear();
   world.enemies.length = 0;
+  // A raving captive screaming somewhere off-stage is a real noise source,
+  // which is wonderful in play and ruinous in a controlled scenario.
+  world.level.props = world.level.props.filter((p) => p.type !== 'prisoner');
   for (let y = cy - radius; y <= cy + radius; y++) {
     for (let x = cx - radius; x <= cx + radius; x++) world.grid.set(x, y, T.FLOOR);
   }
@@ -453,22 +456,132 @@ test('a bolt clattering off stone pulls unaware creatures to the noise', () => {
 
   const watcher = spawnAt(world, 'draugr_thrall', cx - 12, cy);
   watcher.state = 'idle';
-  const homeX = watcher.mover.tileX;
   step(world, 30);
   assert(watcher.state === 'idle',
     `the creature noticed the player twelve tiles off (state ${watcher.state})`);
+  // Read the starting tile after it has settled: an idle creature wanders, so
+  // where it was when it was placed is not where it is now.
+  const homeX = watcher.mover.tileX;
 
   // A noise beyond it, on the far side from the player, so what it walks
   // toward is the noise and not the torch.
   const drawn = world.makeNoise(cx - 15, cy, 1.2);
   assert(drawn >= 1, 'nothing heard a noise three tiles away down a straight corridor');
   assert(watcher.state === 'seeking', 'the creature heard the noise and ignored it');
-  step(world, 120);
-  assert(watcher.mover.tileX < homeX, 'the creature never went to look');
+  step(world, 180);
+  assert(watcher.mover.tileX < homeX,
+    `the creature never went to look (${homeX} -> ${watcher.mover.tileX})`);
 
   // ...and it gives up rather than standing there for the rest of the level.
   step(world, 60 * 8);
   assert(watcher.state !== 'seeking', 'the creature investigated forever');
+});
+
+// --- what the labyrinth tells you, and who it tells you about --------------
+
+test('a map scrap marks one real thing and puts an arrow on the chart', () => {
+  const { world, level } = makeWorld(5, 'map-1');
+  const scrap = level.props.find((p) => p.type === 'mapScrap');
+  assert(scrap, 'no map was generated on a depth five level');
+  assert(world.hints.length === 0, 'the level started with hints already given');
+
+  const before = world.vis.seen.slice();
+  assert(world.readMap(scrap), 'the map could not be read');
+  assert(scrap.read && scrap.consumed, 'a read map is still lying there');
+  assert(world.hints.length === 1, 'reading a map gave no hint');
+
+  const hint = world.hints[0];
+  const i = level.grid.idx(Math.floor(hint.x), Math.floor(hint.y));
+  assert(world.vis.seen[i], 'the hint was not put on the chart');
+  // Being told where a thing is must not light the road to it.
+  let opened = 0;
+  for (let n = 0; n < before.length; n++) if (!before[n] && world.vis.seen[n]) opened++;
+  assert(opened <= 1, `reading a map revealed ${opened} tiles, not just the one`);
+
+  // ...and it stops pointing once the player has been there.
+  place(world, Math.floor(hint.x), Math.floor(hint.y));
+  step(world, 10);
+  assert(hint.resolved, 'the hint kept pointing after the player arrived');
+});
+
+test('a hint never points at something already taken', () => {
+  const { world, level } = makeWorld(6, 'map-2');
+  for (const k of level.keys) k.taken = true;
+  const hint = world.revealHint('key');
+  if (hint) {
+    assert(hint.kind !== 'key', 'a hint pointed at a key that was already taken');
+  }
+});
+
+test('killing a captive that did not ask for it costs, and mercy does not', () => {
+  const { world, level, run } = makeWorld(5, 'captive-1');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 4);
+
+  // One who is frightened, and one who has had enough.
+  const afraid = {
+    type: 'prisoner', x: cx + 1.5, y: cy + 0.5, wallX: 0, wallY: -1, mood: 'afraid',
+    seed: 0.3, spoken: false, searched: false, freed: false, knows: 'exit', carries: null,
+    id: 'captive_afraid',
+  };
+  const begging = {
+    type: 'prisoner', x: cx + 1.5, y: cy + 2.5, wallX: 0, wallY: -1, mood: 'begging',
+    seed: 0.7, spoken: false, searched: false, freed: false, knows: 'nothing', carries: null,
+    id: 'captive_begging',
+  };
+  level.props.push(afraid, begging);
+
+  // Speaking to the frightened one is free, and what they know is the point.
+  place(world, cx + 1, cy);
+  step(world, 6);
+  world.updateInteractTarget();
+  assert(world.interactTarget && world.interactTarget.type === 'captive',
+    'standing beside a captive offered nothing');
+  world.interact();
+  assert(afraid.spoken, 'the captive was not spoken to');
+  assert(world.hints.length === 1, 'a captive who knows the way said nothing useful');
+  assert(run.score.level.penalty === 0, 'listening to someone cost score');
+
+  // Cutting the frightened one down: killing them without being asked.
+  world.player.faceX = 0; world.player.faceY = 1;
+  world.murderCaptive(afraid);
+  assert(run.score.level.penalty < 0, 'murder cost nothing at all');
+  const murderCost = run.score.level.penalty;
+
+  // The one who asked. Listening first is what makes it mercy.
+  place(world, cx + 1, cy + 2);
+  step(world, 6);
+  world.updateInteractTarget();
+  world.interact();
+  assert(begging.spoken, 'the begging captive was not listened to');
+  const before = run.score.level.combat;
+  world.murderCaptive(begging);
+  assert(run.score.level.penalty === murderCost, 'mercy was charged as murder');
+  assert(run.score.level.combat > before, 'mercy paid nothing');
+});
+
+test('a raving captive brings company', () => {
+  const { world, level } = makeWorld(5, 'captive-2');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 1);
+  // The same corridor trick as the bolt test: far enough away that nothing
+  // here has anything to do with the player being visible.
+  for (let x = cx - 2; x <= cx + 16; x++) level.grid.set(x, cy, T.FLOOR);
+  world.flow = null;
+  place(world, cx, cy);
+  const watcher = spawnAt(world, 'draugr_thrall', cx + 12, cy);
+  watcher.state = 'idle';
+  step(world, 20);
+  assert(watcher.state === 'idle', `the creature already saw the player (${watcher.state})`);
+
+  level.props.push({
+    type: 'prisoner', x: cx + 14.5, y: cy + 0.5, wallX: 0, wallY: -1, mood: 'raving',
+    seed: 0.1, spoken: false, searched: false, freed: false, knows: 'nothing',
+    carries: null, screamTimer: 0.01, id: 'captive_raving',
+  });
+  step(world, 12);
+  assert(watcher.state === 'seeking',
+    `screaming did not draw anything (state ${watcher.state})`);
 });
 
 // --- keys, gates and the exit ----------------------------------------------

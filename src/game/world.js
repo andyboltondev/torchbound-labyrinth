@@ -34,6 +34,13 @@ const FIRE_NAMES = {
   sconce: 'sconce', brazier: 'brazier', firepit: 'firepit', campfire: 'campfire',
 };
 
+// One colour per kind of answer, used by the chart arrow, the toast and the
+// mark on the map, so the player learns to read the colour rather than the
+// words. Keys use their own colour instead.
+const HINT_COLOUR = {
+  exit: '#6fce87', secret: '#c46ad8', treasure: '#e8b45c', health: '#e0607a',
+};
+
 // Not everything in the labyrinth bleeds. The spark colour a hit throws is
 // the visual half of the same material lookup the mixer uses for the sound.
 const IMPACT_SPARK = {
@@ -265,6 +272,8 @@ export class World {
     this.updateEncounters(dt);
     this.updatePickups();
     this.updateSecretAwareness();
+    this.updateHints(dt);
+    this.updateCaptives(dt);
     this.updateInteractTarget();
     this.updateAmbience(dt);
     this.run.score.update(dt, this.run.mods.streakWindow);
@@ -673,6 +682,18 @@ export class World {
       hitAt = { x: this.boss.x, y: this.boss.y };
     }
 
+    // A captive is in reach of the same swing as anything else. Nothing stops
+    // it and nothing warns you, because a choice you are protected from making
+    // is not a choice.
+    for (const prop of this.level.props) {
+      if (prop.type !== 'prisoner' || prop.mood === 'dead' || prop.freed) continue;
+      if (!player.hitsWithSword(prop.x, prop.y, 0.3)) continue;
+      this.murderCaptive(prop);
+      hitSomething = true;
+      material = 'flesh';
+      hitAt = { x: prop.x, y: prop.y };
+    }
+
     // Cracked walls break to the same swing -- no separate verb to learn.
     if (this.actionableSecret) {
       this.breakSecret(this.actionableSecret);
@@ -948,6 +969,106 @@ export class World {
     }
   }
 
+  // --- hints ---------------------------------------------------------------
+  //
+  // Anything that tells the player where something is goes through here: a
+  // map scrap, a prisoner who will talk, an altar taking payment for the
+  // answer. One place, so a hint always looks and behaves the same however it
+  // was earned, and so nothing can point at something already found.
+  hintTarget(kind) {
+    const level = this.level;
+    if (kind === 'exit') {
+      return { x: level.stairs.x + 0.5, y: level.stairs.y + 0.5, colour: HINT_COLOUR.exit, label: 'the stairs down' };
+    }
+    if (kind === 'key') {
+      // The next key they will need, which is the one for the next gate on
+      // the route -- not whichever happens to be nearest.
+      for (const gate of level.gates) {
+        if (gate.open || this.run.keys.has(gate.colourIndex)) continue;
+        const key = level.keys.find((k) => k.colourIndex === gate.colourIndex && !k.taken);
+        if (!key) continue;
+        const col = keyColour(key.colourIndex);
+        if (key.holder === 'enemy') {
+          const carrier = this.enemies.find((e) => e.carriesKey === key.colourIndex && !e.dead);
+          if (!carrier) continue;
+          return { x: carrier.x, y: carrier.y, colour: col.glow, follow: carrier,
+            label: 'what carries the ' + col.name + ' Key' };
+        }
+        return { x: key.x + 0.5, y: key.y + 0.5, colour: col.glow, label: 'the ' + col.name + ' Key' };
+      }
+      return null;
+    }
+    if (kind === 'secret') {
+      const s = level.secrets.find((x) => !x.broken && !x.discovered && !x.hiddenUntil);
+      if (!s) return null;
+      return { x: s.x + 0.5, y: s.y + 0.5, colour: HINT_COLOUR.secret, label: 'a hollow wall', secret: s };
+    }
+    if (kind === 'treasure') {
+      const prop = level.props.find((x) => !x.consumed && !x.opened
+        && (x.type === 'chest' || x.type === 'cursedChest' || x.type === 'treasure'));
+      if (!prop) return null;
+      return { x: prop.x, y: prop.y, colour: HINT_COLOUR.treasure, label: 'something worth carrying' };
+    }
+    if (kind === 'health') {
+      const prop = level.props.find((x) => !x.consumed && !x.used
+        && (x.type === 'potion' || x.type === 'shrine' || x.type === 'shrineSmall'));
+      if (!prop) return null;
+      return { x: prop.x, y: prop.y, colour: HINT_COLOUR.health, label: 'something to drink' };
+    }
+    return null;
+  }
+
+  // Adds the hint and marks the spot on the chart. Returns what it revealed,
+  // or null when there was nothing left of that kind to point at.
+  revealHint(kind, source) {
+    let target = this.hintTarget(kind);
+    let gave = kind;
+    // Nothing of that kind left. Fall back rather than wasting the moment --
+    // being told nothing is a worse outcome than being told something else.
+    // The hint reports what it actually points at, not what was asked for.
+    if (!target) {
+      for (const alt of ['exit', 'key', 'secret', 'treasure', 'health']) {
+        if (alt === kind) continue;
+        target = this.hintTarget(alt);
+        if (target) { gave = alt; break; }
+      }
+    }
+    if (!target) return null;
+    if (this.hints.some((h) => !h.resolved && Math.hypot(h.x - target.x, h.y - target.y) < 0.6)) {
+      return null;
+    }
+    // Put the spot itself on the chart without lighting the road to it: the
+    // player is being told where, not how.
+    const gx = Math.floor(target.x), gy = Math.floor(target.y);
+    if (this.grid.inBounds(gx, gy)) {
+      const i = this.grid.idx(gx, gy);
+      this.vis.seen[i] = 1;
+      this.vis.memory[i] = Math.max(this.vis.memory[i], 0.55);
+    }
+    if (target.secret) target.secret.discovered = true;
+    const hint = { ...target, kind: gave, asked: kind, source: source || null, resolved: false };
+    this.hints.push(hint);
+    this.emit('hint', { hint });
+    return hint;
+  }
+
+  // A hint stops pointing once the player has been to the spot, or once the
+  // thing it named has been taken.
+  updateHints(dt) {
+    const p = this.player;
+    for (const h of this.hints) {
+      if (h.resolved) continue;
+      if (h.follow) {
+        if (h.follow.dead) { h.resolved = true; continue; }
+        h.x = h.follow.x; h.y = h.follow.y;
+      }
+      if (Math.hypot(h.x - p.x, h.y - p.y) < 2.2) {
+        h.resolved = true;
+        this.emit('hintReached', { hint: h });
+      }
+    }
+  }
+
   // --- secrets ------------------------------------------------------------
   updateSecretAwareness() {
     const p = this.player;
@@ -994,6 +1115,156 @@ export class World {
     this.actionableSecret = null;
     this.flow = null;
     this.emit('secretBroken', { secret });
+  }
+
+  // --- captives -------------------------------------------------------------
+  //
+  // The one part of the labyrinth that can be wronged. Everything else in it
+  // is trying to kill you; these are people, and what the player does about
+  // that is the only genuinely moral choice in the game -- so it has to cost
+  // something, and the exception has to be real.
+  updateCaptives(dt) {
+    for (const prop of this.level.props) {
+      if (prop.type !== 'prisoner' || prop.mood !== 'raving' || prop.freed) continue;
+      prop.screamTimer = (prop.screamTimer === undefined ? 3 + prop.seed * 6 : prop.screamTimer) - dt;
+      if (prop.screamTimer > 0) continue;
+      prop.screamTimer = 9 + Math.random() * 12;
+      if (Math.hypot(prop.x - this.player.x, prop.y - this.player.y) > 22) continue;
+      // A scream is a noise like any other, which means it brings company --
+      // and that is the whole reason a raving captive is a problem and not
+      // just a sad thing to walk past.
+      this.makeNoise(prop.x, prop.y, 1.6, { sfx: 'scream' });
+      this.emit('scream', { prop });
+    }
+  }
+
+  captiveLabel(prop) {
+    if (prop.mood === 'dead') {
+      return prop.searched ? { label: 'Nothing else on them', enabled: false }
+        : { label: 'Search the body', enabled: true };
+    }
+    if (prop.freed) return { label: 'They have said all they will', enabled: false };
+    if (prop.mood === 'raving') {
+      return { label: 'It does not hear you', hint: 'Its screaming carries', enabled: false };
+    }
+    if (prop.mood === 'begging') {
+      return prop.spoken
+        ? { label: 'End it', hint: 'They asked', enabled: true }
+        : { label: 'Listen', enabled: true };
+    }
+    return { label: prop.spoken ? 'Cut them down' : 'Speak to them', enabled: true };
+  }
+
+  useCaptive(prop) {
+    if (prop.mood === 'dead') {
+      prop.searched = true;
+      this.playSfx('chest', { x: prop.x, y: prop.y });
+      if (prop.carries) {
+        this.grantFrom(prop, prop.carries);
+        prop.carries = null;
+      } else {
+        this.particles.text(prop.x, prop.y - 1, 'nothing', '#8fa0b8', 12, 1.2);
+      }
+      this.emit('captive', { prop, action: 'searched' });
+      return true;
+    }
+    if (prop.mood === 'begging' && prop.spoken) return this.releaseCaptive(prop, true);
+    if (prop.mood === 'afraid' && prop.spoken) return this.releaseCaptive(prop, false);
+
+    prop.spoken = true;
+    this.playSfx('shrineBless', { x: prop.x, y: prop.y });
+    if (prop.mood === 'begging') {
+      this.particles.text(prop.x, prop.y - 1, 'Please.', '#c9b9d8', 13, 2.4);
+      this.emit('captive', { prop, action: 'begged' });
+      return true;
+    }
+    // They will talk. What they know is worth more than what they carry.
+    const hint = prop.knows === 'nothing' ? null : this.revealHint(prop.knows, 'captive');
+    if (hint) {
+      this.particles.text(prop.x, prop.y - 1, 'THEY KNOW', hint.colour, 13, 2.0);
+    } else {
+      this.particles.text(prop.x, prop.y - 1, 'I have been here too long.', '#c9b9d8', 12, 2.4);
+    }
+    this.emit('captive', { prop, action: 'spoke', hint });
+    return true;
+  }
+
+  // Cutting a captive loose. Merciful when they asked for it, which is the
+  // one case that pays instead of costing.
+  releaseCaptive(prop, mercy) {
+    prop.freed = true;
+    prop.mood = 'dead';
+    prop.searched = !prop.carries;
+    this.gore.pool(prop.x, prop.y, '#7a1f1c', 0.7);
+    if (mercy) {
+      this.playSfx('shrineHeal', { x: prop.x, y: prop.y });
+      const pts = this.run.score.addBonus(260 + this.level.depth * 30, this.run.mods);
+      this.particles.text(prop.x, prop.y - 1, 'MERCY  +' + Math.round(pts), '#8fb7ff', 14, 2.2);
+      // They had been saving it for whoever was willing.
+      const hint = this.revealHint(prop.knows === 'nothing' ? 'exit' : prop.knows, 'captive');
+      if (hint) this.particles.text(prop.x, prop.y - 1.7, 'THEY KNEW', hint.colour, 12, 2.0);
+      if (prop.carries) { this.grantFrom(prop, prop.carries); prop.carries = null; }
+    } else {
+      this.playSfx('gateUnlock', { x: prop.x, y: prop.y });
+      const pts = this.run.score.addBonus(120, this.run.mods);
+      this.particles.text(prop.x, prop.y - 1, 'FREED  +' + Math.round(pts), '#6fce87', 13, 1.8);
+    }
+    this.emit('captive', { prop, action: mercy ? 'mercy' : 'freed' });
+    return true;
+  }
+
+  // Killing one that did not ask. The labyrinth does not stop you; it simply
+  // takes it out of the tally, and it takes rather a lot.
+  murderCaptive(prop) {
+    if (prop.mood === 'dead' || prop.freed) return false;
+    const asked = prop.mood === 'begging' && prop.spoken;
+    this.gore.splat(prop.x, prop.y, '#7a1f1c', 1.4, this.player.faceX, this.player.faceY);
+    this.shake(6);
+    if (asked) return this.releaseCaptive(prop, true);
+
+    prop.freed = true;
+    prop.mood = 'dead';
+    prop.searched = !prop.carries;
+    this.gore.pool(prop.x, prop.y, '#7a1f1c', 1.1);
+    const cost = this.run.score.addPenalty(500 + this.level.depth * 60,
+      prop.mood === 'raving' ? 'the one that was screaming' : 'someone who did not ask');
+    this.particles.text(prop.x, prop.y - 1, 'MURDER  -' + Math.round(cost), '#e05a3c', 15, 2.4);
+    this.playSfx('curse', { x: prop.x, y: prop.y });
+    this.emit('captive', { prop, action: 'murdered', cost });
+    return true;
+  }
+
+  // Hands over whatever a captive was carrying, wherever it came from.
+  grantFrom(prop, kind) {
+    if (kind === 'potion') {
+      const healed = this.run.heal(30 + this.level.depth);
+      this.particles.text(prop.x, prop.y - 1, '+' + healed + ' vigour', '#6fce87', 14, 1.6);
+      this.emit('health', { hp: this.run.hp, maxHp: this.run.maxHp });
+    } else if (kind === 'arrows' && this.run.hasCrossbow) {
+      const got = this.run.giveArrows(2);
+      if (got > 0) this.particles.text(prop.x, prop.y - 1, '+' + got + ' bolts', '#e8b45c', 14, 1.6);
+    } else {
+      const pts = this.run.score.addBonus(180 + this.level.depth * 30, this.run.mods);
+      this.particles.text(prop.x, prop.y - 1, '+' + Math.round(pts), '#e8b45c', 14, 1.6);
+      this.playSfx('coins', { x: prop.x, y: prop.y });
+    }
+  }
+
+  // --- map scraps -----------------------------------------------------------
+  readMap(prop) {
+    if (prop.read) return false;
+    prop.read = true;
+    prop.consumed = true;
+    this.playSfx('reveal', { x: prop.x, y: prop.y });
+    const hint = this.revealHint(prop.shows, 'map');
+    if (hint) {
+      ring(this.particles, prop.x, prop.y, hint.colour, 18, 1.1, 0.8);
+      this.particles.text(prop.x, prop.y - 0.8, 'A MAP', hint.colour, 15, 1.8);
+    } else {
+      this.particles.text(prop.x, prop.y - 0.8, 'Nothing you did not know', '#8fa0b8', 12, 2);
+    }
+    this.emit('mapRead', { prop, hint });
+    return true;
   }
 
   // --- contextual action --------------------------------------------------
@@ -1052,6 +1323,12 @@ export class World {
               : 'Return to the labyrinth',
             enabled: true, hx: prop.x, hy: prop.y,
           };
+        } else if (prop.type === 'prisoner') {
+          const c = this.captiveLabel(prop);
+          target = { type: 'captive', prop, label: c.label, hint: c.hint || '',
+            enabled: c.enabled, hx: prop.x, hy: prop.y };
+        } else if (prop.type === 'mapScrap' && !prop.read) {
+          target = { type: 'map', prop, label: 'Read the map', enabled: true, hx: prop.x, hy: prop.y };
         } else if ((prop.type === 'shrine' || prop.type === 'shrineSmall') && !prop.used) {
           const heal = prop.flavour === 'heal' || prop.type === 'shrineSmall';
           target = {
@@ -1098,6 +1375,8 @@ export class World {
       case 'shrine': return this.useShrine(target.prop);
       case 'ladder': return this.useLadder(target.prop);
       case 'fire': return this.lightFire(target.fire);
+      case 'captive': return this.useCaptive(target.prop);
+      case 'map': return this.readMap(target.prop);
       default: return false;
     }
   }

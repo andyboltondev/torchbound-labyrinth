@@ -307,6 +307,18 @@ class Game {
           data.lit ? 'good' : '');
         break;
       case 'fireLit': this.hud.toast('The fire catches', 'good'); break;
+      case 'hint':
+        this.hud.toast('You are shown ' + data.hint.label, 'good');
+        break;
+      case 'mapRead':
+        if (!data.hint) this.hud.toast('The map tells you nothing new');
+        break;
+      case 'scream': this.combatHeat = Math.min(1, this.combatHeat + 0.2); break;
+      case 'captive':
+        if (data.action === 'murdered') this.hud.toast('That will be answered for', 'bad');
+        else if (data.action === 'mercy') this.hud.toast('You gave them what they asked for', 'good');
+        else if (data.action === 'freed') this.hud.toast('You cut them loose', 'good');
+        break;
       case 'distraction':
         this.hud.toast(data.count === 1 ? 'Something goes to look' : data.count + ' go to look', 'good');
         break;

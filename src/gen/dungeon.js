@@ -334,7 +334,11 @@ function zoneOf(zones, x, y) {
 
 const PERP = { '1,0': [0, 1], '-1,0': [0, 1], '0,1': [1, 0], '0,-1': [1, 0] };
 
-function tryCloset(grid, x, y, dir, reserved) {
+// `maxY` is the first row a closet may not touch. The vaults live in a strip
+// below the maze on the same grid, and a pocket two cells deep dug from the
+// bottom row of the maze reached straight into it -- which quietly made a
+// vault walkable and turned its ladder into scenery.
+function tryCloset(grid, x, y, dir, reserved, maxY) {
   const [dx, dy] = dir;
   const [px, py] = PERP[dx + ',' + dy];
   const bx = x - dx, by = y - dy; // first cell on the far side of the wall
@@ -355,6 +359,7 @@ function tryCloset(grid, x, y, dir, reserved) {
     let ok = true;
     for (const c of cells) {
       if (c.x <= 1 || c.y <= 1 || c.x >= grid.w - 2 || c.y >= grid.h - 2) { ok = false; break; }
+      if (maxY !== undefined && c.y >= maxY) { ok = false; break; }
       if (grid.get(c.x, c.y) !== T.WALL || reserved.has(grid.idx(c.x, c.y))) { ok = false; break; }
       // The pocket must not already touch open floor, or it is not a secret.
       for (const [nx, ny] of N4) {
@@ -395,7 +400,7 @@ function addSecrets(level, rng, depth) {
   rng.shuffle(closetSpots);
   for (const spot of closetSpots) {
     if (level.secrets.length >= wanted) break;
-    const cells = tryCloset(grid, spot.x, spot.y, spot.dir, reserved);
+    const cells = tryCloset(grid, spot.x, spot.y, spot.dir, reserved, level.mazeHeight);
     if (!cells) continue;
     for (const c of cells) { grid.set(c.x, c.y, T.FLOOR); reserved.add(grid.idx(c.x, c.y)); }
     reserved.add(grid.idx(spot.x, spot.y));
@@ -553,7 +558,7 @@ function addPostBattleChambers(level, rng) {
     }
     rng.shuffle(perimeter);
     for (const spot of perimeter) {
-      const cells = tryCloset(level.grid, spot.x, spot.y, spot.dir, level._reserved);
+      const cells = tryCloset(level.grid, spot.x, spot.y, spot.dir, level._reserved, level.mazeHeight);
       if (!cells) continue;
       for (const c of cells) {
         level.grid.set(c.x, c.y, T.FLOOR);
@@ -670,8 +675,78 @@ function addProps(level, rng, depth, ctx) {
   }
   if (staged && rng.bool(0.5)) place('shrine', { flavour: 'blessing', used: false });
 
+  addCaptives(level, rng, depth, busy, mark);
+  addMaps(level, rng, depth, place);
   addFires(level, rng, depth, candidates, mark);
   addDecor(level, rng, candidates);
+}
+
+// Somebody else got here first.
+//
+// Chained to the wall, and in one of four states. Most are dead. Some will
+// talk, and what they know is worth more than what they are carrying. Some
+// want it over with, and will say so. And some have been down here long
+// enough to have stopped making sense, and scream -- which brings company.
+function addCaptives(level, rng, depth, busy, mark) {
+  const { grid } = level;
+  // A captive needs a wall at its back, so the only candidates are floor
+  // tiles with exactly one wall neighbour that is not a doorway.
+  const spots = [];
+  for (const { x, y } of level.floorCells) {
+    if (busy.has(grid.idx(x, y))) continue;
+    let wall = null, walls = 0, exits = 0;
+    for (const [dx, dy] of N4) {
+      if (grid.get(x + dx, y + dy) === T.WALL) { walls++; wall = [dx, dy]; }
+      else exits++;
+    }
+    if (walls < 1 || exits < 2) continue;
+    spots.push({ x, y, wall });
+  }
+  rng.shuffle(spots);
+
+  // Deeper levels are longer and hold more of them, but the labyrinth is
+  // never a gallery: three is plenty to make a corridor feel occupied.
+  const count = Math.min(spots.length, 1 + rng.int(0, 1) + Math.min(2, Math.floor(depth / 4)));
+  for (let i = 0; i < count; i++) {
+    const spot = spots[i];
+    if (!spot) break;
+    // Most of them did not last. Of the ones that did, the deeper you are the
+    // worse the state they are in.
+    const alive = rng.bool(0.55);
+    const madness = Math.min(0.5, 0.15 + depth * 0.025);
+    const mood = !alive ? 'dead'
+      : rng.bool(madness) ? 'raving'
+        : rng.bool(0.3) ? 'begging' : 'afraid';
+    level.props.push({
+      type: 'prisoner',
+      x: spot.x + 0.5 + spot.wall[0] * 0.28,
+      y: spot.y + 0.5 + spot.wall[1] * 0.28,
+      wallX: spot.wall[0], wallY: spot.wall[1],
+      mood, seed: rng.next(), spoken: false, searched: false, freed: false,
+      // What they know, if they know anything. Resolved when they are spoken
+      // to, so it can point at what is still unfound at that moment.
+      knows: rng.weighted(['exit', 'key', 'secret', 'treasure', 'nothing'],
+        (k) => (k === 'nothing' ? 1.4 : k === 'exit' ? 1.6 : 1)),
+      carries: rng.bool(alive ? 0.25 : 0.45)
+        ? rng.weighted(['potion', 'arrows', 'treasure'], (t) => (t === 'treasure' ? 1 : 1.6)) : null,
+      id: 'prisoner_' + level.props.length,
+    });
+    mark(spot.x, spot.y, 1);
+  }
+}
+
+// Somebody's map of somewhere. Scratched into a slate, or rolled up in a dead
+// hand. Each one names one thing and marks it on the chart, and the ones
+// worth finding are the ones something is standing over.
+function addMaps(level, rng, depth, place) {
+  const count = 1 + (rng.bool(0.4) ? 1 : 0) + (level.zones.length >= 3 ? 1 : 0);
+  for (let i = 0; i < count; i++) {
+    place('mapScrap', {
+      shows: rng.weighted(['exit', 'key', 'secret', 'treasure', 'health'],
+        (k) => (k === 'exit' ? 1.8 : k === 'key' ? 1.4 : 1)),
+      read: false,
+    }, rng.bool(0.5));
+  }
 }
 
 // Fire in the labyrinth, in four sizes.

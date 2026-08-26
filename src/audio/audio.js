@@ -363,7 +363,7 @@ const THROTTLE = {
   hit: 0.03, step: 0.1, swing: 0.05, swingWall: 0.06,
   enemyDeath: 0.03, arrowHit: 0.03, alert: 0.18, windup: 0.08, enemyShot: 0.06,
   drip: 0.25, emberPop: 0.2, scurry: 0.8, flutter: 1.2,
-  creatureVoice: 0.35, clatterFar: 0.12,
+  creatureVoice: 0.35, clatterFar: 0.12, scream: 1.5,
 };
 
 const MAX_THROTTLE = Math.max(...Object.values(THROTTLE));
@@ -719,6 +719,12 @@ const EFFECTS = {
       a.noise({ dur: 0.07, type: 'bandpass', f0: 2200 * vary(0.4), q: 3, peak: 0.11, delay: i * 0.055 });
     }
     a.tone({ freq: 260 * vary(0.3), to: 120, type: 'triangle', dur: 0.16, peak: 0.06 });
+  },
+  // A human throat, which is a sound nothing else down here makes.
+  scream: (a) => {
+    a.tone({ freq: 420 * vary(0.2), to: 780, type: 'sawtooth', dur: 0.9, peak: 0.2, attack: 0.04 });
+    a.tone({ freq: 860 * vary(0.2), to: 640, type: 'triangle', dur: 0.8, peak: 0.09, attack: 0.06 });
+    a.noise({ dur: 0.7, type: 'bandpass', f0: 1600, f1: 900, q: 1.6, peak: 0.07, attack: 0.05 });
   },
   // --- small things living in the walls
   scurry: (a) => {

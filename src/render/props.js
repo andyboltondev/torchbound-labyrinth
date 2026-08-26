@@ -231,8 +231,138 @@ export function drawProp(ctx, prop, t) {
     case 'crossbow': drawCrossbowPickup(ctx, sx, sy, t); break;
     case 'treasure': drawTreasure(ctx, sx, sy, t); break;
     case 'ladder': drawLadder(ctx, sx, sy, t, prop); break;
+    case 'prisoner': drawPrisoner(ctx, sx, sy, t, prop); break;
+    case 'mapScrap': drawMapScrap(ctx, sx, sy, t, prop); break;
     default: break;
   }
+}
+
+// Somebody chained to the wall. Four states, and the whole point is that you
+// can tell which one you are looking at before you are close enough to act:
+// a slumped body, someone who lifts their head, someone reaching for you, and
+// something that has stopped being a someone.
+function drawPrisoner(ctx, sx, sy, t, prop) {
+  const r = prop.seed;
+  const dead = prop.mood === 'dead' || prop.freed;
+  const raving = prop.mood === 'raving';
+  const begging = prop.mood === 'begging';
+  const breathe = dead ? 0 : Math.sin(t * (raving ? 5.2 : 1.5) + r * 9) * (raving ? 2.2 : 0.9);
+  const slump = dead ? 12 : begging ? 5 : 2;
+
+  pedestalShadow(ctx, sx, sy, 11);
+
+  // The chains, from the wall behind down to the wrists. Drawn first so the
+  // body hangs in front of them.
+  ctx.strokeStyle = rgba('#6b6459', 0.85);
+  ctx.lineWidth = 1.7;
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(sx + side * 9, sy - 40);
+    ctx.quadraticCurveTo(sx + side * 11, sy - 30 + breathe * 0.4, sx + side * 7, sy - 24 + slump);
+    ctx.stroke();
+  }
+
+  const skin = dead ? '#8c8378' : raving ? '#c9a184' : '#b5967c';
+  const cloth = dead ? '#3d3a34' : '#4a4239';
+  const headY = sy - 30 + slump + breathe * 0.5;
+
+  // Legs, folded under.
+  ctx.strokeStyle = rgba(cloth, 0.95);
+  ctx.lineWidth = 4;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(sx - 2, sy - 14 + slump * 0.6);
+  ctx.lineTo(sx - 6, sy - 2);
+  ctx.moveTo(sx + 2, sy - 14 + slump * 0.6);
+  ctx.lineTo(sx + 6, sy - 3);
+  ctx.stroke();
+
+  // Torso.
+  ctx.fillStyle = cloth;
+  ctx.beginPath();
+  ctx.moveTo(sx - 5, sy - 13 + slump * 0.6);
+  ctx.lineTo(sx + 5, sy - 13 + slump * 0.6);
+  ctx.lineTo(sx + 4.5, headY + 5);
+  ctx.lineTo(sx - 4.5, headY + 5);
+  ctx.closePath();
+  ctx.fill();
+
+  // Arms, up to the wrists the chains hold.
+  ctx.strokeStyle = rgba(skin, 0.95);
+  ctx.lineWidth = 3.4;
+  for (const side of [-1, 1]) {
+    const reachOut = raving ? 3.5 : begging ? 2 : 0;
+    ctx.beginPath();
+    ctx.moveTo(sx + side * 4, headY + 6);
+    ctx.lineTo(sx + side * (7 + reachOut), sy - 24 + slump);
+    ctx.stroke();
+  }
+
+  // Head. Dead ones hang forward; raving ones are thrown back.
+  ctx.fillStyle = skin;
+  ctx.beginPath();
+  ctx.ellipse(sx + (dead ? 2.5 : 0), headY, 4.8, 5.2, dead ? 0.6 : raving ? -0.4 : 0, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = rgba('#241d19', 0.75);
+  if (dead) {
+    ctx.fillRect(sx - 1, headY - 1, 5, 1.6);
+  } else if (raving) {
+    // An open mouth, which is all a scream needs to be at this size.
+    ctx.beginPath();
+    ctx.ellipse(sx + 1, headY + 2, 1.4, 2 + Math.abs(breathe) * 0.4, 0, 0, TAU);
+    ctx.fill();
+    ctx.fillRect(sx - 2.4, headY - 1.4, 5, 1.2);
+  } else {
+    ctx.fillRect(sx - 2.4, headY - 1, 5, 1.2);
+  }
+
+  // Something to catch the eye of a player who has not learned the shapes yet.
+  if (!dead && !prop.spoken) {
+    const pulse = 0.4 + Math.sin(t * 2.4 + r * 7) * 0.25;
+    ctx.fillStyle = rgba(raving ? '#e05a3c' : begging ? '#c9b9d8' : '#8fb7ff', pulse);
+    ctx.beginPath();
+    ctx.arc(sx, headY - 12, 1.8, 0, TAU);
+    ctx.fill();
+  }
+}
+
+// A map. Somebody drew it, and did not get to use it.
+function drawMapScrap(ctx, sx, sy, t, prop) {
+  const bob = Math.sin(t * 1.6 + prop.x) * 1.2;
+  pedestalShadow(ctx, sx, sy, 8);
+  ctx.save();
+  ctx.translate(sx, sy - 5 + bob);
+  ctx.rotate(-0.22);
+  ctx.fillStyle = '#cbbb92';
+  ctx.beginPath();
+  ctx.moveTo(-7, -5); ctx.lineTo(7, -6); ctx.lineTo(8, 5); ctx.lineTo(-6, 6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = rgba('#000000', 0.16);
+  ctx.beginPath();
+  ctx.moveTo(-7, -5); ctx.lineTo(-6, 6); ctx.lineTo(-3, 5); ctx.lineTo(-4, -5);
+  ctx.closePath();
+  ctx.fill();
+  // Lines on it. Not a real map, just enough marks to read as one.
+  ctx.strokeStyle = rgba('#5a4a30', 0.8);
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(-4, -2); ctx.lineTo(1, -2); ctx.lineTo(1, 2); ctx.lineTo(5, 2);
+  ctx.moveTo(-2, 4); ctx.lineTo(-2, -3);
+  ctx.stroke();
+  ctx.fillStyle = rgba('#a03a2a', 0.85);
+  ctx.beginPath();
+  ctx.arc(5, 2, 1.4, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+  // A glimmer, so it is findable in a room full of debris.
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = rgba('#e8d9a8', 0.1 + Math.sin(t * 2.1 + prop.y) * 0.05);
+  ctx.beginPath();
+  ctx.ellipse(sx, sy - 5, 13, 7, 0, 0, TAU);
+  ctx.fill();
+  ctx.restore();
 }
 
 function pedestalShadow(ctx, sx, sy, r = 15) {

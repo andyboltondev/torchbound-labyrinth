@@ -424,4 +424,8 @@ const PROP_MARKS = {
   arrows: { colour: '#c9a35c', shape: 'circle', size: 1.7 },
   crossbow: { colour: '#e8b45c', shape: 'diamond', size: 2.6 },
   treasure: { colour: '#e8d05c', shape: 'diamond', size: 2.2 },
+  // People stay on the chart whatever happened to them: knowing where you
+  // left one is part of the point.
+  prisoner: { colour: '#c9b9d8', shape: 'up', size: 2.2, keepWhenSpent: true },
+  mapScrap: { colour: '#e8d9a8', shape: 'square', size: 2 },
 };
