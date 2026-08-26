@@ -1,7 +1,8 @@
 // The player character: movement (including ice and mud), the sword, the
 // crossbow, and the shield relic's damage resolution.
 
-import { moveEntity, inCone } from './physics.js';
+import { inCone } from './physics.js';
+import { GridMover } from './gridmove.js';
 import { clamp, damp } from '../core/util.js';
 
 const BASE_SPEED = 3.7;
@@ -13,8 +14,9 @@ export class Player {
   constructor(run) {
     this.run = run;
     this.x = 0; this.y = 0;
-    this.vx = 0; this.vy = 0;
     this.radius = 0.3;
+    this.mover = new GridMover(this);
+    this.knockX = 0; this.knockY = 0;
     this.faceX = 1; this.faceY = 0;
     this.moving = false;
     this.speedNow = 0;
@@ -31,12 +33,12 @@ export class Player {
     this.torchFlicker = 1;
     this.hasCrossbow = false;
     this.hasShieldRelic = false;
-    this.footTimer = 0;
+    this.tileX = 0;
+    this.tileY = 0;
   }
 
   placeAt(x, y) {
-    this.x = x + 0.5; this.y = y + 0.5;
-    this.vx = 0; this.vy = 0;
+    this.mover.placeAt(x, y);
     this.attack = null;
     this.attackCooldown = 0;
     this.fireCooldown = 0;
@@ -59,6 +61,8 @@ export class Player {
     this.slowTimer = Math.max(0, this.slowTimer - dt);
     this.hasCrossbow = this.run.hasCrossbow;
     this.hasShieldRelic = !!mods.shield;
+    this.knockX *= Math.exp(-9 * dt);
+    this.knockY *= Math.exp(-9 * dt);
 
     if (this.burnTimer > 0) {
       this.burnTimer -= dt;
@@ -70,55 +74,36 @@ export class Player {
   }
 
   _move(dt, world, intent, mods, hz) {
-    const ice = !mods.hazardFooting && hz.slide;
-    const mudMul = mods.hazardFooting ? 1 : (hz.playerSpeed || 1);
-    const attackPenalty = this.attack ? 0.4 : 1;
-    const slowPenalty = this.slowTimer > 0 ? 0.65 : 1;
-    const speed = BASE_SPEED * mods.moveSpeed * mudMul * attackPenalty * slowPenalty;
+    const ice = !mods.hazardFooting && !!hz.slide;
+    const mud = mods.hazardFooting ? 1 : (hz.playerSpeed || 1);
+    const attacking = this.attack ? 0.55 : 1;
+    const chilled = this.slowTimer > 0 ? 0.7 : 1;
+    const speed = BASE_SPEED * mods.moveSpeed * mud * attacking * chilled;
 
-    const wantX = intent.moveX * speed;
-    const wantY = intent.moveY * speed;
+    const hasInput = intent.moveX !== 0 || intent.moveY !== 0;
+    this.mover.update(dt, world, hasInput ? { x: intent.moveX, y: intent.moveY } : null, {
+      speed,
+      ice,
+      onEnterTile: (x, y) => world.onPlayerEnterTile(x, y),
+    });
 
-    if (ice) {
-      // Momentum carries. Steering is weak, and letting go of the stick does
-      // NOT stop you -- only a little drag bleeds the slide off, which is the
-      // whole point of the hazard.
-      const steering = intent.moveX !== 0 || intent.moveY !== 0;
-      if (steering) {
-        const accel = 4.4 * dt;
-        this.vx += (wantX - this.vx) * accel;
-        this.vy += (wantY - this.vy) * accel;
-      }
-      const drag = Math.exp(-(steering ? 0.12 : 0.45) * dt);
-      this.vx *= drag;
-      this.vy *= drag;
-    } else {
-      const responsiveness = 1 - Math.exp(-26 * dt);
-      this.vx += (wantX - this.vx) * responsiveness;
-      this.vy += (wantY - this.vy) * responsiveness;
-    }
+    this.speedNow = this.mover.speedNow;
+    this.moving = this.mover.moving;
+    this.tileX = this.mover.tileX;
+    this.tileY = this.mover.tileY;
 
-    const hit = moveEntity(world, this, this.vx * dt, this.vy * dt);
-    if (hit.hitX) this.vx *= ice ? -0.15 : 0;
-    if (hit.hitY) this.vy *= ice ? -0.15 : 0;
-
-    this.speedNow = Math.hypot(this.vx, this.vy);
-    this.moving = this.speedNow > 0.35;
-    if (intent.moveX !== 0 || intent.moveY !== 0) {
-      const m = Math.hypot(intent.moveX, intent.moveY);
-      this.faceX = damp(this.faceX, intent.moveX / m, 22, dt);
-      this.faceY = damp(this.faceY, intent.moveY / m, 22, dt);
+    // Face where you are travelling; if a wall stops you, face the wall you
+    // are pushing against, so a cracked wall can be squared up to and struck.
+    // A swing in progress locks the facing, so the arc lands where it was
+    // aimed rather than sweeping round with the feet.
+    const heading = this.mover.moving ? this.mover.heading : null;
+    const target = this.attack ? null : (heading || (hasInput ? { x: intent.moveX, y: intent.moveY } : null));
+    if (target) {
+      const m = Math.hypot(target.x, target.y) || 1;
+      this.faceX = damp(this.faceX, target.x / m, 20, dt);
+      this.faceY = damp(this.faceY, target.y / m, 20, dt);
       const fm = Math.hypot(this.faceX, this.faceY) || 1;
       this.faceX /= fm; this.faceY /= fm;
-    }
-
-    // Footsteps: audio and a puff of whatever is underfoot.
-    if (this.moving) {
-      this.footTimer -= dt * this.speedNow;
-      if (this.footTimer <= 0) {
-        this.footTimer = 1.15;
-        world.onFootstep(this);
-      }
     }
   }
 

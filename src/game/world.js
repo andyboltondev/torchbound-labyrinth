@@ -54,6 +54,7 @@ export class World {
     }
     this.revealedProps = new Set();
     this.sealBlocks = new Set();
+    this.occupied = new Map();   // tile index -> enemy id, refreshed each frame
 
     this.flow = null;
     this.flowTimer = 0;
@@ -137,6 +138,7 @@ export class World {
     this.torch.update(dt, this.hazardMods);
     this.player.torchFlicker = this.torch.flicker;
 
+    this._refreshOccupancy();
     this.player.update(dt, this, intent);
     this.updateFlow(dt);
     this.refreshVisibility(dt);
@@ -158,6 +160,43 @@ export class World {
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       if (this.enemies[i].dead) this.enemies.splice(i, 1);
     }
+  }
+
+  // Rebuilt once a frame so the direction chooser can reject tiles another
+  // enemy already stands on or is stepping into.
+  _refreshOccupancy() {
+    this.occupied.clear();
+    for (const e of this.enemies) {
+      if (e.dead || !e.mover) continue;
+      this.occupied.set(this.grid.idx(e.mover.tileX, e.mover.tileY), e.id);
+      if (e.mover.moving) this.occupied.set(this.grid.idx(e.mover.toX, e.mover.toY), e.id);
+    }
+  }
+
+  tileTakenBy(x, y, id) {
+    const who = this.occupied.get(this.grid.idx(x, y));
+    if (who !== undefined && who !== id) return true;
+    // Enemies stop next to the player rather than on top of them.
+    const pm = this.player.mover;
+    if (pm.tileX === x && pm.tileY === y) return true;
+    if (pm.moving && pm.toX === x && pm.toY === y) return true;
+    return false;
+  }
+
+  // One footfall per tile, which is exactly the rhythm grid movement wants.
+  onPlayerEnterTile(x, y) {
+    const hz = this.hazardMods;
+    const colour = hz.footstepSplash ? '#8fb4c4' : hz.footprints ? '#4a3722' : '#6f6a5e';
+    footDust(this.particles, x + 0.5, y + 0.5, colour);
+    this.playSfx(hz.footstepSplash ? 'stepWet' : hz.playerSpeed ? 'stepMud' : 'step');
+  }
+
+  // Knockback is presentation only: shoving a grid mover off its lane would
+  // undo the whole point of tile-to-tile movement.
+  knock(entity, dx, dy, power = 0.28) {
+    const m = Math.hypot(dx, dy) || 1;
+    entity.knockX = (dx / m) * power;
+    entity.knockY = (dy / m) * power;
   }
 
   updateHazard() {
@@ -301,7 +340,7 @@ export class World {
       e.takeDamage(damage, this, 'sword');
       const dx = e.x - player.x, dy = e.y - player.y;
       const m = Math.hypot(dx, dy) || 1;
-      moveEntity(this, e, (dx / m) * 0.22, (dy / m) * 0.22);
+      this.knock(e, dx, dy, 0.3);
       burstBlood(this.particles, e.x, e.y, dx / m, dy / m);
       this.particles.text(e.x, e.y, Math.round(damage), '#ffe0b0', 13);
     }
@@ -490,13 +529,6 @@ export class World {
     burstStone(this.particles, enemy.x, enemy.y, '#4a5540');
     this.playSfx('ambush');
     this.shake(5);
-  }
-
-  onFootstep(player) {
-    const hz = this.hazardMods;
-    const colour = hz.footstepSplash ? '#8fb4c4' : hz.footprints ? '#4a3722' : '#6f6a5e';
-    footDust(this.particles, player.x, player.y, colour);
-    this.playSfx(hz.footstepSplash ? 'stepWet' : hz.playerSpeed ? 'stepMud' : 'step');
   }
 
   // --- pickups ------------------------------------------------------------
@@ -945,9 +977,7 @@ export class World {
     const d = Math.hypot(this.player.x - boss.x, this.player.y - boss.y);
     if (d <= radius) {
       this.damagePlayer(boss.damage, boss);
-      const dx = this.player.x - boss.x, dy = this.player.y - boss.y;
-      const m = Math.hypot(dx, dy) || 1;
-      moveEntity(this, this.player, (dx / m) * 0.8, (dy / m) * 0.8);
+      this.knock(this.player, this.player.x - boss.x, this.player.y - boss.y, 0.5);
     }
   }
 

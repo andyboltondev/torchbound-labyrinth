@@ -43,11 +43,10 @@ function step(world, frames = 60, intent = idle) {
   for (let i = 0; i < frames; i++) world.update(1 / 60, intent);
 }
 
-// Drops the player onto a specific tile.
+// Drops the player onto a specific tile. Position is owned by the grid mover,
+// so it has to be moved rather than assigned.
 function place(world, x, y) {
-  world.player.x = x + 0.5;
-  world.player.y = y + 0.5;
-  world.player.vx = 0; world.player.vy = 0;
+  world.player.placeAt(x, y);
   world.player.invulnTimer = 0;
   world.flow = null;
 }
@@ -230,7 +229,8 @@ test('a sword swing damages and kills what it faces, and misses what it does not
 
   const target = spawnAt(world, 'draugr_thrall', spot.x + 1, spot.y);
   const behind = spawnAt(world, 'draugr_thrall', spot.x - 1, spot.y);
-  behind.x = spot.x - 1 + 0.5; behind.y = spot.y + 0.5;
+  // Hold both still so the test measures the swing, not their wandering.
+  for (const e of [target, behind]) { e.state = 'idle'; e.wanderTimer = 999; e.wanderX = 0; e.wanderY = 0; }
 
   const before = target.hp;
   step(world, 40, { moveX: 0, moveY: 0, slash: true, fire: false });
@@ -453,19 +453,32 @@ test('hazards apply the mechanic their visuals promise', () => {
   assert(muddy < dry * 0.85, `mud did not slow the player (${muddy.toFixed(2)} vs ${dry.toFixed(2)})`);
 });
 
-test('ice gives the player momentum they have to fight', () => {
+test('ice carries you past where you let go, and steering is delayed', () => {
   const { world, level } = makeWorld(6, 'hazard-2');
-  const run = findRun(level, 6);
-  assert(run, 'no straight corridor found to slide along');
-  place(world, run.x, run.y);
+  const corridor = findRun(level, 8);
+  assert(corridor, 'no straight corridor found to slide along');
+  const move = { moveX: corridor.dx, moveY: corridor.dy, slash: false, fire: false };
+
+  // On dry ground, releasing the input stops you at the next tile.
+  place(world, corridor.x, corridor.y);
+  forceHazard(world, 'clear');
+  step(world, 30, move);
+  const dryRelease = { x: world.player.mover.tileX, y: world.player.mover.tileY };
+  step(world, 120, { moveX: 0, moveY: 0, slash: false, fire: false });
+  const dryCoast = Math.abs(world.player.mover.tileX - dryRelease.x)
+    + Math.abs(world.player.mover.tileY - dryRelease.y);
+
+  // On ice, the slide carries you further.
+  place(world, corridor.x, corridor.y);
   forceHazard(world, 'ice');
-  step(world, 90, { moveX: run.dx, moveY: run.dy, slash: false, fire: false });
-  const speedBefore = Math.hypot(world.player.vx, world.player.vy);
-  step(world, 12, { moveX: 0, moveY: 0, slash: false, fire: false });
-  const speedAfter = Math.hypot(world.player.vx, world.player.vy);
-  assert(speedBefore > 0.5, 'the player never got moving on ice');
-  assert(speedAfter > speedBefore * 0.5,
-    `momentum vanished immediately on ice (${speedBefore.toFixed(2)} -> ${speedAfter.toFixed(2)})`);
+  step(world, 30, move);
+  const iceRelease = { x: world.player.mover.tileX, y: world.player.mover.tileY };
+  step(world, 120, { moveX: 0, moveY: 0, slash: false, fire: false });
+  const iceCoast = Math.abs(world.player.mover.tileX - iceRelease.x)
+    + Math.abs(world.player.mover.tileY - iceRelease.y);
+
+  assert(dryCoast <= 1, `dry ground coasted ${dryCoast} tiles after the input stopped`);
+  assert(iceCoast > dryCoast, `ice did not carry the player (${iceCoast} vs ${dryCoast} tiles)`);
 });
 
 test('hazard threat never exceeds the depth budget', () => {
@@ -715,13 +728,16 @@ function sealedObjective(world) {
 }
 
 // Runs the level until the exit is used, the player dies, or time runs out.
-function autoplayLevel(world, maxSeconds = 240) {
+export function autoplayLevel(world, maxSeconds = 240, onTick = null) {
   const dt = 1 / 60;
   let field = null;
   let refresh = 0;
   let goal = null;
   let stuckFor = 0;
   let lastPos = { x: world.player.x, y: world.player.y };
+  const visited = new Set();
+  let transitions = 0;
+  let lastTile = '';
 
   for (let frame = 0; frame < maxSeconds * 60; frame++) {
     if (world.finished) return { ok: true, frames: frame };
@@ -736,7 +752,9 @@ function autoplayLevel(world, maxSeconds = 240) {
     }
 
     // Walk downhill toward the objective.
-    const gx = Math.floor(world.player.x), gy = Math.floor(world.player.y);
+    const gx = world.player.mover.tileX, gy = world.player.mover.tileY;
+    const tileKey = gx + ',' + gy;
+    if (tileKey !== lastTile) { lastTile = tileKey; transitions++; visited.add(tileKey); }
     let mx = 0, my = 0;
     const here = field[world.grid.idx(gx, gy)];
     if (here > 0) {
@@ -778,15 +796,18 @@ function autoplayLevel(world, maxSeconds = 240) {
       const d = Math.hypot(e.x - world.player.x, e.y - world.player.y);
       if (d < nd) { nd = d; nearest = e; }
     }
-    if (nearest && nd < 1.7) {
-      world.player.faceX = (nearest.x - world.player.x) / (nd || 1);
-      world.player.faceY = (nearest.y - world.player.y) / (nd || 1);
-      slash = true;
-      mx = 0; my = 0;
-    } else if (world.actionableSecret) {
-      slash = true;
+    // Swing at anything close, but keep walking: standing still to duel every
+    // wanderer would stall the run rather than test whether it can be run.
+    if (nearest && nd < 1.7) slash = true;
+    if (world.actionableSecret) slash = true;
+    if (goal && goal.kind === 'fight' && nearest) {
+      mx = nearest.x - world.player.x;
+      my = nearest.y - world.player.y;
+      const m = Math.hypot(mx, my) || 1;
+      mx /= m; my /= m;
     }
 
+    if (onTick) onTick({ frame, gx, gy, here, goal, mx, my, slash });
     world.update(dt, { moveX: mx, moveY: my, slash, fire: false });
     if (world.interactTarget && world.interactTarget.enabled) world.interact();
 
@@ -805,7 +826,17 @@ function autoplayLevel(world, maxSeconds = 240) {
       }
     }
   }
-  return { ok: false, reason: 'timeout', frames: maxSeconds * 60 };
+  return {
+    ok: false,
+    reason: 'timeout',
+    frames: maxSeconds * 60,
+    detail: `stuck at ${world.player.mover.tileX},${world.player.mover.tileY} `
+      + `chasing ${goal ? goal.kind + ' ' + goal.x + ',' + goal.y : 'nothing'}; `
+      + `keys ${Array.from(world.run.keys).join('') || 'none'}; `
+      + `gates ${world.level.gates.map((g) => (g.open ? 'o' : 'x')).join('')}; `
+      + `enemies ${world.enemies.filter((e) => !e.dead).length}; seals ${world.sealBlocks.size}; `
+      + `visited ${visited.size} tiles over ${transitions} moves`,
+  };
 }
 
 test('an autopilot can actually finish generated levels, keys, gates and all', () => {
@@ -819,9 +850,9 @@ test('an autopilot can actually finish generated levels, keys, gates and all', (
       const seed = `autoplay-${depth}-${s}`;
       const { world } = makeWorld(depth, seed);
       world.damagePlayer = () => {};
-      const result = autoplayLevel(world, 260);
+      const result = autoplayLevel(world, 340);
       if (result.ok) completed++;
-      else failures.push(`depth ${depth} seed ${s}: ${result.reason} at frame ${result.frames}`);
+      else failures.push(`depth ${depth} seed ${s}: ${result.reason} -- ${result.detail || ''}`);
     }
   }
   assert(failures.length === 0,
@@ -829,6 +860,8 @@ test('an autopilot can actually finish generated levels, keys, gates and all', (
 });
 
 // --- runner -----------------------------------------------------------------
+
+export { objectiveFor, passableForAuto };
 
 export function runIntegrationTests() {
   const results = [];

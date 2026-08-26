@@ -36,9 +36,7 @@ window.__shot = async (name, scale = 0.55, quality = 0.62) => {
 // Teleport for reaching a feature quickly during testing.
 window.__goto = (x, y) => {
   const g = window.__game;
-  g.world.player.x = x + 0.5;
-  g.world.player.y = y + 0.5;
-  g.world.player.vx = 0; g.world.player.vy = 0;
+  g.world.player.placeAt(x, y);
   g.world.flow = null;
   g.renderer.cameraReady = false;
 };

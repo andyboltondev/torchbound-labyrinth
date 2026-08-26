@@ -5,7 +5,8 @@
 // torchlight, which is what turns a bigger flame into a real trade-off.
 
 import { BEHAVIOUR, ENEMIES, ELITE_MOD } from './enemyData.js';
-import { moveEntity, hasLineOfSight } from './physics.js';
+import { hasLineOfSight } from './physics.js';
+import { GridMover } from './gridmove.js';
 import { clamp, damp } from '../core/util.js';
 
 const STATE = {
@@ -41,8 +42,13 @@ export class Enemy {
     this.dormant = !!spawn.dormant;
     this.sealed = false;      // held in place until its encounter triggers
     this.faceX = 1; this.faceY = 0;
-    this.vx = 0; this.vy = 0;
     this.speedNow = 0;
+    this.mover = new GridMover(this);
+    this.mover.placeAt(Math.floor(spawn.x), Math.floor(spawn.y));
+    this.anchorTile = { x: this.mover.tileX, y: this.mover.tileY };
+    this.knockX = 0; this.knockY = 0;
+    this._desire = null;
+    this._desiredSpeed = 2.5;
     this.animTime = rng ? rng.float(0, 5) : 0;
     this.windup = 0;
     this.cooldown = rng ? rng.float(0, 0.6) : 0;
@@ -122,6 +128,7 @@ export class Enemy {
     this.alertPulse = Math.max(0, this.alertPulse - dt * 1.4);
     this.cooldown = Math.max(0, this.cooldown - dt);
     this.dashTimer = Math.max(0, this.dashTimer - dt);
+    this._desire = null;
 
     const speedMul = (mods.enemySpeed || 1) * (hz.enemySpeed || 1) * (this.elite ? ELITE_MOD.speed : 1);
     const rateMul = (hz.enemyAttackRate || 1);
@@ -129,48 +136,49 @@ export class Enemy {
     const dist = Math.hypot(p.x - this.x, p.y - this.y);
 
     if (this.state === STATE.DORMANT) {
-      this.speedNow = 0;
       if (!this.sealed && dist < 2.6 && hasLineOfSight(world, this.x, this.y, p.x, p.y)) {
         this.alert(world, 'ambush');
       }
-      return;
-    }
-    if (this.sealed) { this.speedNow = 0; return; }
+    } else if (this.sealed) {
+      // Held in place until the encounter it belongs to is triggered.
+    } else {
+      const sees = this.canSeePlayer(world);
+      if (sees) {
+        if (this.state === STATE.IDLE || this.state === STATE.RETURN) this.alert(world);
+        this.lastKnown = { x: p.x, y: p.y };
+        this.lostTimer = this.behaviour === BEHAVIOUR.PURSUER ? 9 : 4.5;
+      } else if (this.state !== STATE.IDLE) {
+        this.lostTimer -= dt;
+        if (this.lostTimer <= 0) {
+          this.state = this.guard || this.behaviour === BEHAVIOUR.DEFENDER ? STATE.RETURN : STATE.IDLE;
+          this.lastKnown = null;
+        }
+      }
 
-    const sees = this.canSeePlayer(world);
-    if (sees) {
-      if (this.state === STATE.IDLE || this.state === STATE.RETURN) this.alert(world);
-      this.lastKnown = { x: p.x, y: p.y };
-      this.lostTimer = this.behaviour === BEHAVIOUR.PURSUER ? 9 : 4.5;
-    } else if (this.state !== STATE.IDLE) {
-      this.lostTimer -= dt;
-      if (this.lostTimer <= 0) {
-        this.state = this.guard || this.behaviour === BEHAVIOUR.DEFENDER ? STATE.RETURN : STATE.IDLE;
-        this.lastKnown = null;
+      if (this.windup > 0) {
+        // Winding up roots the attacker: the telegraph has to be readable.
+        this.windup -= dt * rateMul;
+        this._face(p.x - this.x, p.y - this.y, dt, 6);
+        if (this.windup <= 0) {
+          this.windup = 0;
+          this._release(world, dist);
+        }
+      } else {
+        switch (this.behaviour) {
+          case BEHAVIOUR.CHARGER: this._charger(dt, world, dist, speedMul, rateMul); break;
+          case BEHAVIOUR.PURSUER: this._pursuer(dt, world, dist, speedMul, rateMul); break;
+          case BEHAVIOUR.SKIRMISHER: this._skirmisher(dt, world, dist, speedMul, rateMul); break;
+          case BEHAVIOUR.DEFENDER: this._defender(dt, world, dist, speedMul, rateMul); break;
+          case BEHAVIOUR.RANGED: this._ranged(dt, world, dist, speedMul, rateMul); break;
+          case BEHAVIOUR.AMBUSHER: this._ambusher(dt, world, dist, speedMul, rateMul); break;
+          default: this._pursuer(dt, world, dist, speedMul, rateMul); break;
+        }
       }
     }
 
-    // --- attack resolution, shared by every archetype
-    if (this.windup > 0) {
-      this.windup -= dt * rateMul;
-      this.speedNow = 0;
-      if (this.windup <= 0) {
-        this.windup = 0;
-        this._release(world, dist);
-      }
-      this._face(p.x - this.x, p.y - this.y, dt, 6);
-      return;
-    }
-
-    switch (this.behaviour) {
-      case BEHAVIOUR.CHARGER: this._charger(dt, world, dist, speedMul, rateMul); break;
-      case BEHAVIOUR.PURSUER: this._pursuer(dt, world, dist, speedMul, rateMul); break;
-      case BEHAVIOUR.SKIRMISHER: this._skirmisher(dt, world, dist, speedMul, rateMul); break;
-      case BEHAVIOUR.DEFENDER: this._defender(dt, world, dist, speedMul, rateMul); break;
-      case BEHAVIOUR.RANGED: this._ranged(dt, world, dist, speedMul, rateMul); break;
-      case BEHAVIOUR.AMBUSHER: this._ambusher(dt, world, dist, speedMul, rateMul); break;
-      default: this._pursuer(dt, world, dist, speedMul, rateMul); break;
-    }
+    // Always applied, so a step already under way finishes cleanly no matter
+    // what the behaviour above decided.
+    this._applyMovement(dt, world);
   }
 
   _face(dx, dy, dt, rate = 10) {
@@ -182,15 +190,28 @@ export class Enemy {
     this.faceX /= fm; this.faceY /= fm;
   }
 
+  // Records where this enemy wants to go. Movement itself is applied once per
+  // frame in _applyMovement, so a step in progress always lands cleanly.
   _step(world, dt, dx, dy, speed) {
     const m = Math.hypot(dx, dy);
-    if (m < 0.0001) { this.speedNow = 0; return; }
-    const vx = (dx / m) * speed;
-    const vy = (dy / m) * speed;
-    const before = { x: this.x, y: this.y };
-    moveEntity(world, this, vx * dt, vy * dt);
-    this.speedNow = Math.hypot(this.x - before.x, this.y - before.y) / Math.max(dt, 0.0001);
-    this._face(vx, vy, dt);
+    if (m < 0.0001) return;
+    this._desire = { x: dx / m, y: dy / m };
+    this._desiredSpeed = speed;
+  }
+
+  _applyMovement(dt, world) {
+    const blocked = (x, y) => world.tileTakenBy(x, y, this.id);
+    this.mover.update(dt, world, this._desire, {
+      speed: this._desiredSpeed,
+      isBlocked: blocked,
+    });
+    this.speedNow = this.mover.speedNow;
+    const h = this.mover.moving ? this.mover.heading : null;
+    if (h) this._face(h.x, h.y, dt, 12);
+    else if (this._desire) this._face(this._desire.x, this._desire.y, dt, 8);
+    this._desire = null;
+    this.knockX *= Math.exp(-9 * dt);
+    this.knockY *= Math.exp(-9 * dt);
   }
 
   // Follow the shared flow field toward the player; fall back to a straight
@@ -218,7 +239,7 @@ export class Enemy {
 
   _returnHome(world, dt, speed) {
     const dx = this.anchor.x - this.x, dy = this.anchor.y - this.y;
-    if (Math.hypot(dx, dy) < 0.4) { this.state = STATE.IDLE; this.speedNow = 0; return; }
+    if (Math.hypot(dx, dy) < 0.7) { this.state = STATE.IDLE; return; }
     this._step(world, dt, dx, dy, speed * 0.7);
   }
 
