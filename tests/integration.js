@@ -790,6 +790,43 @@ test('a boss kill awards a score bonus and is recorded on the run', () => {
   assert(run.bossesDefeated === 1, 'the boss kill was not recorded on the run');
 });
 
+test('a boss woken by a bolt from across the hall still announces itself', () => {
+  const { world } = makeWorld(10, 'boss-wake-ranged');
+  const boss = world.boss;
+  assert(!boss.awake, 'the boss was already awake before anything touched it');
+  const seen = [];
+  world.on((type) => seen.push(type));
+  // A crossbow bolt reaches far past the range that wakes it by proximity.
+  boss.takeDamage(1, world, 'bolt');
+  assert(boss.awake, 'a hit did not wake the boss');
+  assert(seen.includes('bossAwake'),
+    'the boss woke silently: no bossAwake event, so no roar and no music change');
+});
+
+// --- damage over time -------------------------------------------------------
+
+test('burning can actually kill, and does not leave the player alive at zero', () => {
+  const { world, run } = makeWorld(3, 'burn-lethal');
+  const seen = [];
+  world.on((type) => seen.push(type));
+  run.hp = 4;                     // a little under a second of burning
+  world.player.burnTimer = 10;    // set exactly as a burning enemy sets it
+  for (let i = 0; i < 60 * 6 && !world.playerDead; i++) world.update(1 / 60, idle);
+  assert(run.hp <= 0, 'the burn never took the last of the health');
+  assert(world.playerDead, 'the player burned to zero health and kept walking');
+  assert(seen.includes('playerDied'), 'no playerDied event, so the run would never end');
+});
+
+test('a death fires once, however long the world keeps running', () => {
+  const { world, run } = makeWorld(3, 'burn-once');
+  let deaths = 0;
+  world.on((type) => { if (type === 'playerDied') deaths++; });
+  run.hp = 2;
+  world.player.burnTimer = 20;
+  step(world, 60 * 8);
+  assert(deaths === 1, `playerDied fired ${deaths} times instead of once`);
+});
+
 // --- torch, visibility and scoring -----------------------------------------
 
 test('unexplored terrain stays hidden and torchlight is what reveals it', () => {

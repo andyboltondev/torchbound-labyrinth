@@ -31,6 +31,9 @@ export class Music {
     this.step = 0;
     this.nextNoteTime = 0;
     this.timer = null;
+    this.teardown = null;
+    this.drones = [];
+    this.sources = [];
     this.intensity = 0;
     this.targetIntensity = 0;
     this.boss = false;
@@ -107,6 +110,10 @@ export class Music {
     nf.connect(this.nodes.textureGain);
     noiseSrc.start();
     this.nodes.textureFilter = nf;
+    // Both of these loop forever. Without a reference, stop() cannot reach
+    // them and every finished run leaves a noise source and an LFO running
+    // silently in the graph for the lifetime of the audio context.
+    this.sources = [noiseSrc, lfo];
 
     this.nextNoteTime = ctx.currentTime + 0.1;
     this.step = 0;
@@ -118,16 +125,25 @@ export class Music {
     if (!this.running) return;
     this.running = false;
     clearInterval(this.timer);
+    this.timer = null;
     const ctx = this.engine.ctx;
     const t = ctx.currentTime;
     for (const key of Object.keys(this.nodes)) {
       const node = this.nodes[key];
       if (node && node.gain) node.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
     }
-    setTimeout(() => {
-      for (const d of this.drones || []) { try { d.osc.stop(); } catch (e) { /* already stopped */ } }
-      this.drones = [];
-      this.nodes = {};
+    // Everything the fade-out is about to tear down, captured now: a run
+    // started inside the fade calls start() again, and the teardown must not
+    // reach into the score that replaced this one.
+    const drones = this.drones || [];
+    const sources = this.sources || [];
+    this.drones = [];
+    this.sources = [];
+    clearTimeout(this.teardown);
+    this.teardown = setTimeout(() => {
+      for (const d of drones) { try { d.osc.stop(); } catch (e) { /* already stopped */ } }
+      for (const src of sources) { try { src.stop(); } catch (e) { /* already stopped */ } }
+      if (!this.running) this.nodes = {};
     }, 900);
   }
 
