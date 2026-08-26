@@ -107,7 +107,7 @@ export class World {
   _spawnEntities() {
     for (const spawn of this.level.spawns) {
       if (spawn.isBoss) {
-        this.boss = new Boss(this.level.boss, spawn, this.level.depth, this.rng, run.mods);
+        this.boss = new Boss(this.level.boss, spawn, this.level.depth, this.rng, this.run.mods);
         continue;
       }
       if (!ENEMIES[spawn.defId]) continue;

@@ -39,7 +39,7 @@
 <div class="sub">Seeded batch generation across every depth band, asserting solvability, key/gate ordering, gate geometry and hazard budgets.</div>
 
 <div class="controls">
-  <button id="run">Run suite</button>
+  <button id="runGen">Run suite</button>
   <label>seeds / depth <input id="seeds" type="number" value="30" min="1" max="400"></label>
   <span id="status" class="sub" style="margin:0"></span>
 </div>
@@ -236,8 +236,8 @@ document.getElementById('runGame').addEventListener('click', async () => {
   btn.disabled = false;
 });
 
-document.getElementById('run').addEventListener('click', async () => {
-  const btn = document.getElementById('run');
+document.getElementById('runGen').addEventListener('click', async () => {
+  const btn = document.getElementById('runGen');
   btn.disabled = true;
   status.textContent = 'running...';
   out.innerHTML = '';
