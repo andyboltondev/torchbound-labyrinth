@@ -117,8 +117,12 @@ export function pairAllowed(a, b) {
 }
 
 // Total hazard threat a level of this depth is allowed to carry.
+// The first two depths carry none at all: learning the torch, the gates and
+// the sword is enough to be going on with. After that it climbs one notch
+// every second depth.
 export function hazardBudget(depth) {
-  return Math.min(9, 2 + Math.floor(depth / 2.5));
+  if (depth <= 2) return 0;
+  return Math.min(9, 1 + Math.floor((depth - 3) / 2));
 }
 
 export function biomeForDepth(depth, rng) {

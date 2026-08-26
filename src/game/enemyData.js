@@ -125,7 +125,7 @@ export function enemyPoolFor(depth) {
 export const BOSSES = [
   {
     id: 'jarl_of_ash', name: 'Bjorn, the Jarl of Ash', biome: 'embers',
-    hp: 420, damage: 18, speed: 2.2, radius: 0.85, score: 3000,
+    hp: 250, damage: 12, speed: 2.1, radius: 0.85, score: 3000,
     palette: { body: '#5c2f20', trim: '#ff7a30', eye: '#ffe9a8' },
     phases: 2, attacks: ['charge', 'slam', 'summon'],
     lore: 'He burned his own hall rather than yield it, and he is still standing in the embers.',
@@ -133,7 +133,7 @@ export const BOSSES = [
   },
   {
     id: 'hrimthurs', name: 'Hrimthurs, the Frost-Bound', biome: 'crypt',
-    hp: 640, damage: 20, speed: 1.9, radius: 0.95, score: 4200,
+    hp: 430, damage: 15, speed: 1.9, radius: 0.95, score: 4200,
     palette: { body: '#4b6274', trim: '#b6e6ff', eye: '#ffffff' },
     phases: 2, attacks: ['shards', 'slam', 'summon'],
     lore: 'A giant chained beneath the crypt so that the winter would have somewhere to sleep.',
@@ -141,7 +141,7 @@ export const BOSSES = [
   },
   {
     id: 'root_crowned', name: 'The Root-Crowned', biome: 'tomb',
-    hp: 820, damage: 22, speed: 1.7, radius: 1.0, score: 5400,
+    hp: 620, damage: 18, speed: 1.7, radius: 1.0, score: 5400,
     palette: { body: '#3b4a2c', trim: '#8fbf59', eye: '#e6ff9c' },
     phases: 3, attacks: ['lash', 'summon', 'slam'],
     lore: 'The tomb grew itself a king, because it had no other use for the bones.',
@@ -149,7 +149,7 @@ export const BOSSES = [
   },
   {
     id: 'nidhogg_brood', name: 'The Nidhogg-Brood', biome: 'ruins',
-    hp: 1050, damage: 25, speed: 2.4, radius: 1.05, score: 7000,
+    hp: 840, damage: 21, speed: 2.3, radius: 1.05, score: 7000,
     palette: { body: '#3a2a3d', trim: '#c04a7a', eye: '#ffd0e6' },
     phases: 3, attacks: ['charge', 'shards', 'summon', 'slam'],
     lore: 'Something gnawing at a root that holds up rather more than this labyrinth.',

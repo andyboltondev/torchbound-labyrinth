@@ -120,6 +120,29 @@ export class World {
     for (const g of this.level.gates) mark(g.x, g.y);
   }
 
+  // What the player is trying to do right now, in one line. Without this a
+  // newcomer has a torch, a sword and no idea what the level wants.
+  currentObjective() {
+    if (this.level.isBoss) {
+      return this.boss && !this.boss.dead
+        ? { text: 'Slay ' + this.boss.def.name, colour: '#e05a3c' }
+        : { text: 'Take the stairs down', colour: '#6fce87' };
+    }
+    for (const gate of this.level.gates) {
+      if (gate.open) continue;
+      const col = keyColour(gate.colourIndex);
+      const key = this.level.keys.find((k) => k.colourIndex === gate.colourIndex);
+      if (this.run.keys.has(gate.colourIndex)) {
+        return { text: 'Unlock the ' + col.name + ' Gate', colour: col.hex };
+      }
+      if (key && key.holder === 'enemy') {
+        return { text: 'Something is carrying the ' + col.name + ' Key', colour: col.hex };
+      }
+      return { text: 'Find the ' + col.name + ' Key', colour: col.hex };
+    }
+    return { text: 'Find the stairs down', colour: '#6fce87' };
+  }
+
   // --- lookups ------------------------------------------------------------
   gateAt(x, y) { return this.gateIndex.get(this.grid.idx(x, y)) || null; }
   secretAt(x, y) { return this.secretIndex.get(this.grid.idx(x, y)) || null; }
@@ -1072,6 +1095,14 @@ export class World {
   onBossKilled(boss) {
     const pts = this.run.score.addBoss(boss.def.score || 3000, this.run.mods);
     this.particles.text(boss.x, boss.y - 1, '+' + Math.round(pts), '#e8b45c', 22, 2.4);
+    // Killing a great foe mends you. Without this a boss is followed by a
+    // much larger depth entered on the health the fight left behind, which
+    // reads as the run ending by arithmetic rather than by mistake.
+    const mended = this.run.heal(this.run.maxHp * 0.4, true);
+    if (mended > 0) {
+      this.particles.text(this.player.x, this.player.y - 1.2,
+        '+' + mended + ' VIGOUR', '#6fce87', 17, 2.2);
+    }
     for (let i = 0; i < 5; i++) {
       setTimeout(() => {
         if (!this.particles) return;

@@ -165,6 +165,41 @@ nothing you need to finish the depth is ever inside one.
 Only the layer you are standing on is drawn, so a vault feels like somewhere
 else rather than a room that happens to be south of the map.
 
+### Difficulty and pacing
+
+The descent is meant to open gently and tighten steadily, so the shape is
+measured rather than guessed. `tests.html` runs whole descents -- one run
+carrying health, relics and the crossbow from depth to depth -- and reports a
+curve. The pilot is deliberately mediocre: it walks its route, swings at what
+is in reach and never dodges. It is a yardstick, not a good player.
+
+What the shape looks for:
+
+* **Depths 1-2** teach. One region, no gates, no hazards, a handful of foes on
+  a small map. Losing more than a scratch here means something is wrong.
+* **Depth 3** introduces the whole key-and-gate idea, and is the first real
+  bite.
+* **Depth 5** is the first boss.
+* **Beyond that** the clear rate should fall smoothly. A cliff means one depth
+  is introducing too much at once.
+
+Two rules came out of measuring it:
+
+**One new idea per depth.** Every wall found during tuning was a depth where
+several things arrived together -- hazards *and* a new staged region *and*
+elite guards. Content is now introduced on separate depths on purpose, which
+is why the thresholds in `buildEncounters` look arbitrary. They are not.
+
+**A staged region is the biggest step in the game.** Each one adds a key hunt,
+a gate and roughly another region of fighting on the same health bar, and it
+dwarfs anything else. Regions are therefore spaced widely (1 up to depth 2, 2
+up to depth 8, 3 up to depth 14, 4 beyond) so a second gate is met with more
+health, more relics and a crossbow in hand.
+
+Levels grow with depth throughout, from roughly 29x25 at depth 1 to 55x49 by
+depth 14, with enemy counts set as a density over floor area so a bigger level
+is not automatically a busier one.
+
 ### Torchlight
 
 Symmetric recursive shadowcasting produces the visible set each frame. The same
@@ -206,7 +241,7 @@ Open <http://localhost:8123/tests.html>.
 band and asserts the guarantees above, plus determinism (same seed, same level)
 and RNG uniformity. It also renders sample layouts.
 
-Current status: 540/540 levels valid, no fallbacks, ~23 ms per level.
+Current status: 630/630 levels valid, no fallbacks, no warnings, ~15 ms per level.
 
 **Gameplay integration** -- drives the real systems through scripted scenarios:
 gates blocking and opening, keys dropping from carriers, stairs requiring an
@@ -220,6 +255,10 @@ It also pins the control mapping: each direction key is measured against the
 compass direction it is supposed to walk, with the drift-free guarantee
 checked against a deliberately walled-off direction, and the screen-relative
 frame checked separately.
+
+**Balance curve** -- plays whole descents and reports clear rate, health lost
+and time taken per depth. Not pass/fail: it is there to be looked at when
+tuning, and to catch a depth turning into a wall.
 
 It finishes with an **autopilot completability test**: a pathfinding bot plays
 24 generated levels across depths 1-14 from entrance to exit, routing to each

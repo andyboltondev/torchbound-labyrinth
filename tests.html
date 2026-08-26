@@ -53,12 +53,21 @@
 </div>
 <div id="gameOut"></div>
 
+<h2>Balance curve</h2>
+<div class="controls">
+  <button id="runBalance">Play test descents</button>
+  <label>runs <input id="balanceRuns" type="number" value="16" min="1" max="120"></label>
+  <span id="balanceStatus" class="sub" style="margin:0"></span>
+</div>
+<div id="balanceOut"></div>
+
 <h2>Sample layouts</h2>
 <div class="maps" id="maps"></div>
 
 <script type="module">
 import { runGenerationTests, runDeterminismTest, runRngTest } from './tests/generation.js';
 import { runIntegrationTests } from './tests/integration.js';
+import { runBalancePass } from './tests/balance.js';
 import { generateLevel } from './src/gen/dungeon.js';
 import { T } from './src/gen/tiles.js';
 
@@ -148,6 +157,48 @@ function render(res, det, rng) {
   }
   out.innerHTML = L.join('');
 }
+
+document.getElementById('runBalance').addEventListener('click', async () => {
+  const btn = document.getElementById('runBalance');
+  const status = document.getElementById('balanceStatus');
+  const out = document.getElementById('balanceOut');
+  btn.disabled = true;
+  status.textContent = 'playing...';
+  out.innerHTML = '';
+  await new Promise((r) => setTimeout(r, 30));
+  try {
+    const seeds = Math.max(1, parseInt(document.getElementById('balanceRuns').value, 10) || 16);
+    const res = runBalancePass({ seeds });
+    const L = [];
+    L.push('<div class="row"><div>' + res.runs + ' descents</div>');
+    L.push('<div>median depth <b>' + res.medianDepth + '</b></div>');
+    L.push('<div>mean <b>' + res.meanDepth + '</b></div>');
+    L.push('<div>deepest <b>' + res.deepest + '</b></div>');
+    L.push('<div>' + res.deaths + ' died, ' + res.stalls + ' stalled</div>');
+    L.push('<div class="sub" style="margin:0">' + (res.totalMs / 1000).toFixed(1) + 's</div></div>');
+    L.push('<table><tr><th>Depth</th><th>Grid</th><th>Floor</th><th>Foes</th><th>Threat</th>'
+      + '<th>Reached</th><th>Clear</th><th>Died</th><th>HP lost</th><th>End HP</th>'
+      + '<th>Kills</th><th>Time</th><th>Par</th></tr>');
+    for (const r of res.curve) {
+      const danger = r.clearRate < 0.6 ? 'fail' : r.clearRate < 0.85 ? 'warn' : 'pass';
+      L.push('<tr><td>' + r.depth + (r.boss ? ' BOSS' : '') + '</td><td>' + r.grid + '</td><td>' + r.floor
+        + '</td><td>' + r.enemies + '</td><td>' + r.threat + '</td><td>' + r.reached
+        + '</td><td class="' + danger + '">' + (r.clearRate * 100).toFixed(0) + '%</td><td>' + r.deaths
+        + '</td><td>' + r.avgHpLost + '</td><td>' + (r.endHpPct * 100).toFixed(0) + '%</td><td>'
+        + r.avgKills + '</td><td>' + r.avgSeconds + 's</td><td>' + r.parTime + 's</td></tr>');
+    }
+    L.push('</table>');
+    L.push('<p class="sub">Died at depths: ' + (res.deathDepths.join(', ') || 'none') + '</p>');
+    out.innerHTML = L.join('');
+    window.__balanceResults = res;
+    status.textContent = 'done';
+  } catch (err) {
+    out.innerHTML = '<pre class="fail">' + String(err && err.stack || err).replace(/</g, '&lt;') + '</pre>';
+    window.__balanceResults = { error: String(err && err.stack || err) };
+    status.textContent = 'error';
+  }
+  btn.disabled = false;
+});
 
 document.getElementById('runGame').addEventListener('click', async () => {
   const btn = document.getElementById('runGame');

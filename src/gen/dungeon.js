@@ -12,6 +12,7 @@
 // zone without ever being load-bearing for progression.
 
 import { RNG } from '../core/rng.js';
+import { clamp } from '../core/util.js';
 import { T, keyColour } from './tiles.js';
 import { Grid, bfsField, N4, DisjointSet, rectCentre, rectContains } from './grid.js';
 import { HAZARDS, BIOME_HAZARDS, BIOMES, pairAllowed, hazardBudget, biomeForDepth } from './biomes.js';
@@ -28,16 +29,24 @@ const evenNear = (v) => (v % 2 === 0 ? v : v - 1);
 const VAULT_BAND = 17;
 
 function levelSize(depth) {
-  const d = Math.min(depth, 12);
-  const w = oddUp(37 + d * 2);
-  const h = oddUp(33 + d * 2);
+  const d = Math.min(depth, 14);
+  // Levels grow steadily with depth. The growth eases very slightly on the
+  // depths that add a staged region, since a new region already lengthens the
+  // route on its own, but the overall trend stays upward.
+  const zones = zonesForDepth(depth);
+  const w = oddUp(Math.round(25 + d * 2.7 - (zones - 1) * 1.2));
+  const h = oddUp(Math.round(21 + d * 2.5 - (zones - 1) * 1.1));
   return { w, h, band: VAULT_BAND };
 }
 
+// Staged regions are the single largest difficulty step in the game: each
+// one adds a key hunt, a gate and roughly another region's worth of fighting
+// on the same health bar. They are spaced widely on purpose, so the player
+// meets a second gate with more health, more relics and a crossbow in hand.
 function zonesForDepth(depth) {
-  if (depth <= 1) return 1;
-  if (depth <= 3) return 2;
-  if (depth <= 7) return 3;
+  if (depth <= 2) return 1;
+  if (depth <= 8) return 2;
+  if (depth <= 14) return 3;
   return 4;
 }
 
@@ -463,22 +472,22 @@ function buildEncounters(level, rng, depth) {
   for (const key of level.keys) {
     if (!key.room) continue;
     const id = 'enc_key_' + key.colourIndex;
-    const count = 2 + rng.int(0, 2) + Math.floor(depth / 5);
+    const count = 2 + rng.int(0, 1) + Math.floor(depth / 6);
     const enemies = spawnGroup(level, rng, key.room, depth, count, {
       encounterId: id, dormant: true, guard: true,
-      elite: depth >= 4 && rng.bool(0.45),
+      elite: depth >= 9 && rng.bool(0.4),
     });
     key.room.kind = 'guardedKey';
     level.encounters.push({
       id, type: 'guardedKey', room: key.room, zone: key.room.zone,
-      seal: depth >= 4 && rng.bool(0.4), waves: 0, count: enemies.length,
+      seal: depth >= 8 && rng.bool(0.4), waves: 0, count: enemies.length,
       state: 'idle', flawless: true, scoreBonus: 250 + depth * 20,
       label: keyColour(key.colourIndex).name + ' Key -- guarded',
     });
   }
 
   // 2. Optional challenge room: clearly marked, clearly harder, clearly worth it.
-  if (depth >= 3 && rng.bool(0.42) && rooms.length) {
+  if (depth >= 8 && rng.bool(0.4) && rooms.length) {
     const room = take();
     const id = 'enc_challenge';
     room.kind = 'challenge';
@@ -495,7 +504,7 @@ function buildEncounters(level, rng, depth) {
   }
 
   // 3. Survival room: hold the ground while waves arrive.
-  if (depth >= 4 && rng.bool(0.32) && rooms.length) {
+  if (depth >= 10 && rng.bool(0.32) && rooms.length) {
     const room = take();
     const id = 'enc_survival';
     room.kind = 'survival';
@@ -508,7 +517,7 @@ function buildEncounters(level, rng, depth) {
   }
 
   // 4. A plain ambush somewhere along the route.
-  if (depth >= 2 && rng.bool(0.6) && rooms.length) {
+  if (depth >= 4 && rng.bool(0.55) && rooms.length) {
     const room = take();
     const id = 'enc_ambush';
     room.kind = 'ambush';
@@ -620,7 +629,9 @@ function addProps(level, rng, depth, ctx) {
   // The crossbow enters the pool at depth 3 and is guaranteed by depth 7.
   let crossbowHere = false;
   if (!ctx.hasCrossbow && depth >= 3) {
-    if (rng.bool(Math.min(1, 0.4 + (depth - 3) * 0.16))) {
+    // A ranged option should be in hand before the depths get busy, not
+    // arriving as a curiosity once the run is already in trouble.
+    if (rng.bool(Math.min(1, 0.55 + (depth - 3) * 0.2))) {
       crossbowHere = true;
       const room = level.freeRooms && level.freeRooms.length ? level.freeRooms.pop() : null;
       if (room) {
@@ -638,14 +649,26 @@ function addProps(level, rng, depth, ctx) {
   if (ctx.hasCrossbow || crossbowHere) {
     for (let i = 0; i < 2 + rng.int(0, 2); i++) place('arrows', { amount: rng.int(1, 3) });
   }
-  for (let i = 0; i < 1 + rng.int(0, 2); i++) place('potion', { heal: 28 + depth * 2 });
+  // Supplies follow the length of the route, not just the depth: a level
+  // with three staged regions is two or three times the walking and fighting
+  // on the same health bar as a single-region one.
+  const draughts = 1 + rng.int(0, 1) + level.zones.length;
+  for (let i = 0; i < draughts; i++) place('potion', { heal: 28 + depth * 2 });
 
   const chestCount = 1 + (depth >= 3 ? 1 : 0) + (rng.bool(0.35) ? 1 : 0);
   for (let i = 0; i < chestCount; i++) {
     const cursed = depth >= 2 && rng.bool(0.3);
     place(cursed ? 'cursedChest' : 'chest', { opened: false }, rng.bool(0.5));
   }
-  if (rng.bool(0.34)) place('shrine', { flavour: rng.bool(0.4) ? 'heal' : 'blessing', used: false });
+  // A staged level always carries somewhere to recover partway through.
+  const staged = level.zones.length >= 3;
+  if (staged || rng.bool(0.45)) {
+    place('shrine', {
+      flavour: staged || rng.bool(0.5) ? 'heal' : 'blessing',
+      used: false,
+    });
+  }
+  if (staged && rng.bool(0.5)) place('shrine', { flavour: 'blessing', used: false });
 
   // Wall sconces: atmosphere, but they cast a little real light.
   for (let y = 1; y < grid.h - 1; y++) {
@@ -677,14 +700,18 @@ function populateEnemies(level, rng, depth) {
   const { grid } = level;
   const field = bfsField(grid, [level.entrance], makePassable(level, level.gates.length));
   const pool = enemyPoolFor(depth);
-  const target = Math.min(40, Math.round(4 + depth * 1.75 + level.zones.length * 2.2));
+  // Enemies per floor cell, climbing with depth: a bigger level is not
+  // automatically a harder one unless it is also busier.
+  const density = 0.009 + Math.min(depth, 16) * 0.0011;
+  const target = clamp(Math.round(level.floorCells.length * density), 3, 42);
   const want = Math.max(0, target - level.spawns.length);
-  const eliteChance = depth >= 3 ? Math.min(0.26, 0.03 + depth * 0.017) : 0;
+  const eliteChance = depth >= 4 ? Math.min(0.26, 0.02 + depth * 0.016) : 0;
 
   const taken = new Set(level.spawns.map((s) => grid.idx(Math.floor(s.x), Math.floor(s.y))));
+  const minFromEntrance = depth <= 2 ? 7 : 9;
   const spots = level.floorCells.filter((c) => {
     const d = field[grid.idx(c.x, c.y)];
-    return d >= 9 && !taken.has(grid.idx(c.x, c.y));
+    return d >= minFromEntrance && !taken.has(grid.idx(c.x, c.y));
   });
   rng.shuffle(spots);
 
@@ -725,9 +752,13 @@ function enforceSpawnSpacing(level, minDist = 7.5) {
     if (best && bestD <= 9) {
       s.x = best.x + 0.5; s.y = best.y + 0.5;
       s.anchor = { x: s.x, y: s.y };
+      if (s.carriesKey !== undefined) {
+        const key = level.keys.find((k) => k.colourIndex === s.carriesKey);
+        if (key) { key.x = best.x; key.y = best.y; }
+      }
       kept.push(s);
     } else if (s.carriesKey !== undefined) {
-      // A key carrier must survive relocation or the key becomes unobtainable.
+      // A key carrier must survive: dropping it would strand the key.
       kept.push(s);
     }
   }
@@ -780,7 +811,7 @@ function addVaults(level, rng, depth, ctx) {
   if (!spots.length) return;
   rng.shuffle(spots);
 
-  const wanted = 1 + (depth >= 6 && rng.bool(0.4) ? 1 : 0);
+  const wanted = 1 + (depth >= 9 && rng.bool(0.4) ? 1 : 0);
   const slot = Math.floor((grid.w - 6) / wanted);
   if (slot < 10) return;
 
@@ -870,7 +901,7 @@ function fillVault(level, vault, rng, depth, ctx) {
     const def = rng.weighted(pool, (p) => p.weight).def;
     level.spawns.push({
       defId: def.id, x: c.x + 0.5, y: c.y + 0.5,
-      elite: rng.bool(0.25 + depth * 0.01), dormant: true,
+      elite: depth >= 4 && rng.bool(0.16 + depth * 0.012), dormant: true,
       zone: 0, encounter: encId, anchor: { x: c.x + 0.5, y: c.y + 0.5 }, guard: true,
     });
     placed++;
@@ -1039,13 +1070,25 @@ function finishLevel(level, rng, depth, ctx) {
   for (let i = 0; i < level.gates.length; i++) {
     const anchor = gateInboundCell(level, i);
     const field = bfsField(grid, [anchor], makePassable(level, i));
+    // Far from the gate as a proportion of the region, and never merely
+    // round the corner from it: on a small early level those are not the
+    // same constraint.
+    const keepBack = [
+      { x: level.entrance.x, y: level.entrance.y, r: 13 },
+      { x: anchor.x, y: anchor.y, r: 10 },
+    ];
     const spot = pickFarCell(grid, field, rng, {
       minFrac: 0.5,
       filter: (x, y) => zoneOf(level.zones, x, y) <= i,
       preferRooms: (x, y) => !!roomAt(level, x, y),
-      avoid: [{ x: level.entrance.x, y: level.entrance.y, r: 13 }],
+      avoid: keepBack,
     }) || pickFarCell(grid, field, rng, {
-      minFrac: 0.2, filter: (x, y) => zoneOf(level.zones, x, y) <= i,
+      minFrac: 0.2,
+      filter: (x, y) => zoneOf(level.zones, x, y) <= i,
+      avoid: [
+        { x: anchor.x, y: anchor.y, r: 8 },
+        { x: level.entrance.x, y: level.entrance.y, r: 10 },
+      ],
     });
     if (!spot) return null;
     const room = roomAt(level, spot.x, spot.y);
@@ -1085,7 +1128,7 @@ function finishLevel(level, rng, depth, ctx) {
   buildZoneMap(level);
   buildVariants(level);
 
-  level.parTime = Math.round(40 + level.floorCells.length * 0.18 + depth * 6);
+  level.parTime = Math.round(35 + level.floorCells.length * 0.15 + depth * 5);
   level.totalSecrets = level.secrets.length;
   return level;
 }
@@ -1146,10 +1189,19 @@ function buildBossArena(depth, rng, seed, ctx) {
   });
 
   addProps(level, rng, depth, ctx);
+  // The arena seals behind you, so it has to carry its own supplies.
+  for (let i = 0; i < 2; i++) {
+    const spot = level.floorCells[rng.int(0, level.floorCells.length - 1)];
+    if (!spot) break;
+    level.props.push({
+      type: 'potion', x: spot.x + 0.5, y: spot.y + 0.5,
+      heal: 34 + depth * 2, id: 'boss_draught_' + i,
+    });
+  }
   assignHazards(level, rng, depth);
   buildZoneMap(level);
   buildVariants(level);
-  level.parTime = Math.round(120 + depth * 8);
+  level.parTime = Math.round(110 + depth * 6);
   level.totalSecrets = 0;
   return level;
 }

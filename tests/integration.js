@@ -313,9 +313,15 @@ test('stairs need an explicit action and never trigger by standing on them', () 
 });
 
 test('a key carried by an enemy drops where the enemy dies', () => {
-  const { world, level } = makeWorld(9, 'carried-key');
-  const carrier = world.enemies.find((e) => e.carriesKey !== null && e.carriesKey !== undefined);
-  if (!carrier) return 'skipped: this seed placed no enemy-held key';
+  // Carried keys are a chance placement, so search seeds for one rather than
+  // letting the test quietly skip itself.
+  let world = null, level = null, carrier = null;
+  for (let s = 0; s < 30 && !carrier; s++) {
+    const built = makeWorld(9, 'carried-key-' + s);
+    const found = built.world.enemies.find((e) => e.carriesKey !== null && e.carriesKey !== undefined);
+    if (found) { world = built.world; level = built.level; carrier = found; }
+  }
+  assert(carrier, 'no enemy-held key generated across 30 seeds');
   const key = level.keys.find((k) => k.colourIndex === carrier.carriesKey);
   assert(key.holder === 'enemy', 'key was not marked as carried');
   carrier.takeDamage(99999, world, 'sword');
@@ -899,6 +905,11 @@ function objectiveFor(world) {
     }
     return { x: gate.x, y: gate.y, kind: 'gate' };
   }
+  // A boss seals the exit behind itself, so it is the objective until it
+  // falls -- walking to the stairs and waiting is not a plan.
+  if (world.boss && !world.boss.dead && world.boss.awake) {
+    return { x: Math.floor(world.boss.x), y: Math.floor(world.boss.y), kind: 'boss' };
+  }
   return { x: world.level.stairs.x, y: world.level.stairs.y, kind: 'stairs' };
 }
 
@@ -964,7 +975,7 @@ export function autoplayLevel(world, maxSeconds = 240, onTick = null) {
     if (!field || refresh <= 0 || !goal || goal.x !== want.x || goal.y !== want.y) {
       goal = want;
       field = bfsField(world.grid, [{ x: goal.x, y: goal.y }], passableForAuto(world));
-      refresh = 0.4;
+      refresh = goal.kind === 'boss' || goal.kind === 'carrier' ? 0.15 : 0.4;
     }
 
     // Walk downhill toward the objective.
@@ -1012,6 +1023,11 @@ export function autoplayLevel(world, maxSeconds = 240, onTick = null) {
       const d = Math.hypot(e.x - world.player.x, e.y - world.player.y);
       if (d < nd) { nd = d; nearest = e; }
     }
+    if (world.boss && !world.boss.dead) {
+      const d = Math.hypot(world.boss.x - world.player.x, world.boss.y - world.player.y)
+        - world.boss.radius;
+      if (d < nd) { nd = d; nearest = world.boss; }
+    }
     // Swing at anything close, but keep walking: standing still to duel every
     // wanderer would stall the run rather than test whether it can be run.
     if (nearest && nd < 1.7) slash = true;
@@ -1023,9 +1039,11 @@ export function autoplayLevel(world, maxSeconds = 240, onTick = null) {
     const prompt = world.interactTarget;
     if (prompt && prompt.enabled) {
       const diving = prompt.type === 'ladder' && prompt.prop.dir === 'down';
-      // Visit each vault once. Diving into the same one forever is not a
-      // test of anything.
-      if (!diving || !lootedVaults.has(prompt.prop.vault)) {
+      const healthy = world.run.hp / world.run.maxHp > 0.6;
+      // Visit each vault once, and only while in a fit state to: they are
+      // optional, and a hurt player would walk past.
+      if (diving && !healthy) { /* leave it for another day */ }
+      else if (!diving || !lootedVaults.has(prompt.prop.vault)) {
         if (diving) lootedVaults.add(prompt.prop.vault);
         world.interact();
       }

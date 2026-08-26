@@ -33,7 +33,7 @@ export class Enemy {
     const scaleHp = 1 + Math.max(0, depth - this.def.minDepth) * 0.09;
     this.maxHp = Math.round(this.def.hp * scaleHp * (this.elite ? ELITE_MOD.hp : 1));
     this.hp = this.maxHp;
-    this.damage = this.def.damage * (1 + depth * 0.045) * (this.elite ? ELITE_MOD.damage : 1);
+    this.damage = this.def.damage * (1 + Math.max(0, depth - 2) * 0.05) * (this.elite ? ELITE_MOD.damage : 1);
     this.radius = this.def.radius * (this.elite ? ELITE_MOD.radius : 1);
     this.scale = (this.elite ? 1.2 : 1) * (0.94 + this.def.height * 0.12);
     this.scoreValue = this.def.score * (this.elite ? ELITE_MOD.score : 1);
@@ -79,7 +79,9 @@ export class Enemy {
       // Everything else is drawn to the light.
       range *= 1 + (this.def.torchSensitivity - 1) * clamp(lit * 1.15, 0, 1);
     }
-    return range;
+    // Capped, or a wide torch plus a sensitive nose pulls half a level at
+    // once and the fight stops being a fight and becomes a tide.
+    return Math.min(range, 10);
   }
 
   canSeePlayer(world) {

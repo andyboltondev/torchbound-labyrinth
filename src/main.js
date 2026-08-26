@@ -156,6 +156,15 @@ class Game {
       if (level.gates.length) {
         this.hud.toast(level.gates.length + ' sealed gate' + (level.gates.length > 1 ? 's' : '') + ' ahead');
       }
+      // A first-ever run gets told how to hold the sword.
+      if (profile.stats.runs === 0 && depth === 1) {
+        const touch = this.touchEnabled;
+        setTimeout(() => this.hud.toast(touch
+          ? 'Drag anywhere on the left to move' : 'Move with WASD or the arrow keys'), 1400);
+        setTimeout(() => this.hud.toast(touch
+          ? 'SLASH to strike, ACT to use things' : 'Space to slash, E to act'), 3600);
+        setTimeout(() => this.hud.toast('Your torch is the only light. Find the stairs.'), 5800);
+      }
     }, 60);
   }
 
