@@ -912,6 +912,26 @@ test('a difficulty actually reaches the things it claims to change', () => {
   assertNear(mid.run.mods.torchRadius, 1, 0.0001, 'Torchbound must be the unmodified measure');
 });
 
+test('a boss obeys the difficulty too', () => {
+  // Regression guard. The boss was built with a bare `run.mods` instead of
+  // `this.run.mods`, so on the game page it threw and on the test page it
+  // silently resolved to a stray global and passed `undefined` -- leaving
+  // every boss on baseline numbers whatever difficulty was chosen.
+  const at = (mode) => {
+    const built = makeWorld(5, 'boss-difficulty', (r) => { r.difficulty = DIFFICULTIES[mode]; });
+    assert(built.world.boss, `depth 5 produced no boss on ${mode}`);
+    return { hp: built.world.boss.maxHp, damage: built.world.boss.damage };
+  };
+  const easy = at('hearthlight');
+  const mid = at('torchbound');
+  const hard = at('ashenvow');
+
+  assert(easy.hp < mid.hp && mid.hp < hard.hp,
+    `boss health did not scale with difficulty: ${easy.hp}/${mid.hp}/${hard.hp}`);
+  assert(easy.damage < mid.damage && mid.damage < hard.damage,
+    `boss damage did not scale with difficulty: ${easy.damage}/${mid.damage}/${hard.damage}`);
+});
+
 test('difficulty multipliers survive a relic recompute without stacking', () => {
   const run = new Run('diff-stack');
   run.difficulty = DIFFICULTIES.ashenvow;
