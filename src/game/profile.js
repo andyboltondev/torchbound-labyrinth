@@ -21,6 +21,7 @@ export const DEFAULT_SETTINGS = {
   music: 0.55,
   sfx: 0.85,
   touchControls: 'auto',        // auto | always | never
+  movementFrame: 'dungeon',     // dungeon | view
   movementAssist: 'corridor',   // corridor | strict
   screenShake: 1,
   showDamage: true,

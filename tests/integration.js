@@ -11,7 +11,7 @@ import { World } from '../src/game/world.js';
 import { Enemy } from '../src/game/enemies.js';
 import { RELICS, RELIC_BY_ID, computeMods, offerRelics } from '../src/game/relics.js';
 import { T } from '../src/gen/tiles.js';
-import { screenDirToGrid, screenX, screenY } from '../src/render/iso.js';
+import { inputDirToGrid, screenDirToGrid, screenX, screenY } from '../src/render/iso.js';
 import { bfsField, N4 } from '../src/gen/grid.js';
 import { RNG } from '../src/core/rng.js';
 import { hazardBudget, HAZARDS } from '../src/gen/biomes.js';
@@ -140,80 +140,115 @@ function clearArena(world, cx, cy, radius = 3) {
   world.flow = null;
 }
 
-// The four cardinals must land exactly on their screen direction. The
-// diagonals cannot: in a 2:1 isometric view a key combination moves along a
-// tile axis, which appears at about 27 degrees from horizontal rather than
-// 45. What matters there is that it goes to the correct quadrant.
-const CARDINALS = {
-  Up: { x: 0, y: -1 }, Down: { x: 0, y: 1 },
-  Left: { x: -1, y: 0 }, Right: { x: 1, y: 0 },
-};
-const DIAGONALS = {
-  'Up+Right': { x: 0.7071, y: -0.7071 }, 'Up+Left': { x: -0.7071, y: -0.7071 },
-  'Down+Right': { x: 0.7071, y: 0.7071 }, 'Down+Left': { x: -0.7071, y: 0.7071 },
+// The direction keys walk the dungeon's compass: Up is north, Right is east,
+// Down is south, Left is west. Corridors run along those axes, so one key
+// carries you down a passage. The isometric view draws north as
+// up-and-to-the-right, which is the projection doing its job.
+const COMPASS = {
+  Up: { key: { x: 0, y: -1 }, grid: { x: 0, y: -1 }, name: 'north' },
+  Right: { key: { x: 1, y: 0 }, grid: { x: 1, y: 0 }, name: 'east' },
+  Down: { key: { x: 0, y: 1 }, grid: { x: 0, y: 1 }, name: 'south' },
+  Left: { key: { x: -1, y: 0 }, grid: { x: -1, y: 0 }, name: 'west' },
+  'Up+Right': { key: { x: 0.7071, y: -0.7071 }, grid: { x: 1, y: -1 }, name: 'north-east' },
+  'Down+Right': { key: { x: 0.7071, y: 0.7071 }, grid: { x: 1, y: 1 }, name: 'south-east' },
+  'Down+Left': { key: { x: -0.7071, y: 0.7071 }, grid: { x: -1, y: 1 }, name: 'south-west' },
+  'Up+Left': { key: { x: -0.7071, y: -0.7071 }, grid: { x: -1, y: -1 }, name: 'north-west' },
 };
 
-// Walks one input direction from the middle of a cleared arena and reports
-// the unit vector the character actually travelled in screen space.
-function screenTravel(world, cx, cy, screen) {
+// Walks one input direction from the middle of a cleared arena.
+function walkFrom(world, cx, cy, key, frame) {
   place(world, cx, cy);
   world.player.mover.heading = null;
-  const grid = screenDirToGrid(screen.x, screen.y);
-  const from = { x: screenX(world.player.x, world.player.y), y: screenY(world.player.x, world.player.y) };
+  const grid = inputDirToGrid(key.x, key.y, frame);
+  const from = { sx: screenX(world.player.x, world.player.y), sy: screenY(world.player.x, world.player.y) };
   step(world, 30, { moveX: grid.x, moveY: grid.y, slash: false, fire: false });
-  const to = { x: screenX(world.player.x, world.player.y), y: screenY(world.player.x, world.player.y) };
-  const dx = to.x - from.x, dy = to.y - from.y;
+  const dx = screenX(world.player.x, world.player.y) - from.sx;
+  const dy = screenY(world.player.x, world.player.y) - from.sy;
   const m = Math.hypot(dx, dy);
-  return { dx, dy, m, ux: dx / (m || 1), uy: dy / (m || 1) };
+  return {
+    tileDx: world.player.mover.tileX - cx,
+    tileDy: world.player.mover.tileY - cy,
+    ux: dx / (m || 1), uy: dy / (m || 1), moved: m,
+  };
 }
 
-test('every direction key moves the character that way on screen', () => {
+test('each direction key walks the dungeon compass', () => {
   const { world, level } = makeWorld(3, 'controls-1');
   const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
   clearArena(world, cx, cy, 4);
 
-  for (const [name, screen] of Object.entries(CARDINALS)) {
-    const t = screenTravel(world, cx, cy, screen);
-    assert(t.m > 8, `${name} did not move the character at all`);
-    const alignment = t.ux * screen.x + t.uy * screen.y;
-    assert(alignment > 0.99,
-      `${name} moved along screen vector (${t.ux.toFixed(2)}, ${t.uy.toFixed(2)}) `
-      + `instead of (${screen.x.toFixed(2)}, ${screen.y.toFixed(2)})`);
-  }
-
-  for (const [name, screen] of Object.entries(DIAGONALS)) {
-    const t = screenTravel(world, cx, cy, screen);
-    assert(t.m > 8, `${name} did not move the character at all`);
-    assert(Math.sign(t.ux) === Math.sign(screen.x) && Math.sign(t.uy) === Math.sign(screen.y),
-      `${name} moved into the wrong quadrant: (${t.ux.toFixed(2)}, ${t.uy.toFixed(2)})`);
+  for (const [name, spec] of Object.entries(COMPASS)) {
+    const t = walkFrom(world, cx, cy, spec.key, 'dungeon');
+    assert(t.moved > 8, `${name} did not move the character at all`);
+    assert(Math.sign(t.tileDx) === Math.sign(spec.grid.x)
+        && Math.sign(t.tileDy) === Math.sign(spec.grid.y),
+      `${name} should walk ${spec.name} (grid ${spec.grid.x},${spec.grid.y}) `
+      + `but moved ${t.tileDx},${t.tileDy}`);
+    if (spec.grid.x === 0) assert(t.tileDx === 0, `${name} drifted east/west while walking ${spec.name}`);
+    if (spec.grid.y === 0) assert(t.tileDy === 0, `${name} drifted north/south while walking ${spec.name}`);
   }
 });
 
-test('strict movement refuses to deflect, the corridor assist accepts', () => {
+test('the view frame still points the keys at the screen', () => {
+  const { world, level } = makeWorld(3, 'controls-view');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 4);
+
+  const screenKeys = {
+    Up: { x: 0, y: -1 }, Down: { x: 0, y: 1 }, Left: { x: -1, y: 0 }, Right: { x: 1, y: 0 },
+  };
+  for (const [name, key] of Object.entries(screenKeys)) {
+    const t = walkFrom(world, cx, cy, key, 'view');
+    assert(t.moved > 8, `${name} did not move the character at all`);
+    const alignment = t.ux * key.x + t.uy * key.y;
+    assert(alignment > 0.99,
+      `${name} moved along screen vector (${t.ux.toFixed(2)}, ${t.uy.toFixed(2)}) `
+      + `instead of (${key.x.toFixed(2)}, ${key.y.toFixed(2)})`);
+  }
+});
+
+test('a blocked compass direction never deflects you sideways', () => {
   const { world, level } = makeWorld(3, 'controls-2');
   const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
   clearArena(world, cx, cy, 4);
-  // Wall off the tile directly "up" on screen, leaving its neighbours open.
-  const up = screenDirToGrid(0, -1);
-  const bx = cx + Math.round(up.x), by = cy + Math.round(up.y);
-  level.grid.set(bx, by, T.WALL);
+  level.grid.set(cx, cy - 1, T.WALL);   // wall off north
 
-  world.strictMovement = true;
-  place(world, cx, cy);
-  world.player.mover.heading = null;
-  step(world, 40, { moveX: up.x, moveY: up.y, slash: false, fire: false });
-  assert(world.player.mover.tileX === cx && world.player.mover.tileY === cy,
-    'strict movement deflected into a neighbouring corridor');
+  // Diagonals cannot cut corners, so blocking north also blocks north-east
+  // and north-west. Pressing Up therefore has exactly one meaning under the
+  // dungeon axes: walk north, or stand still. It can never send you east.
+  for (const mode of [true, false]) {
+    world.strictMovement = mode;
+    place(world, cx, cy);
+    world.player.mover.heading = null;
+    step(world, 40, { moveX: 0, moveY: -1, slash: false, fire: false });
+    assert(world.player.mover.tileX === cx && world.player.mover.tileY === cy,
+      `with assist ${mode ? 'off' : 'on'}, a blocked north moved the player to `
+      + `${world.player.mover.tileX},${world.player.mover.tileY}`);
+  }
+});
+
+test('a blocked diagonal takes the nearest way round, unless told to stop', () => {
+  const { world, level } = makeWorld(3, 'controls-3');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 4);
+  level.grid.set(cx + 1, cy - 1, T.WALL);   // wall off north-east only
 
   world.strictMovement = false;
   place(world, cx, cy);
   world.player.mover.heading = null;
-  step(world, 40, { moveX: up.x, moveY: up.y, slash: false, fire: false });
-  const moved = world.player.mover.tileX !== cx || world.player.mover.tileY !== cy;
-  assert(moved, 'the corridor assist failed to find the open way past a wall');
-  // Whatever it chose, it still has to be upward on screen.
-  const dy = screenY(world.player.x, world.player.y) - screenY(cx + 0.5, cy + 0.5);
-  assert(dy < 0, `the assist moved the character downward (screen dy ${dy.toFixed(1)})`);
+  step(world, 40, { moveX: 0.7071, moveY: -0.7071, slash: false, fire: false });
+  const dx = world.player.mover.tileX - cx, dy = world.player.mover.tileY - cy;
+  assert(dx !== 0 || dy !== 0, 'the assist found no way round a blocked diagonal');
+  // North or east: either is a reasonable reading of "north-east".
+  assert((dx === 0 && dy < 0) || (dx > 0 && dy === 0),
+    `the assist went ${dx},${dy} instead of north or east`);
+
+  world.strictMovement = true;
+  place(world, cx, cy);
+  world.player.mover.heading = null;
+  step(world, 40, { moveX: 0.7071, moveY: -0.7071, slash: false, fire: false });
+  assert(world.player.mover.tileX === cx && world.player.mover.tileY === cy,
+    'strict mode deflected a blocked diagonal');
 });
 
 // --- keys, gates and the exit ----------------------------------------------

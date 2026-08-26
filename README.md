@@ -45,24 +45,33 @@ in the same place every time.
 
 ### What the direction keys do
 
-Up, Down, Left and Right move the character **up, down, left and right in the
-view** -- not north/south/east/west in the dungeon's own axes. There is a test
-that measures this and fails if it ever drifts.
+The direction keys walk **the dungeon's compass**:
 
-The wrinkle is geometry, not controls. In a 2:1 isometric view the dungeon's
-corridors run *diagonally* across the screen, so the exact screen direction you
-pressed is often a wall. When that happens the mover deflects to the nearest
-open direction, which is 45 degrees off -- it will still carry you upward when
-you press Up, but up-and-left or up-and-right rather than straight up. That is
-the corridor assist, and it is what lets a single key walk you down a passage.
+| Key | Direction | How the view draws it |
+| --- | --- | --- |
+| `W` / `Up` | North | up and to the right |
+| `D` / `Right` | East | down and to the right |
+| `S` / `Down` | South | down and to the left |
+| `A` / `Left` | West | up and to the left |
 
-Two ways to steer precisely:
+Corridors run along those axes, so one key walks a passage end to end. Holding
+two keys gives the four diagonals: `Up`+`Right` is north-east, and so on.
 
-* Press two keys. `Up`+`Right` is the dungeon's north, `Up`+`Left` is west, and
-  so on -- these run exactly along the corridors.
-* Set **Settings -> Movement -> Strict direction**. Each key then means one
-  screen direction and nothing else: blocked is blocked, no deflection. The
-  cost is that walking a corridor needs the two-key combination.
+North being drawn up-and-to-the-right is the isometric projection doing its
+job, not a mapping error -- a 2:1 view rotates the world 45 degrees, so the
+dungeon's axes land on the screen's diagonals.
+
+Because diagonals may not cut corners, blocking a cardinal also blocks both
+diagonals beside it. That gives a useful guarantee: **a cardinal key either
+walks you that way or leaves you standing still.** It can never quietly send
+you east when you pressed north. There are tests for this.
+
+Two settings cover the rest, under Settings:
+
+* **Direction keys** -- *Dungeon axes* (default) or *Screen direction*, which
+  makes `Up` move straight up the display instead. Applies to the touch pad too.
+* **Blocked direction** -- whether a blocked *diagonal* takes the nearest way
+  round or simply stops.
 
 ---
 
@@ -136,9 +145,9 @@ between tiles, never wedged on a corner, and never dragged sideways along a
 wall it walked into.
 
 Input stays a free vector; only the eight grid directions are ever taken. The
-mover picks the open one closest to what was asked for, which means in a room
-you go exactly where you pointed, and in a corridor you follow the corridor.
-Press into a wall and nothing happens at all. Diagonals refuse to cut corners.
+mover picks the open one closest to what was asked for. Press into a wall and
+nothing happens at all, and diagonals refuse to cut corners -- which is what
+makes a cardinal key exact rather than approximate.
 
 Ice does not take this away. What ice removes is your ability to *stop*:
 letting go carries you on a couple of tiles, and a hard about-face has to wait
@@ -208,8 +217,9 @@ phases and arena gating, ladders into vaults (and the vaults being unwalkable
 into), memory decay, and score arithmetic.
 
 It also pins the control mapping: each direction key is measured against the
-screen vector it is supposed to produce, and the strict/assist behaviours are
-checked against a deliberately walled-off direction.
+compass direction it is supposed to walk, with the drift-free guarantee
+checked against a deliberately walled-off direction, and the screen-relative
+frame checked separately.
 
 It finishes with an **autopilot completability test**: a pathfinding bot plays
 24 generated levels across depths 1-14 from entrance to exit, routing to each
@@ -217,7 +227,7 @@ key, unlocking each gate, fighting its way out of rooms that seal behind it,
 and taking the stairs. It is the practical counterpart to the validator -- the
 validator proves a route exists, the bot walks it.
 
-Current status: 42/42 passing.
+Current status: 44/44 passing.
 
 ---
 

@@ -3,7 +3,7 @@
 
 import { GameLoop } from './core/loop.js';
 import { Input } from './core/input.js';
-import { screenDirToGrid } from './render/iso.js';
+import { inputDirToGrid } from './render/iso.js';
 import { Renderer } from './render/renderer.js';
 import { Minimap } from './render/minimap.js';
 import { warmTileSets } from './render/sprites.js';
@@ -295,7 +295,7 @@ class Game {
     }
 
     const axis = this.input.axis();
-    const dir = screenDirToGrid(axis.x, axis.y);
+    const dir = inputDirToGrid(axis.x, axis.y, profile.settings.movementFrame);
     const intent = {
       moveX: dir.x,
       moveY: dir.y,

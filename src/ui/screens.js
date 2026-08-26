@@ -93,7 +93,10 @@ export class Screens {
 
     const controls = el('div');
     controls.style.marginTop = '22px';
-    controls.appendChild(el('p', 'hint', 'Move with WASD or the arrow keys. Space or J to slash, F or K to loose a bolt, E to act, Esc to pause. On a touch screen the controls appear on the glass.'));
+    controls.appendChild(el('p', 'hint', 'Move with WASD or the arrow keys: they walk the '
+      + 'dungeon’s compass, so Up is north and the corridors run with your keys. '
+      + 'Space or J to slash, F or K to loose a bolt, E to act, Esc to pause. '
+      + 'On a touch screen the controls appear on the glass.'));
     panel.appendChild(controls);
     return panel;
   }
@@ -274,12 +277,19 @@ export class Screens {
       panel.appendChild(row);
     };
 
-    segmented('Movement', 'movementAssist', [
-      { value: 'corridor', label: 'Follow corridors' },
-      { value: 'strict', label: 'Strict direction' },
-    ], 'Corridors run diagonally on screen. "Follow corridors" lets one key '
-      + 'carry you along them; "Strict" makes each key mean exactly one '
-      + 'direction and nothing else.');
+    segmented('Direction keys', 'movementFrame', [
+      { value: 'dungeon', label: 'Dungeon axes' },
+      { value: 'view', label: 'Screen direction' },
+    ], 'Dungeon axes point the keys along the corridors: Up walks north, which '
+      + 'the view draws as up-and-to-the-right. Screen direction makes Up move '
+      + 'straight up the display instead.');
+
+    segmented('Blocked direction', 'movementAssist', [
+      { value: 'corridor', label: 'Take the nearest way' },
+      { value: 'strict', label: 'Stop' },
+    ], 'What happens when the way you pressed is a wall. Under the dungeon '
+      + 'axes a blocked cardinal always stops you either way, so this only '
+      + 'changes diagonal presses.');
 
     const seg = el('div', 'setting');
     seg.appendChild(el('label', null, 'Touch controls'));
@@ -304,7 +314,9 @@ export class Screens {
     controls.appendChild(el('h2', 'screen-title', 'Controls'));
     const grid = el('div', 'controls-grid');
     const pairs = [
-      ['Move', 'WASD / Arrows'], ['Slash', 'Space / J'], ['Fire crossbow', 'F / K'],
+      ['Move north', 'W / Up'], ['Move east', 'D / Right'],
+      ['Move south', 'S / Down'], ['Move west', 'A / Left'],
+      ['Slash', 'Space / J'], ['Fire crossbow', 'F / K'],
       ['Action', 'E / Enter'], ['Pause', 'Esc / P'], ['Bestiary', 'B'],
     ];
     for (const [a, b] of pairs) {
