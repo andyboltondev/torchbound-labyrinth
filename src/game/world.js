@@ -62,6 +62,10 @@ export class World {
     }
     this.revealedProps = new Set();
     this.sealBlocks = new Set();
+    // Places the player has been told about but not yet reached. The chart
+    // puts an arrow on its rim for each one; whatever adds a hint owns
+    // clearing it, and reaching the spot resolves it automatically.
+    this.hints = [];
     this.occupied = new Map();   // tile index -> enemy id, refreshed each frame
 
     this.flow = null;

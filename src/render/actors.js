@@ -82,7 +82,43 @@ export function facingInfo(gx, gy) {
 }
 
 // --- the player -----------------------------------------------------------
-// A torchbearer: helm, cloak, sword in the lead hand, flame in the other.
+// A torchbearer: mail under a tunic, a cloak, a sword in the lead hand and
+// the flame in the other.
+//
+// The figure is built from vector shapes rather than a sprite sheet, and that
+// is what lets it carry three continuous signals at once without any stepping
+// between frames: which of the eight dungeon directions it is walking, what
+// its hands are doing, and how close it is to dying.
+
+// Mail is thousands of identical rings. Drawn once into a pattern and stamped
+// after that, so the texture costs one fill rather than a few hundred arcs.
+let mailPattern = null;
+function mailTexture(ctx) {
+  if (mailPattern) return mailPattern;
+  const c = document.createElement('canvas');
+  c.width = 6; c.height = 6;
+  const g = c.getContext('2d');
+  g.strokeStyle = 'rgba(226,236,247,0.42)';
+  g.lineWidth = 0.9;
+  for (const [x, y] of [[1.5, 1.5], [4.5, 4.5]]) {
+    g.beginPath();
+    g.arc(x, y, 1.35, 0, TAU);
+    g.stroke();
+  }
+  g.strokeStyle = 'rgba(0,0,0,0.3)';
+  for (const [x, y] of [[4.5, 1.5], [1.5, 4.5]]) {
+    g.beginPath();
+    g.arc(x, y, 1.35, 0, TAU);
+    g.stroke();
+  }
+  mailPattern = ctx.createPattern(c, 'repeat');
+  return mailPattern;
+}
+
+// Where the wounds start showing, and where they take over. Half health is
+// early enough that the figure is telling you before the meter is urgent.
+const WOUND_START = 0.5;
+const DYING_BELOW = 0.22;
 
 export function drawPlayer(ctx, p, t, opts = {}) {
   // Knockback is a render-space shove, so it reads as impact without pushing
@@ -91,78 +127,332 @@ export function drawPlayer(ctx, p, t, opts = {}) {
   const sx = screenX(px, py);
   const sy = screenY(px, py);
   const f = facingInfo(p.faceX, p.faceY);
-  const scale = 1;
-  const walk = p.moving ? Math.sin(p.animTime * 11) : 0;
-  const bob = p.moving ? Math.abs(Math.sin(p.animTime * 11)) * 2.2 : Math.sin(t * 2.1) * 0.9;
-  const hurt = p.hurtFlash > 0;
 
-  groundShadow(ctx, sx, sy + 1, 15 * scale, 7 * scale, 0.45);
+  // Two numbers describe the turn. `frontal` is how square-on the figure is:
+  // 0 is a pure side view, 1 is looking straight at the camera or straight
+  // away from it, and the shoulders widen across that range. `f.y` says which
+  // of those two it is.
+  const frontal = 1 - Math.min(1, Math.abs(f.x));
+  const back = f.y < -0.18;
+
+  const hpFrac = p.maxHp > 0 ? clamp01(p.hp / p.maxHp) : 1;
+  const wounded = clamp01((WOUND_START - hpFrac) / WOUND_START);
+  const dying = clamp01((DYING_BELOW - hpFrac) / DYING_BELOW);
+
+  // A wounded stride is slower, shorter and lopsided: the body drops onto the
+  // bad leg every other step, which is what a limp looks like from outside.
+  const gait = 11 - wounded * 2.6;
+  const phase = p.animTime * gait;
+  const walk = p.moving ? Math.sin(phase) : 0;
+  const limp = p.moving ? Math.max(0, Math.sin(phase)) * wounded * 2.4 : 0;
+  const breath = Math.sin(t * (2.1 + wounded * 3.6)) * (0.9 + wounded * 1.7);
+  const bob = (p.moving ? Math.abs(Math.sin(phase)) * 2.2 : breath) - limp;
+  // Close to death the whole figure sways as though the floor were moving.
+  const sway = dying > 0 ? Math.sin(t * 1.7) * Math.sin(t * 0.9 + 1.2) * dying * 0.085 : 0;
+
+  const hurt = p.hurtFlash > 0;
+  const paleSkin = mix('#c8a180', '#a2968d', wounded * 0.55);
+  const skin = hurt ? mix(paleSkin, '#ff7a66', 0.45) : paleSkin;
+  const cloth = hurt ? '#c05a4a' : mix('#4a5568', '#39404c', wounded * 0.5);
+  const leather = hurt ? '#a8523f' : mix('#5c4632', '#453425', wounded * 0.4);
+  const metal = hurt ? '#c98b7a' : mix('#9aa3ad', '#71787f', wounded * 0.5);
+  const gold = '#d9a441';
+  const cloakCol = hurt ? '#8e3b30' : mix('#3a2f3d', '#2a2229', wounded * 0.5);
+  const blood = '#5e1a18';
+
+  groundShadow(ctx, sx, sy + 1, 15, 7, 0.45);
 
   ctx.save();
   ctx.translate(sx, sy - bob);
+  if (sway) ctx.rotate(sway);
   ctx.scale(f.flip, 1);
 
-  const skin = '#c8a180';
-  const cloth = hurt ? '#c05a4a' : '#4a5568';
-  const leather = hurt ? '#a8523f' : '#5c4632';
-  const metal = '#9aa3ad';
-  const gold = '#d9a441';
-  const hipY = -20, headY = -38;
+  // A hurt torchbearer hunches: the head drops, the shoulders come forward
+  // over the wound, and the stance closes up.
+  const hunch = wounded * 3.4;
+  const lean = wounded * 2.2;
+  const hipY = -19 + hunch * 0.3;
+  const headY = -42 + hunch;
+  const shoulderY = headY + 9.5;
+  const halfW = 6.1 * (0.82 + frontal * 0.36);
 
-  // Cloak billows behind, and leans with movement.
+  const cfg = {
+    p, t, walk, hipY, headY, shoulderY, halfW, lean, skin, metal, gold,
+    leather, cloth, wounded, dying, back, frontal,
+  };
+
+  drawCloak(ctx, cfg, cloakCol);
+  drawLegs(ctx, cfg, leather);
+  // Facing away puts both arms on the far side of the body, so they go behind
+  // the torso; facing the camera puts them in front of it. That single change
+  // of order is most of what makes the two directions read differently.
+  if (back) drawPlayerArms(ctx, p, t, cfg);
+  drawTorso(ctx, cfg, cloth, blood);
+  drawHead(ctx, cfg, skin);
+  if (!back) drawPlayerArms(ctx, p, t, cfg);
+  ctx.restore();
+
+  drawPlayerAuras(ctx, p, t, sx, sy, opts);
+}
+
+function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+
+// The cloak reads the turn more than anything else does: seen from behind it
+// is nearly the whole silhouette, seen side-on it is a trailing edge.
+function drawCloak(ctx, cfg, colour) {
+  const { walk, hipY, headY, halfW, back, frontal, p, wounded } = cfg;
+  const drift = walk * 2.2 + (p.moving ? 2.6 : 0);
+  const w = halfW + 2.6 + (back ? 2.6 : 0);
+  const hem = w * 0.82;
+
   ctx.save();
   ctx.beginPath();
-  const sway = walk * 2.4 + (p.moving ? 3 : 0);
-  ctx.moveTo(-7, headY + 5);
-  ctx.quadraticCurveTo(-16 - sway, hipY + 2, -10 - sway * 1.4, -2);
-  ctx.lineTo(7, -2);
-  ctx.quadraticCurveTo(11, hipY, 7, headY + 5);
+  ctx.moveTo(-w + 1, headY + 5);
+  ctx.quadraticCurveTo(-w - 7 - drift, hipY, -hem - 2 - drift * 1.4, -4);
+  ctx.lineTo(hem - 1, -4);
+  ctx.quadraticCurveTo(w + 3, hipY, w - 1, headY + 5);
   ctx.closePath();
-  ctx.fillStyle = hurt ? '#8e3b30' : '#3a2f3d';
+  ctx.fillStyle = colour;
   ctx.fill();
+  // Seen from behind there is a centre seam and a fold either side of it,
+  // which is the difference between a cloak and a flat grey shape.
+  if (back || frontal > 0.5) {
+    ctx.strokeStyle = rgba('#000000', 0.3);
+    ctx.lineWidth = 1;
+    for (const ox of [-w * 0.42, 0, w * 0.42]) {
+      ctx.beginPath();
+      ctx.moveTo(ox * 0.5, headY + 7);
+      ctx.quadraticCurveTo(ox, hipY, ox * 1.1 - drift * 0.5, -4.5);
+      ctx.stroke();
+    }
+  }
+  // The hem tears as the run goes badly.
+  if (wounded > 0.35) {
+    ctx.fillStyle = rgba('#000000', 0.55);
+    const notches = Math.round(1 + wounded * 3);
+    for (let i = 0; i < notches; i++) {
+      const ox = -hem + 1 + ((i + 0.5) / notches) * (hem * 2 - 2) - drift * 0.4;
+      ctx.beginPath();
+      ctx.moveTo(ox - 1.6, -4);
+      ctx.lineTo(ox, -4 - 2.4 - wounded * 2.4);
+      ctx.lineTo(ox + 1.6, -4);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
   ctx.restore();
 
-  // Legs.
-  limb(ctx, -3, hipY, -3 + walk * 4, -1, 5, leather);
-  limb(ctx, 3, hipY, 3 - walk * 4, -1, 5, shade(leather, -0.12));
-
-  // Torso.
-  ctx.fillStyle = cloth;
+  // Fur collar, over the shoulders, drawn after the cloak body so it sits on
+  // top of the seams.
+  const fur = mix(colour, '#6d6154', 0.7);
+  ctx.fillStyle = fur;
   ctx.beginPath();
-  ctx.moveTo(-7, hipY + 2);
-  ctx.lineTo(7, hipY + 2);
-  ctx.lineTo(6, headY + 7);
-  ctx.lineTo(-6, headY + 7);
+  ctx.ellipse(0, headY + 6.4, halfW + 1.8, 2.7, 0, 0, TAU);
+  ctx.fill();
+  // A few tufts, so the mantle has a texture rather than an outline.
+  ctx.strokeStyle = rgba(shade(fur, 0.25), 0.6);
+  ctx.lineWidth = 0.8;
+  for (let i = -3; i <= 3; i++) {
+    const ox = (i / 3) * (halfW + 1.2);
+    ctx.beginPath();
+    ctx.moveTo(ox, headY + 5.2);
+    ctx.lineTo(ox + (i % 2 ? 0.9 : -0.9), headY + 8.4);
+    ctx.stroke();
+  }
+}
+
+function drawLegs(ctx, cfg, leather) {
+  const { walk, hipY, halfW, wounded } = cfg;
+  const stride = 4 - wounded * 1.1;
+  // The wounded leg swings less and lands flatter.
+  const bad = 1 - wounded * 0.55;
+  const spread = Math.max(2.8, halfW * 0.5);
+  const boot = shade(leather, -0.34);
+
+  const leg = (baseX, swing, tone) => {
+    const footX = baseX + swing;
+    limb(ctx, baseX, hipY, footX, -2.5, 4.6, tone);
+    // Boot: a wedge at the ankle, so the feet are not bare stubs.
+    ctx.fillStyle = boot;
+    ctx.beginPath();
+    ctx.moveTo(footX - 2.6, -3.4);
+    ctx.lineTo(footX + 3.4, -3.4);
+    ctx.lineTo(footX + 3.8, -0.4);
+    ctx.lineTo(footX - 2.8, -0.4);
+    ctx.closePath();
+    ctx.fill();
+  };
+  leg(-spread, walk * stride * bad, leather);
+  leg(spread, -walk * stride, shade(leather, -0.12));
+}
+
+function drawTorso(ctx, cfg, cloth, blood) {
+  const { hipY, headY, halfW, lean, wounded, p } = cfg;
+  const topW = halfW * 0.94;
+  const topY = headY + 7;
+
+  ctx.beginPath();
+  ctx.moveTo(-halfW, hipY + 2);
+  ctx.lineTo(halfW, hipY + 2);
+  ctx.lineTo(topW + lean, topY);
+  ctx.lineTo(-topW + lean, topY);
+  ctx.closePath();
+  ctx.fillStyle = cloth;
+  ctx.fill();
+
+  // Mail across the chest, clipped to the torso so the rings never spill.
+  ctx.save();
+  ctx.clip();
+  ctx.fillStyle = mailTexture(ctx);
+  ctx.fillRect(-halfW - 1, topY, halfW * 2 + 2, 11);
+  // A warm edge on the side the torch is on. Cheap rim light, and it is the
+  // clearest signal that the figure is lit by something it is carrying.
+  const rim = ctx.createLinearGradient(-halfW, 0, halfW * 0.4, 0);
+  rim.addColorStop(0, rgba('#ffb567', 0.3));
+  rim.addColorStop(1, rgba('#ffb567', 0));
+  ctx.fillStyle = rim;
+  ctx.fillRect(-halfW - 1, topY, halfW * 2 + 2, hipY + 2 - topY);
+  // Blood soaks through from the shoulder down as the run goes badly.
+  if (wounded > 0) {
+    ctx.fillStyle = rgba(blood, 0.35 + wounded * 0.45);
+    ctx.beginPath();
+    ctx.ellipse(halfW * 0.35, topY + 7, 3.4 + wounded * 2.6, 5 + wounded * 4, 0.4, 0, TAU);
+    ctx.fill();
+    if (wounded > 0.55) {
+      ctx.beginPath();
+      ctx.ellipse(-halfW * 0.45, hipY - 4, 2.6 + wounded * 2, 3.4 + wounded * 3, -0.3, 0, TAU);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+
+  // A short tunic below the belt. Without it the legs start at the waist and
+  // the figure reads as a torso balanced on two sticks.
+  ctx.fillStyle = shade(cloth, -0.16);
+  ctx.beginPath();
+  ctx.moveTo(-halfW, hipY - 1);
+  ctx.lineTo(halfW, hipY - 1);
+  ctx.lineTo(halfW * 1.06, hipY + 6);
+  ctx.lineTo(-halfW * 1.06, hipY + 6);
   ctx.closePath();
   ctx.fill();
-  // Mail and belt.
-  ctx.fillStyle = rgba(metal, 0.35);
-  ctx.fillRect(-6.5, headY + 8, 13, 8);
-  ctx.fillStyle = gold;
-  ctx.fillRect(-7, hipY - 2, 14, 2.6);
+  ctx.strokeStyle = rgba('#000000', 0.25);
+  ctx.lineWidth = 0.8;
+  for (const ox of [-halfW * 0.42, halfW * 0.42]) {
+    ctx.beginPath();
+    ctx.moveTo(ox, hipY - 1);
+    ctx.lineTo(ox * 1.06, hipY + 6);
+    ctx.stroke();
+  }
 
-  // Head, helm with a nasal bar.
+  // Shoulder straps and belt.
+  ctx.strokeStyle = rgba('#2b2018', 0.85);
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-topW * 0.6 + lean, topY + 1);
+  ctx.lineTo(halfW * 0.5, hipY - 1);
+  ctx.stroke();
+  ctx.fillStyle = cfg.gold;
+  ctx.fillRect(-halfW, hipY - 2, halfW * 2, 2.6);
+  ctx.fillStyle = shade(cfg.gold, -0.35);
+  ctx.fillRect(-1.6, hipY - 2.6, 3.2, 3.8);
+
+  // Pauldrons. Two scales of plate at each shoulder: the single clearest cue
+  // that this is armour and not a jerkin, and they read at any size.
+  const shoulderTop = topY + 0.5;
+  for (const side of [-1, 1]) {
+    for (let i = 0; i < 2; i++) {
+      ctx.fillStyle = shade(cfg.metal, i ? -0.24 : -0.08);
+      ctx.beginPath();
+      ctx.ellipse(side * (halfW * 0.86 + lean * 0.3), shoulderTop + i * 2.4,
+        halfW * 0.5, 2.3 - i * 0.4, side * 0.22, Math.PI, TAU);
+      ctx.fill();
+    }
+  }
+  // Held breath: the chest lifts a little more, a little faster, when hurt.
+  if (wounded > 0.2 && !p.moving) {
+    ctx.fillStyle = rgba('#000000', 0.12 * wounded);
+    ctx.fillRect(-halfW, topY + 9, halfW * 2, 1.2);
+  }
+}
+
+// The helm is the same from every angle; what changes is whether there is a
+// face inside it. Seen from behind you get the neck guard instead, which is
+// how the eye tells at a glance which way the torchbearer is walking.
+function drawHead(ctx, cfg, skin) {
+  const { headY, lean, metal, gold, back, frontal, wounded, dying, t } = cfg;
+  const hx = lean * 0.6;
+  const width = 6.1 * (0.94 + frontal * 0.12);
+
+  ctx.save();
+  ctx.translate(hx, 0);
+
   ctx.fillStyle = skin;
   ctx.beginPath();
-  ctx.arc(0, headY, 6.2, 0, TAU);
+  ctx.ellipse(0, headY, width, 6.3, 0, 0, TAU);
   ctx.fill();
+
+  if (!back) {
+    // Beard, then the shadow the helm brow casts over the eyes.
+    ctx.fillStyle = mix('#6b4a2c', '#8a7a6a', wounded * 0.4);
+    ctx.beginPath();
+    ctx.moveTo(-width * 0.5, headY + 1.6);
+    ctx.quadraticCurveTo(0, headY + 9.4, width * 0.72, headY + 1.4);
+    ctx.quadraticCurveTo(width * 0.4, headY + 4.6, -width * 0.5, headY + 1.6);
+    ctx.fill();
+    ctx.fillStyle = rgba('#000000', 0.34);
+    ctx.fillRect(-width, headY - 1.2, width * 2, 2.6);
+  }
+
+  // Helm: dome, brow band, cheek guards, and a nasal bar on the seen side.
   ctx.fillStyle = metal;
   ctx.beginPath();
-  ctx.arc(0, headY - 1, 6.4, Math.PI, TAU);
+  ctx.arc(0, headY - 1, width + 0.3, Math.PI, TAU);
   ctx.fill();
-  ctx.fillRect(-6.4, headY - 1.4, 12.8, 2.4);
-  if (!f.away) {
-    ctx.fillStyle = shade(metal, -0.35);
-    ctx.fillRect(1.2, headY - 1, 1.8, 5.4);
-    ctx.fillStyle = '#241d19';
-    ctx.fillRect(3.4, headY + 1.4, 2, 1.4);
+  ctx.fillRect(-width - 0.3, headY - 1.4, (width + 0.3) * 2, 2.4);
+  ctx.fillStyle = shade(metal, -0.28);
+  ctx.beginPath();
+  ctx.moveTo(-width - 0.3, headY + 1);
+  ctx.lineTo(-width * 0.52, headY + 1);
+  ctx.lineTo(-width * 0.68, headY + 4.4);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(width + 0.3, headY + 1);
+  ctx.lineTo(width * 0.52, headY + 1);
+  ctx.lineTo(width * 0.68, headY + 4.4);
+  ctx.closePath();
+  ctx.fill();
+
+  if (back) {
+    // Neck guard: overlapping plates down the back of the skull.
+    ctx.fillStyle = shade(metal, -0.18);
+    for (let i = 0; i < 3; i++) {
+      ctx.fillRect(-width * 0.7, headY + 1.4 + i * 2, width * 1.4, 2.4);
+      ctx.strokeStyle = rgba('#000000', 0.4);
+      ctx.lineWidth = 0.7;
+      ctx.strokeRect(-width * 0.7, headY + 1.4 + i * 2, width * 1.4, 2.4);
+    }
+  } else {
+    ctx.fillStyle = shade(metal, -0.4);
+    ctx.fillRect(1.1, headY - 1, 1.8, 5.6);
+    // The eye. It narrows to a slit as the run runs out.
+    const openness = 1.5 - dying * 0.9;
+    ctx.fillStyle = dying > 0.5 ? '#3a2420' : '#241d19';
+    ctx.fillRect(3.3, headY + 1.3, 2, openness);
+    if (dying > 0.35 && Math.sin(t * 3.1) > 0.55) {
+      ctx.fillStyle = skin;
+      ctx.fillRect(3.1, headY + 1.1, 2.4, 2);
+    }
   }
   ctx.fillStyle = gold;
-  ctx.fillRect(-6.4, headY - 2.6, 12.8, 1.4);
-
-  drawPlayerArms(ctx, p, t, { walk, hipY, headY, skin, metal, gold, leather, away: f.away });
+  ctx.fillRect(-width - 0.3, headY - 2.6, (width + 0.3) * 2, 1.4);
   ctx.restore();
+}
 
+// Flashes and rings that sit outside the figure entirely: they are in screen
+// space, unaffected by the flip, and must not be clipped by anything.
+function drawPlayerAuras(ctx, p, t, sx, sy, opts) {
   if (p.invulnTimer > 0 && Math.floor(t * 18) % 2 === 0) {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
@@ -185,28 +475,36 @@ export function drawPlayer(ctx, p, t, opts = {}) {
 }
 
 function drawPlayerArms(ctx, p, t, cfg) {
-  const { walk, hipY, headY, skin, metal, gold, leather } = cfg;
-  const shoulderY = headY + 9;
+  const { walk, headY, shoulderY, halfW, skin, metal, gold, leather, wounded, dying } = cfg;
+  const reach = halfW * 0.82;
 
-  // Off hand: the torch. Always readable, always the light source.
-  const torchAngle = -0.55 + Math.sin(t * 2.3) * 0.05 + walk * 0.12;
-  const tx = -9 + Math.cos(torchAngle) * -6;
-  const ty = shoulderY + Math.sin(torchAngle) * 6;
-  limb(ctx, -5, shoulderY, tx, ty, 4.4, skin);
+  // Off hand: the torch. Always readable, always the light source, and held
+  // lower and less steadily the worse things are going.
+  const droop = wounded * 0.34;
+  const tremor = dying > 0 ? Math.sin(t * 21) * dying * 0.06 : 0;
+  const torchAngle = -0.55 + droop + tremor + Math.sin(t * 2.3) * 0.05 + walk * 0.12;
+  const tx = -reach - 3 + Math.cos(torchAngle) * -6;
+  const ty = shoulderY + 1 + Math.sin(torchAngle) * 6 + wounded * 2;
+  limb(ctx, -reach, shoulderY, tx, ty, 4.4, skin);
+  // Bracer at the wrist.
   ctx.save();
   ctx.translate(tx, ty);
   ctx.rotate(-0.35);
+  ctx.fillStyle = shade(leather, -0.25);
+  ctx.fillRect(-2.6, -2.6, 5.2, 4);
   ctx.fillStyle = leather;
   ctx.fillRect(-2, -14, 4, 16);
+  ctx.fillStyle = rgba('#000000', 0.35);
+  ctx.fillRect(-2, -14, 1.4, 16);
   ctx.fillStyle = gold;
   ctx.fillRect(-2.6, -3, 5.2, 2);
   drawFlame(ctx, 0, -16, 1, t, p.torchFlicker || 1);
   ctx.restore();
 
-  // Sword hand: rests at the hip, swings on attack.
+  // Sword hand: rests at the hip, swings on attack. A wounded arm hangs.
   const atk = p.attack;
-  let angle = 0.35 + walk * 0.18;
-  let extend = 8;
+  let angle = 0.35 + droop * 1.3 + walk * 0.18;
+  let extend = 8 - wounded * 1.4;
   if (atk && atk.type === 'slash') {
     const k = atk.t / atk.duration;
     // Fast wind-up, faster follow-through, a beat of recovery.
@@ -220,13 +518,15 @@ function drawPlayerArms(ctx, p, t, cfg) {
     extend = 12;
   }
 
-  const hx = 6 + Math.cos(angle) * extend * 0.55;
+  const hx = reach + Math.cos(angle) * extend * 0.55;
   const hy = shoulderY + 4 + Math.sin(angle) * extend * 0.55;
-  limb(ctx, 5, shoulderY, hx, hy, 4.4, skin);
+  limb(ctx, reach, shoulderY, hx, hy, 4.4, skin);
 
   ctx.save();
   ctx.translate(hx, hy);
   ctx.rotate(angle);
+  ctx.fillStyle = shade(leather, -0.25);
+  ctx.fillRect(-3.4, -2.4, 4.4, 4.8);
   if (p.hasCrossbow && atk && atk.type === 'fire') {
     // Crossbow: stock, limbs and a taut string.
     ctx.fillStyle = leather;
@@ -242,9 +542,13 @@ function drawPlayerArms(ctx, p, t, cfg) {
     ctx.moveTo(9, -9); ctx.lineTo(3, 0); ctx.lineTo(9, 9);
     ctx.stroke();
   } else {
-    // Sword: fuller, guard, pommel.
+    // Sword: grip, guard, fuller and a pommel.
     ctx.fillStyle = shade(leather, -0.2);
     ctx.fillRect(-5, -1.8, 7, 3.6);
+    ctx.fillStyle = shade(gold, -0.25);
+    ctx.beginPath();
+    ctx.arc(-5.4, 0, 2, 0, TAU);
+    ctx.fill();
     ctx.fillStyle = gold;
     ctx.fillRect(1, -5, 2.6, 10);
     const grad = ctx.createLinearGradient(3, 0, 27, 0);
@@ -262,6 +566,8 @@ function drawPlayerArms(ctx, p, t, cfg) {
     ctx.fill();
     ctx.fillStyle = rgba('#000000', 0.18);
     ctx.fillRect(4, -0.4, 19, 0.8);
+    ctx.fillStyle = rgba('#ffffff', 0.5);
+    ctx.fillRect(4, -2.2, 19, 0.6);
   }
   ctx.restore();
 
@@ -273,7 +579,7 @@ function drawPlayerArms(ctx, p, t, cfg) {
       const a1 = 0.35 + 2.1;
       const prog = (k - 0.24) / 0.51;
       ctx.save();
-      ctx.translate(6, shoulderY + 4);
+      ctx.translate(reach, shoulderY + 4);
       ctx.globalCompositeOperation = 'lighter';
       const g = ctx.createRadialGradient(0, 0, 8, 0, 0, 30);
       g.addColorStop(0, rgba('#ffffff', 0));
@@ -286,6 +592,13 @@ function drawPlayerArms(ctx, p, t, cfg) {
       ctx.fill();
       ctx.restore();
     }
+  }
+  // Nearly gone: the shoulders drop and a hand comes up to the wound.
+  if (dying > 0.4 && !atk) {
+    ctx.fillStyle = rgba('#000000', 0.2);
+    ctx.beginPath();
+    ctx.ellipse(0, headY + 12, halfW * 0.8, 2.4, 0, 0, TAU);
+    ctx.fill();
   }
 }
 

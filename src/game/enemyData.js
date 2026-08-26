@@ -17,6 +17,7 @@ export const ENEMIES = {
     id: 'draugr_thrall', name: 'Draugr Thrall', behaviour: BEHAVIOUR.CHARGER,
     hp: 22, damage: 7, speed: 2.35, attackCooldown: 1.1, attackRange: 0.95,
     detect: 6.0, torchSensitivity: 1.55, prefersDark: false,
+    fov: 130, // barrow-dead, and slow to turn its head
     score: 60, minDepth: 1, radius: 0.34, height: 1.0,
     material: 'flesh',
     palette: { body: '#6c6455', trim: '#3b352c', eye: '#c8e37a' },
@@ -27,6 +28,7 @@ export const ENEMIES = {
     id: 'barrow_hound', name: 'Barrow Hound', behaviour: BEHAVIOUR.PURSUER,
     hp: 14, damage: 5, speed: 3.35, attackCooldown: 0.75, attackRange: 0.85,
     detect: 7.5, torchSensitivity: 1.8, prefersDark: false,
+    fov: 230, // it hunts by nose, so behind it is barely behind it
     score: 55, minDepth: 1, radius: 0.3, height: 0.65,
     material: 'flesh',
     palette: { body: '#4e4038', trim: '#241d19', eye: '#ff8b4a' },
@@ -37,6 +39,7 @@ export const ENEMIES = {
     id: 'rune_shade', name: 'Rune Shade', behaviour: BEHAVIOUR.SKIRMISHER,
     hp: 20, damage: 8, speed: 2.9, attackCooldown: 1.35, attackRange: 1.05,
     detect: 5.5, torchSensitivity: 0.9, prefersDark: true,
+    fov: 160, // a duellist watches its own guard
     score: 90, minDepth: 2, radius: 0.32, height: 1.05,
     material: 'ethereal',
     palette: { body: '#3d4a63', trim: '#7fa0d8', eye: '#bfe1ff' },
@@ -47,6 +50,7 @@ export const ENEMIES = {
     id: 'crypt_warden', name: 'Crypt Warden', behaviour: BEHAVIOUR.DEFENDER,
     hp: 46, damage: 11, speed: 1.75, attackCooldown: 1.5, attackRange: 1.15,
     detect: 5.0, torchSensitivity: 1.25, prefersDark: false,
+    fov: 150, // set to watch one thing, and watching it
     score: 130, minDepth: 2, radius: 0.4, height: 1.2,
     material: 'armour',
     palette: { body: '#5a5b52', trim: '#8d7a48', eye: '#ffd27a' },
@@ -57,6 +61,7 @@ export const ENEMIES = {
     id: 'mire_lurker', name: 'Mire Lurker', behaviour: BEHAVIOUR.AMBUSHER,
     hp: 26, damage: 12, speed: 2.6, attackCooldown: 1.2, attackRange: 1.0,
     detect: 2.6, torchSensitivity: 1.0, prefersDark: true,
+    fov: 360, // it reads the silt, not the light
     score: 120, minDepth: 3, radius: 0.36, height: 0.9,
     material: 'flesh',
     palette: { body: '#3c4a3a', trim: '#1e2a1d', eye: '#a8ff6a' },
@@ -67,6 +72,7 @@ export const ENEMIES = {
     id: 'bone_slinger', name: 'Bone Slinger', behaviour: BEHAVIOUR.RANGED,
     hp: 18, damage: 9, speed: 2.0, attackCooldown: 2.0, attackRange: 6.5,
     detect: 8.0, torchSensitivity: 1.7, prefersDark: false,
+    fov: 120, // busy picking a target down its own arm
     score: 110, minDepth: 3, radius: 0.32, height: 1.0,
     material: 'bone',
     palette: { body: '#7a7160', trim: '#493f33', eye: '#ffb35c' },
@@ -77,6 +83,7 @@ export const ENEMIES = {
     id: 'frost_revenant', name: 'Frost Revenant', behaviour: BEHAVIOUR.PURSUER,
     hp: 38, damage: 10, speed: 2.5, attackCooldown: 1.15, attackRange: 1.0,
     detect: 7.0, torchSensitivity: 1.4, prefersDark: false, chills: true,
+    fov: 170,
     score: 160, minDepth: 5, radius: 0.37, height: 1.15,
     material: 'ice',
     palette: { body: '#5b7185', trim: '#a9dcf2', eye: '#dffaff' },
@@ -87,6 +94,7 @@ export const ENEMIES = {
     id: 'ember_fiend', name: 'Ember Fiend', behaviour: BEHAVIOUR.CHARGER,
     hp: 30, damage: 13, speed: 3.1, attackCooldown: 0.95, attackRange: 1.0,
     detect: 8.5, torchSensitivity: 1.1, prefersDark: false, burns: true,
+    fov: 150,
     score: 170, minDepth: 6, radius: 0.35, height: 1.05,
     material: 'ember',
     palette: { body: '#6b3324', trim: '#ff6a2a', eye: '#ffe08a' },
@@ -97,6 +105,7 @@ export const ENEMIES = {
     id: 'root_horror', name: 'Root Horror', behaviour: BEHAVIOUR.DEFENDER,
     hp: 74, damage: 16, speed: 1.5, attackCooldown: 1.8, attackRange: 1.35,
     detect: 5.5, torchSensitivity: 1.2, prefersDark: false,
+    fov: 360, // rooted, and facing every way at once
     score: 240, minDepth: 7, radius: 0.48, height: 1.4,
     material: 'wood',
     palette: { body: '#40492f', trim: '#6d8447', eye: '#c9ff8f' },
@@ -107,6 +116,7 @@ export const ENEMIES = {
     id: 'valkyr_wraith', name: 'Valkyr Wraith', behaviour: BEHAVIOUR.SKIRMISHER,
     hp: 52, damage: 15, speed: 3.4, attackCooldown: 1.05, attackRange: 1.2,
     detect: 9.0, torchSensitivity: 1.3, prefersDark: false,
+    fov: 200, // a chooser of the slain misses very little
     score: 300, minDepth: 9, radius: 0.36, height: 1.25,
     material: 'ethereal',
     palette: { body: '#4a4560', trim: '#cbb9ff', eye: '#ffffff' },
@@ -114,6 +124,15 @@ export const ENEMIES = {
     threat: 'Extremely mobile. Darts in, strikes twice, and is gone before you turn.',
   },
 };
+
+// What a creature sees when its definition does not say. A 150-degree wedge:
+// wide enough that walking straight at one is always noticed, narrow enough
+// that its back is a genuine blind spot worth working around.
+export const DEFAULT_FOV = 150;
+
+// How far anything hears a footfall behind it, in tiles. Creeping past a
+// creature means staying outside this as well as outside its wedge.
+export const REAR_SENSE = 2.2;
 
 export const ENEMY_LIST = Object.values(ENEMIES);
 

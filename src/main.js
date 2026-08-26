@@ -291,12 +291,20 @@ class Game {
       case 'kill': this.combatHeat = Math.min(1, this.combatHeat + 0.32); break;
       case 'alert': this.combatHeat = Math.min(1, this.combatHeat + 0.12); break;
       case 'secretFound': this.hud.toast('Cracked stone -- strike it', 'good'); break;
-      case 'secretBroken': this.hud.toast('Secret discovered', 'good'); break;
+      case 'secretBroken':
+        this.hud.toast('Secret discovered', 'good');
+        // The chart paints each tile once, so a wall that stops being a wall
+        // has to ask for its square back.
+        if (data.secret) this.minimap.repaint(data.secret.x, data.secret.y);
+        break;
       case 'crossbow':
         this.touch.setCrossbow(true);
         this.hud.toast('Crossbow recovered  \u2014  F or K to loose', 'good');
         break;
-      case 'gateOpened': this.hud.toast('Gate opened', 'good'); break;
+      case 'gateOpened':
+        this.hud.toast('Gate opened', 'good');
+        if (data.gate) this.minimap.repaint(data.gate.x, data.gate.y);
+        break;
       case 'ladder':
         // The camera has to cut, not pan: the vault is nowhere near the maze.
         this.renderer.cameraReady = false;

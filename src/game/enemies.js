@@ -4,7 +4,7 @@
 // shared "walk at the player" loop. Awareness is driven by the player's own
 // torchlight, which is what turns a bigger flame into a real trade-off.
 
-import { BEHAVIOUR, ENEMIES, ELITE_MOD } from './enemyData.js';
+import { BEHAVIOUR, ENEMIES, ELITE_MOD, DEFAULT_FOV, REAR_SENSE } from './enemyData.js';
 import { hasLineOfSight } from './physics.js';
 import { GridMover } from './gridmove.js';
 import { clamp, damp } from '../core/util.js';
@@ -92,15 +92,40 @@ export class Enemy {
     return Math.min(range, 10);
   }
 
+  // The wedge this creature watches, as the cosine of its half angle. -1 is a
+  // creature that senses all round and cannot be crept up on.
+  get fovCos() {
+    const deg = this.def.fov === undefined ? DEFAULT_FOV : this.def.fov;
+    return deg >= 360 ? -1 : Math.cos((deg * Math.PI) / 360);
+  }
+
+  // How close the player can get from behind before being heard rather than
+  // seen. Every creature has this; it is what stops the blind spot from being
+  // a corridor you can walk down.
+  rearSense(world) {
+    return REAR_SENSE * ((world.run.mods && world.run.mods.playerNoise) || 1);
+  }
+
+  // Sight is a wedge, not a circle. Facing matters, so getting round behind a
+  // creature is a real option and its back is worth drawing on the map. Once
+  // it is already chasing, the wedge stops mattering: it knows where you were
+  // and keeps coming for as long as its memory lasts.
   canSeePlayer(world) {
     const p = world.player;
-    const d = Math.hypot(p.x - this.x, p.y - this.y);
+    const dx = p.x - this.x, dy = p.y - this.y;
+    const d = Math.hypot(dx, dy);
+    const rear = this.rearSense(world);
     if (d > this.detectionRange(world)) {
       // Footsteps still give the player away at knife range.
-      if (d > 2.2 || !hasLineOfSight(world, this.x, this.y, p.x, p.y)) return false;
-      return true;
+      if (d > rear) return false;
+      return hasLineOfSight(world, this.x, this.y, p.x, p.y);
     }
-    return hasLineOfSight(world, this.x, this.y, p.x, p.y);
+    if (!hasLineOfSight(world, this.x, this.y, p.x, p.y)) return false;
+    if (d <= rear) return true;
+    const cos = this.fovCos;
+    if (cos <= -1) return true;
+    const dot = d > 0.0001 ? (dx / d) * this.faceX + (dy / d) * this.faceY : 1;
+    return dot >= cos;
   }
 
   alert(world, reason = 'sight') {
