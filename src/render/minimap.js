@@ -141,6 +141,7 @@ export class Minimap {
     this.drawRemembered(ctx, world);
     this.drawMarkers(ctx, world, unit);
     this.drawEnemies(ctx, world, unit);
+    this.drawEchoes(ctx, world, unit);
     this.drawPlayer(ctx, world, px, py, unit);
     ctx.restore();
 
@@ -329,6 +330,32 @@ export class Minimap {
     }
     d = Math.min(range, Math.max(0, d - step * 0.5));
     return { x: x0 + dx * d, y: y0 + dy * d };
+  }
+
+  // The Whisper-Stone's pulses. Drawn where the sound actually came from --
+  // through the stone, which no other part of the chart will do -- with one
+  // ring per corner it had to turn, so a close sound behind two walls reads
+  // differently from a distant one down a straight corridor.
+  drawEchoes(ctx, world, unit) {
+    const echoes = world.echoes;
+    if (!echoes || !echoes.length) return;
+    for (const e of echoes) {
+      const k = e.life / e.maxLife;
+      const mx = e.trueX * CELL, my = e.trueY * CELL;
+      const rings = Math.min(3, e.corners) + 1;
+      for (let i = 0; i < rings; i++) {
+        const grow = (1 - k) * 6 + i * 2.4;
+        ctx.strokeStyle = rgba(e.colour || '#8fd7ff', k * 0.6 * (1 - i * 0.22));
+        ctx.lineWidth = 1.2 * unit;
+        ctx.beginPath();
+        ctx.arc(mx, my, (1.5 + grow) * unit, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.fillStyle = rgba(e.colour || '#8fd7ff', k * 0.85);
+      ctx.beginPath();
+      ctx.arc(mx, my, 1.6 * unit, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   drawPlayer(ctx, world, px, py, unit) {

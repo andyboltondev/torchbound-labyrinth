@@ -209,8 +209,14 @@ export class AudioEngine {
     const dist = Math.hypot(dx, dy);
     if (dist > 26) return null;                       // out of earshot entirely
 
+    // `heard` is the world's own answer to "can this be heard from here",
+    // worked out along open ground rather than straight through the stone.
+    // When it is present it overrides every distance guess made here.
+    const heard = opts.heard || null;
+    const travelled = heard ? heard.distance : dist;
+
     const out = ctx.createGain();
-    out.gain.value = 1 / (1 + Math.pow(dist / 4.5, 1.7));
+    out.gain.value = heard ? heard.volume : 1 / (1 + Math.pow(dist / 4.5, 1.7));
     // The isometric view draws +x to the upper right and +y to the lower left,
     // so screen-space left/right is (dx - dy).
     const pan = clamp((dx - dy) / 9, -1, 1) * 0.85;
@@ -224,8 +230,12 @@ export class AudioEngine {
     }
     // Air and stone both take the top off a distant sound; so does a wall
     // between you and it.
-    const occluded = opts.occluded ? 0.35 : 1;
-    const cutoff = clamp(19000 * Math.exp(-dist / 9) * occluded, 420, 20000);
+    // Every bend the sound turned takes more of the top off it, which is what
+    // makes "round the corner" audibly different from "over there".
+    const occluded = heard
+      ? Math.max(0.14, 1 - heard.echo * 0.72)
+      : (opts.occluded ? 0.35 : 1);
+    const cutoff = clamp(19000 * Math.exp(-travelled / 9) * occluded, 320, 20000);
     if (cutoff < 17000) {
       const f = ctx.createBiquadFilter();
       f.type = 'lowpass';
@@ -237,7 +247,11 @@ export class AudioEngine {
     tail.connect(this.sfxBus);
     // Distance is mostly reverb: a far-off door is nearly all room.
     const send = ctx.createGain();
-    send.gain.value = clamp(dist / 14, 0, 1) * 0.5 * (this.space.size * 0.7 + 0.3);
+    // A sound that has been round two corners is nearly all reflection by the
+    // time it arrives, whatever the room it started in was like.
+    send.gain.value = heard
+      ? clamp(0.15 + heard.echo * 0.85, 0, 1) * 0.62 * (this.space.size * 0.5 + 0.5)
+      : clamp(dist / 14, 0, 1) * 0.5 * (this.space.size * 0.7 + 0.3);
     tail.connect(send);
     send.connect(this.spaceIn);
     return { input: out, gain: out.gain.value };
@@ -349,6 +363,7 @@ const THROTTLE = {
   hit: 0.03, step: 0.1, swing: 0.05, swingWall: 0.06,
   enemyDeath: 0.03, arrowHit: 0.03, alert: 0.18, windup: 0.08, enemyShot: 0.06,
   drip: 0.25, emberPop: 0.2, scurry: 0.8, flutter: 1.2,
+  creatureVoice: 0.35, clatterFar: 0.12,
 };
 
 const MAX_THROTTLE = Math.max(...Object.values(THROTTLE));
@@ -642,6 +657,68 @@ const EFFECTS = {
   torchDouse: (a) => {
     a.noise({ dur: 0.45, type: 'bandpass', f0: 2200, f1: 260, q: 0.7, peak: 0.14, attack: 0.02 });
     a.tone({ freq: 240, to: 90, type: 'sine', dur: 0.35, peak: 0.05 });
+  },
+  // --- creature voices
+  //
+  // One generator, parameterised by the archetype, rather than ten hand-built
+  // sounds. `o.variant` picks one of three shapes within a timbre, so a hound
+  // heard three times in a corridor is recognisably the same animal and not
+  // the same recording.
+  creatureVoice: (a, o) => {
+    const f = (o.pitch || 140) * vary(0.06) * (1 + (o.variant || 0) * 0.09);
+    const long = 0.5 + (o.variant || 0) * 0.16;
+    switch (o.timbre) {
+      case 'snarl':
+        a.noise({ dur: 0.3 * long, type: 'bandpass', f0: f * 3, f1: f * 1.4, q: 1.4, peak: 0.2 });
+        a.tone({ freq: f, to: f * 0.7, type: 'sawtooth', dur: 0.28 * long, peak: 0.1 });
+        break;
+      case 'whisper':
+        a.noise({ dur: 0.9 * long, type: 'bandpass', f0: f, f1: f * 1.6, q: 5, peak: 0.1, attack: 0.25 });
+        a.tone({ freq: f * 2, to: f * 1.5, type: 'sine', dur: 0.7 * long, peak: 0.035, attack: 0.2 });
+        break;
+      case 'clank':
+        a.tone({ freq: f * 6.2, to: f * 5.4, type: 'square', dur: 0.24, peak: 0.09 });
+        a.noise({ dur: 0.16, type: 'bandpass', f0: f * 9, q: 2.4, peak: 0.09 });
+        break;
+      case 'hiss':
+        a.noise({ dur: 1.1 * long, type: 'highpass', f0: f * 4, peak: 0.075, attack: 0.3 });
+        break;
+      case 'clatter':
+        for (let i = 0; i < 4; i++) {
+          a.noise({ dur: 0.05, type: 'bandpass', f0: f * (4 + i) * vary(0.2), q: 5, peak: 0.075, delay: i * 0.07 });
+        }
+        break;
+      case 'moan':
+        a.tone({ freq: f, to: f * 0.78, type: 'sine', dur: 1.3 * long, peak: 0.16, attack: 0.4 });
+        a.tone({ freq: f * 1.5, to: f * 1.2, type: 'triangle', dur: 1.1 * long, peak: 0.05, attack: 0.4 });
+        break;
+      case 'crackle':
+        for (let i = 0; i < 6; i++) {
+          a.noise({ dur: 0.06, type: 'bandpass', f0: 1400 * vary(0.5), q: 3, peak: 0.07, delay: i * 0.06 });
+        }
+        a.tone({ freq: f, to: f * 0.6, type: 'sawtooth', dur: 0.4, peak: 0.06 });
+        break;
+      case 'creak':
+        a.tone({ freq: f, to: f * 1.35, type: 'sawtooth', dur: 1.5 * long, peak: 0.14, attack: 0.5 });
+        a.noise({ dur: 0.9, type: 'bandpass', f0: f * 8, q: 6, peak: 0.05, attack: 0.4 });
+        break;
+      case 'wail':
+        a.tone({ freq: f * 0.8, to: f * 1.7, type: 'triangle', dur: 1.4 * long, peak: 0.13, attack: 0.5 });
+        a.tone({ freq: f * 1.6, to: f * 2.6, type: 'sine', dur: 1.2 * long, peak: 0.05, attack: 0.5 });
+        break;
+      default:   // groan
+        a.tone({ freq: f, to: f * 0.72, type: 'sawtooth', dur: 1.0 * long, peak: 0.17, attack: 0.3 });
+        a.noise({ dur: 0.7 * long, type: 'lowpass', f0: f * 7, f1: f * 3, peak: 0.07, attack: 0.3 });
+        break;
+    }
+  },
+  // A stone or bolt landing somewhere the player is not: what a distraction
+  // sounds like from the player's side of it.
+  clatterFar: (a) => {
+    for (let i = 0; i < 3; i++) {
+      a.noise({ dur: 0.07, type: 'bandpass', f0: 2200 * vary(0.4), q: 3, peak: 0.11, delay: i * 0.055 });
+    }
+    a.tone({ freq: 260 * vary(0.3), to: 120, type: 'triangle', dur: 0.16, peak: 0.06 });
   },
   // --- small things living in the walls
   scurry: (a) => {

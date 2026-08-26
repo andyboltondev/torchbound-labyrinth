@@ -18,12 +18,15 @@ export function baseMods() {
     crossbowDamage: 1, crossbowRangeBonus: 0, crossbowCapacity: 0,
     boltSpeed: 1, reclaim: 0,
     secretSense: 1, revealObjectives: false, hazardFooting: false, desperation: 0,
+    // How far the player's ears reach, how far their own noise carries, and
+    // whether they can see what they hear.
+    hearing: 1, playerNoise: 1, sonar: false,
   };
 }
 
 const T = {
   TORCH: 'Torch', SWORD: 'Sword', BOW: 'Crossbow', SHIELD: 'Defence',
-  EXPLORE: 'Exploration', SCORE: 'Score', BODY: 'Body',
+  EXPLORE: 'Exploration', SCORE: 'Score', BODY: 'Body', SOUND: 'Hearing',
 };
 
 export const RELICS = [
@@ -32,6 +35,26 @@ export const RELICS = [
     text: 'Your torch burns wider and further.',
     cost: 'The dead notice it from further away too.',
     mod: (m, n) => { m.torchRadius *= 1 + 0.3 * n; m.enemyAggro *= 1 + 0.22 * n; },
+  },
+  {
+    id: 'deep_ear', name: 'Ear of the Deep', tag: T.SOUND, rarity: 2, max: 2,
+    text: 'You hear the labyrinth much further off, and round more corners.',
+    cost: 'Listening that hard means standing still enough to be found. '
+      + 'Your own footfalls carry as far as what you are listening to.',
+    mod: (m, n) => { m.hearing *= 1 + 0.45 * n; m.playerNoise *= 1 + 0.3 * n; },
+  },
+  {
+    id: 'wolfskin_soles', name: 'Wolfskin Soles', tag: T.SOUND, rarity: 2, max: 1,
+    text: 'You walk quietly. Things have to see you to find you.',
+    cost: 'Soft soles are slow soles.',
+    mod: (m) => { m.playerNoise *= 0.45; m.moveSpeed *= 0.9; },
+  },
+  {
+    id: 'whisper_stone', name: 'Whisper-Stone', tag: T.SOUND, rarity: 3, max: 1,
+    text: 'What you hear, you also see: a pulse on the map where the sound '
+      + 'came from, and how far round the corners it had to come.',
+    cost: 'The stone hums. Everything down here can hear it too.',
+    mod: (m) => { m.sonar = true; m.playerNoise *= 1.35; },
   },
   {
     id: 'cartographers_thread', name: "Cartographer's Thread", tag: T.EXPLORE, rarity: 2, max: 1,

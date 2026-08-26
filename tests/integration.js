@@ -14,6 +14,7 @@ import { T } from '../src/gen/tiles.js';
 import { inputDirToGrid, screenDirToGrid, screenX, screenY } from '../src/render/iso.js';
 import { bfsField, N4 } from '../src/gen/grid.js';
 import { RNG } from '../src/core/rng.js';
+import { SoundField } from '../src/game/soundfield.js';
 import { hazardBudget, HAZARDS } from '../src/gen/biomes.js';
 import { DIFFICULTIES, DIFFICULTY_LIST } from '../src/game/difficulty.js';
 
@@ -376,6 +377,98 @@ test('blood is left where things bleed, and carried a few tiles on the boots', (
   assert(prints.length > 0, 'walking out of a pool of blood left no prints');
   assert(prints.length <= 6, `prints did not wear off: ${prints.length} of them`);
   assert(world.gore.stains.length > before, 'no new stains were recorded at all');
+});
+
+// --- sound -----------------------------------------------------------------
+
+// Carves an explicit little map into a real level so the propagation rules can
+// be checked against a shape rather than against whatever the generator made.
+function carve(level, cells) {
+  for (const [x, y] of cells) level.grid.set(x, y, T.FLOOR);
+}
+
+test('sound will not go through a wall, and pays for every corner it turns', () => {
+  const { world, level } = makeWorld(3, 'sound-1');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  // Wall off a generous block, then cut two corridors of the same length out
+  // of it: one straight east, one that goes east then turns north.
+  for (let y = cy - 8; y <= cy + 8; y++) {
+    for (let x = cx - 2; x <= cx + 10; x++) level.grid.set(x, y, T.WALL);
+  }
+  const straight = [];
+  for (let i = 0; i <= 8; i++) straight.push([cx + i, cy]);
+  const dogleg = [];
+  for (let i = 0; i <= 4; i++) dogleg.push([cx + i, cy + 4]);
+  for (let i = 1; i <= 4; i++) dogleg.push([cx + 4, cy + 4 + i]);
+  carve(level, straight);
+  carve(level, dogleg);
+  level.grid.set(cx, cy + 1, T.FLOOR);
+  level.grid.set(cx, cy + 2, T.FLOOR);
+  level.grid.set(cx, cy + 3, T.FLOOR);
+  level.grid.set(cx, cy + 4, T.FLOOR);
+
+  const field = new SoundField(level.grid);
+  field.build(cx + 0.5, cy + 0.5, 30, () => false);
+
+  // Straight down the corridor: nothing turned, and it is exactly as far as
+  // it looks.
+  const far = field.hear(cx + 8.5, cy + 0.5, 1);
+  assert(far, 'a straight corridor did not carry sound at all');
+  assert(far.corners === 0, `a straight corridor counted ${far.corners} corners`);
+  assertNear(far.distance, 8, 0.1, 'straight corridor distance');
+
+  // Through the stone: eight tiles across, but not reachable in eight.
+  const behind = field.hear(cx + 8.5, cy + 2.5, 1);
+  assert(!behind || behind.distance > 9,
+    'sound reached straight through a wall');
+
+  // Round the bend: the same walk, but it cost more and it registered.
+  const bent = field.hear(cx + 4.5, cy + 8.5, 1);
+  assert(bent, 'sound did not turn the corner at all');
+  assert(bent.corners >= 1, 'turning a corner registered no corners');
+  assert(bent.distance > 8, `a dog-leg cost ${bent.distance}, no more than a straight run`);
+  assert(bent.echo > far.echo, 'a bend did not muddy the sound');
+});
+
+test('hearing reaches further than the torch, and further again in the dark', () => {
+  const { world } = makeWorld(4, 'sound-2');
+  step(world, 20);
+  const litRange = world.hearingRange;
+  assert(litRange > world.torchRadius * 1.4,
+    `hearing (${litRange}) barely beats the torch (${world.torchRadius})`);
+  world.toggleTorch();
+  step(world, 30);
+  assert(world.hearingRange > litRange, 'going dark did not extend hearing');
+});
+
+test('a bolt clattering off stone pulls unaware creatures to the noise', () => {
+  const { world, level } = makeWorld(4, 'sound-3', (r) => { r.hasCrossbow = true; });
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 1);
+  // One long corridor, so the creature is well outside the torch and cannot
+  // see the player however it happens to be facing.
+  for (let x = cx - 16; x <= cx + 2; x++) level.grid.set(x, cy, T.FLOOR);
+  world.flow = null;
+  place(world, cx, cy);
+
+  const watcher = spawnAt(world, 'draugr_thrall', cx - 12, cy);
+  watcher.state = 'idle';
+  const homeX = watcher.mover.tileX;
+  step(world, 30);
+  assert(watcher.state === 'idle',
+    `the creature noticed the player twelve tiles off (state ${watcher.state})`);
+
+  // A noise beyond it, on the far side from the player, so what it walks
+  // toward is the noise and not the torch.
+  const drawn = world.makeNoise(cx - 15, cy, 1.2);
+  assert(drawn >= 1, 'nothing heard a noise three tiles away down a straight corridor');
+  assert(watcher.state === 'seeking', 'the creature heard the noise and ignored it');
+  step(world, 120);
+  assert(watcher.mover.tileX < homeX, 'the creature never went to look');
+
+  // ...and it gives up rather than standing there for the rest of the level.
+  step(world, 60 * 8);
+  assert(watcher.state !== 'seeking', 'the creature investigated forever');
 });
 
 // --- keys, gates and the exit ----------------------------------------------

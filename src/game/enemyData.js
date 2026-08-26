@@ -21,6 +21,7 @@ export const ENEMIES = {
     score: 60, minDepth: 1, radius: 0.34, height: 1.0,
     material: 'flesh',
     blood: '#6e1c1a', // old blood, and not much of it
+    voice: { timbre: 'groan', pitch: 92, loudness: 1, every: 6.5 },
     palette: { body: '#6c6455', trim: '#3b352c', eye: '#c8e37a' },
     lore: 'Barrow-bound dead, roused by torchlight. They remember only the order to guard.',
     threat: 'Closes distance in a straight line and commits to a heavy overhead swing.',
@@ -33,6 +34,7 @@ export const ENEMIES = {
     score: 55, minDepth: 1, radius: 0.3, height: 0.65,
     material: 'flesh',
     blood: '#7a1f1c',
+    voice: { timbre: 'snarl', pitch: 210, loudness: 1.25, every: 4.5 },
     palette: { body: '#4e4038', trim: '#241d19', eye: '#ff8b4a' },
     lore: 'Hunting dogs interred alongside their jarl. Death only sharpened the nose.',
     threat: 'Very fast. Will follow you across the level once it has your scent.',
@@ -45,6 +47,7 @@ export const ENEMIES = {
     score: 90, minDepth: 2, radius: 0.32, height: 1.05,
     material: 'ethereal',
     blood: '#2f4a78', // not blood: the ink the oath was cut in
+    voice: { timbre: 'whisper', pitch: 640, loudness: 0.7, every: 5.5 },
     palette: { body: '#3d4a63', trim: '#7fa0d8', eye: '#bfe1ff' },
     lore: 'A carved oath that outlived the one who swore it. It fights like a duellist.',
     threat: 'Strikes and immediately withdraws. Punishes greedy follow-up swings.',
@@ -57,6 +60,7 @@ export const ENEMIES = {
     score: 130, minDepth: 2, radius: 0.4, height: 1.2,
     material: 'armour',
     blood: '#661a18',
+    voice: { timbre: 'clank', pitch: 150, loudness: 1.35, every: 5 },
     palette: { body: '#5a5b52', trim: '#8d7a48', eye: '#ffd27a' },
     lore: 'Sworn to a door, a chest or a name. It will not chase you far, and it does not need to.',
     threat: 'Heavy armour and a wide guard. Rarely leaves the room it was set to hold.',
@@ -69,6 +73,7 @@ export const ENEMIES = {
     score: 120, minDepth: 3, radius: 0.36, height: 0.9,
     material: 'flesh',
     blood: '#4a7a2e', // whatever it has instead, it is green
+    voice: { timbre: 'hiss', pitch: 320, loudness: 0.55, every: 8 },
     palette: { body: '#3c4a3a', trim: '#1e2a1d', eye: '#a8ff6a' },
     lore: 'It lies in the silt with its mouth open and waits for warmth to pass.',
     threat: 'Invisible until you are almost on top of it. The opening strike hits hard.',
@@ -81,6 +86,7 @@ export const ENEMIES = {
     score: 110, minDepth: 3, radius: 0.32, height: 1.0,
     material: 'bone',
     blood: '#6a6152', // bone dust
+    voice: { timbre: 'clatter', pitch: 420, loudness: 0.95, every: 5.5 },
     palette: { body: '#7a7160', trim: '#493f33', eye: '#ffb35c' },
     lore: 'Grave-robbers who were caught, and now throw the same bones they came to steal.',
     threat: 'Keeps its distance and lobs bone shards. Backs away as you approach.',
@@ -93,6 +99,7 @@ export const ENEMIES = {
     score: 160, minDepth: 5, radius: 0.37, height: 1.15,
     material: 'ice',
     blood: '#3f6478', // meltwater and something darker
+    voice: { timbre: 'moan', pitch: 118, loudness: 1.1, every: 6 },
     palette: { body: '#5b7185', trim: '#a9dcf2', eye: '#dffaff' },
     lore: 'Frozen mid-stride a thousand winters ago, and still finishing the step.',
     threat: 'Its touch numbs the legs. You move slower for a few seconds after a hit.',
@@ -105,6 +112,7 @@ export const ENEMIES = {
     score: 170, minDepth: 6, radius: 0.35, height: 1.05,
     material: 'ember',
     blood: '#3a2118', // it scorches the floor rather than staining it
+    voice: { timbre: 'crackle', pitch: 260, loudness: 1.15, every: 4.5 },
     palette: { body: '#6b3324', trim: '#ff6a2a', eye: '#ffe08a' },
     lore: 'Something that crawled out of the forge-pit wearing a smith for a skin.',
     threat: 'Fast and hot. Leaves burning ground where it falls.',
@@ -117,6 +125,7 @@ export const ENEMIES = {
     score: 240, minDepth: 7, radius: 0.48, height: 1.4,
     material: 'wood',
     blood: '#3f6b23', // sap
+    voice: { timbre: 'creak', pitch: 72, loudness: 1.45, every: 6.5 },
     palette: { body: '#40492f', trim: '#6d8447', eye: '#c9ff8f' },
     lore: 'The tomb tried to grow over a warrior. Neither of them won.',
     threat: 'Slow, enormously tough, and its reach is longer than it looks.',
@@ -129,6 +138,7 @@ export const ENEMIES = {
     score: 300, minDepth: 9, radius: 0.36, height: 1.25,
     material: 'ethereal',
     blood: '#4a3f70',
+    voice: { timbre: 'wail', pitch: 520, loudness: 1.3, every: 5 },
     palette: { body: '#4a4560', trim: '#cbb9ff', eye: '#ffffff' },
     lore: 'A chooser of the slain who lost the road home, and now chooses in the dark.',
     threat: 'Extremely mobile. Darts in, strikes twice, and is gone before you turn.',
@@ -149,6 +159,15 @@ export const ENEMY_LIST = Object.values(ENEMIES);
 // What a body leaves on the floor when the material lookup has nothing to
 // say. Most things down here bleed red; a few very much do not.
 export const DEFAULT_BLOOD = '#7a1f1c';
+
+// How far the player's ears reach, as a multiple of what the torch lights.
+// Sound outruns the light -- that is the whole point of having it -- but not
+// so far that the labyrinth stops being dark and starts being a radar screen.
+export const HEARING_REACH = 1.9;
+
+// What a creature sounds like when nothing in its definition says. Nothing
+// uses this today; it exists so a new archetype is quiet rather than silent.
+export const DEFAULT_VOICE = { timbre: 'groan', pitch: 140, loudness: 0.9, every: 7 };
 
 export const ELITE_MOD = {
   hp: 2.15, damage: 1.4, speed: 1.08, score: 2.6, radius: 1.18,

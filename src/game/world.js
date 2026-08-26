@@ -10,7 +10,8 @@ import { Particles, burstSparks, burstBlood, burstStone, ring, footDust } from '
 import { Player } from './player.js';
 import { Enemy } from './enemies.js';
 import { Boss } from './boss.js';
-import { ENEMIES, enemyPoolFor, DEFAULT_BLOOD } from './enemyData.js';
+import { ENEMIES, enemyPoolFor, DEFAULT_BLOOD, HEARING_REACH } from './enemyData.js';
+import { SoundField } from './soundfield.js';
 import { Gore } from './gore.js';
 import { hasLineOfSight, tileBlocks } from './physics.js';
 import { probeAcoustics, spaceProfile, blendSpace, DEFAULT_SPACE } from '../audio/space.js';
@@ -98,6 +99,18 @@ export class World {
     // you go nearly blind, and so does most of what is hunting you.
     this.torchLit = true;
     this.torchToggleCooldown = 0;
+    // What the player can hear from where they are standing, worked out along
+    // open ground. Rebuilt a few times a second; every creature that makes a
+    // noise looks itself up in it rather than working it out for itself.
+    this.hearing = new SoundField(level.grid);
+    this.hearingTimer = 0;
+    this.hearingRange = 12;
+    // A second field, built on demand when something loud happens, so
+    // creatures can decide whether they heard it. Loud things are rare.
+    this.noiseField = new SoundField(level.grid);
+    // What the player has heard recently and roughly where from, for the
+    // sonar relic and anything else that wants to draw it.
+    this.echoes = [];
     this.revealRadius = 0;
     this.lowHealthPulse = 0;
     this.secretsFound = 0;
@@ -230,6 +243,7 @@ export class World {
 
     this.torchToggleCooldown = Math.max(0, this.torchToggleCooldown - dt);
     this.updateHazard();
+    this.updateHearing(dt);
     this.updateAcoustics(dt);
     this.torch.update(dt, this.hazardMods);
     this.player.torchFlicker = this.torch.flicker;
@@ -327,6 +341,79 @@ export class World {
       ? this.torch.effectiveRadius(this.hazardMods)
       : DOUSED_RADIUS * (0.94 + this.torch.flicker * 0.06);
     this.revealRadius = this.hazardMods.revealMovers || 0;
+  }
+
+  // --- hearing ------------------------------------------------------------
+  // Sound is the half of the labyrinth that works in the dark, so the field
+  // it travels through is a first-class thing rather than a mixer trick. See
+  // soundfield.js for how it is worked out.
+  updateHearing(dt) {
+    this.hearingTimer -= dt;
+    for (let i = this.echoes.length - 1; i >= 0; i--) {
+      this.echoes[i].life -= dt;
+      if (this.echoes[i].life <= 0) this.echoes.splice(i, 1);
+    }
+    if (this.hearingTimer > 0) return;
+    this.hearingTimer = 0.22;
+    // Hearing reaches further than the torch, and further again in the dark.
+    this.hearingRange = this.torch.baseRadius * HEARING_REACH * this.hearingScale;
+    this.hearing.build(this.player.x, this.player.y, this.hearingRange,
+      (x, y) => this.soundBlocked(x, y));
+  }
+
+  soundBlocked(x, y) {
+    if (this.sealBlocks.has(this.grid.idx(x, y))) return true;
+    const g = this.gateAt(x, y);
+    return !!(g && !g.open);
+  }
+
+  // Plays a sound only if it could actually reach the player, at the volume
+  // and dullness the journey left it with, and from the direction it arrived
+  // rather than from wherever the thing making it happens to be standing.
+  hearSfx(name, x, y, loudness = 1, opts = {}) {
+    const heard = this.hearing.hear(x, y, loudness);
+    if (!heard || heard.volume < 0.015) return null;
+    // Placed at the mouth of whatever it came round, not through the wall.
+    const apparent = Math.min(heard.distance, 9);
+    this.emit('sfx', {
+      name,
+      x: this.player.x + heard.dirX * apparent,
+      y: this.player.y + heard.dirY * apparent,
+      heard,
+      ...opts,
+    });
+    if (this.run.mods.sonar) {
+      this.echoes.push({
+        x: this.player.x + heard.dirX * apparent,
+        y: this.player.y + heard.dirY * apparent,
+        trueX: x, trueY: y,
+        strength: heard.volume, corners: heard.corners,
+        life: 1.6, maxLife: 1.6, colour: opts.colour || '#8fd7ff',
+      });
+      if (this.echoes.length > 24) this.echoes.shift();
+    }
+    return heard;
+  }
+
+  // Something loud happened at a place that is not the player. Everything
+  // that could have heard it goes to look, which is what makes a bolt fired
+  // down a side passage a tool rather than a wasted bolt.
+  makeNoise(x, y, loudness = 1, opts = {}) {
+    // Roughly as far as the bolt that made it flew, before the walls and the
+    // corners take their cut. A distraction that only carried across a room
+    // would never be worth spending a bolt on.
+    const range = 12 * loudness;
+    this.noiseField.build(x, y, range, (gx, gy) => this.soundBlocked(gx, gy));
+    let drawn = 0;
+    for (const e of this.enemies) {
+      if (e.dead || e.sealed || e.dormant) continue;
+      if (!e.investigable) continue;
+      const heard = this.noiseField.hear(e.x, e.y, 1);
+      if (!heard || heard.volume < 0.07) continue;
+      if (e.hearNoise(this, x, y, heard)) drawn++;
+    }
+    if (opts.playerHears !== false) this.hearSfx(opts.sfx || 'clatterFar', x, y, loudness);
+    return drawn;
   }
 
   // --- acoustics ----------------------------------------------------------
@@ -520,6 +607,15 @@ export class World {
   onProjectileHitWall(p) {
     burstSparks(this.particles, p.x, p.y, p.friendly ? '#c9b48b' : (p.colour || '#cfc6b2'), 5, 2);
     this.playSfx(p.friendly ? 'arrowWall' : 'shotWall', { x: p.x, y: p.y });
+    // A bolt hitting stone is a noise somewhere the player is not, which is
+    // the one deliberate distraction the player owns.
+    if (p.friendly) {
+      const drawn = this.makeNoise(p.x, p.y, 1.15, { playerHears: false });
+      if (drawn > 0) {
+        ring(this.particles, p.x, p.y, '#8fd7ff', 14, 1.1, 0.5);
+        this.emit('distraction', { x: p.x, y: p.y, count: drawn });
+      }
+    }
   }
 
   // --- player combat ------------------------------------------------------
@@ -781,6 +877,13 @@ export class World {
     }
     this.emit('kill', { enemy, points: result.points, streak: result.streak });
     this.checkEncounterProgress();
+  }
+
+  // Something went to look at a noise. Presentation only -- the decision was
+  // taken in the creature -- but the player has to be able to tell it worked.
+  onEnemyHeardNoise(enemy, x, y, heard) {
+    this.particles.text(enemy.x, enemy.y - 0.9, '?', '#8fd7ff', 15, 1.1);
+    this.playSfx('alert', { x: enemy.x, y: enemy.y, key: 'heard' + enemy.id, peak: 0.4 });
   }
 
   onEnemyAlerted(enemy) {

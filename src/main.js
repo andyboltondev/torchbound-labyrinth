@@ -307,6 +307,9 @@ class Game {
           data.lit ? 'good' : '');
         break;
       case 'fireLit': this.hud.toast('The fire catches', 'good'); break;
+      case 'distraction':
+        this.hud.toast(data.count === 1 ? 'Something goes to look' : data.count + ' go to look', 'good');
+        break;
       case 'gateOpened':
         this.hud.toast('Gate opened', 'good');
         if (data.gate) this.minimap.repaint(data.gate.x, data.gate.y);

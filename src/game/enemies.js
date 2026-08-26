@@ -4,7 +4,7 @@
 // shared "walk at the player" loop. Awareness is driven by the player's own
 // torchlight, which is what turns a bigger flame into a real trade-off.
 
-import { BEHAVIOUR, ENEMIES, ELITE_MOD, DEFAULT_FOV, REAR_SENSE } from './enemyData.js';
+import { BEHAVIOUR, ENEMIES, ELITE_MOD, DEFAULT_FOV, REAR_SENSE, DEFAULT_VOICE } from './enemyData.js';
 import { hasLineOfSight } from './physics.js';
 import { GridMover } from './gridmove.js';
 import { clamp, damp } from '../core/util.js';
@@ -12,6 +12,8 @@ import { clamp, damp } from '../core/util.js';
 const STATE = {
   DORMANT: 'dormant', IDLE: 'idle', ALERT: 'alert', CHASE: 'chase',
   STRIKE: 'strike', RETREAT: 'retreat', RETURN: 'return',
+  // Heard something, has not seen anything: walking over to find out.
+  SEEKING: 'seeking',
 };
 
 let nextId = 1;
@@ -69,6 +71,12 @@ export class Enemy {
     this.dead = false;
     this.lastKnown = null;
     this.dashTimer = 0;
+    // Its own voice, on its own clock, offset so a room full of the same
+    // creature does not speak in chorus.
+    this.voiceTimer = (rng ? rng.float(0.2, 1) : Math.random()) * (this.def.voice || DEFAULT_VOICE).every;
+    this.voiceVariant = rng ? rng.int(0, 2) : 0;
+    this.seekTarget = null;
+    this.seekTimer = 0;
   }
 
   get behaviour() { return this.def.behaviour; }
@@ -128,15 +136,62 @@ export class Enemy {
     return dot >= cos;
   }
 
+  // Only something that is not already busy can be sent off after a noise.
+  get investigable() {
+    return this.state === STATE.IDLE || this.state === STATE.RETURN || this.state === STATE.SEEKING;
+  }
+
+  // Called by the world when something loud happens within earshot. Returns
+  // true if this creature actually went to look, so the thrower gets told
+  // whether the throw worked.
+  hearNoise(world, x, y, heard) {
+    if (!this.investigable) return false;
+    // A noise it can barely hear is a reason to turn its head, not to walk
+    // across the level. A loud one nearby is worth the whole trip.
+    if (heard.volume < 0.07) return false;
+    this.state = STATE.SEEKING;
+    this.seekTarget = { x, y };
+    this.seekTimer = 3.5 + heard.volume * 4;
+    this._face(x - this.x, y - this.y, 0.016, 40);
+    this.alertPulse = 0.8;
+    world.onEnemyHeardNoise(this, x, y, heard);
+    return true;
+  }
+
+  // A sound of its own, on its own clock. Only ever emitted when the player
+  // cannot already see the creature: once it is on screen the sound is
+  // telling them nothing they do not know, and a hall of visible monsters
+  // grumbling at each other is noise in both senses.
+  updateVoice(dt, world, visible) {
+    this.voiceTimer -= dt;
+    if (this.voiceTimer > 0) return;
+    const voice = this.def.voice || DEFAULT_VOICE;
+    // Something that is hunting you says so more often.
+    const busy = this.state === STATE.CHASE || this.state === STATE.STRIKE;
+    this.voiceTimer = voice.every * (busy ? 0.45 : 1) * (0.7 + Math.random() * 0.7);
+    if (visible) return;
+    this.voiceVariant = (this.voiceVariant + 1 + Math.floor(Math.random() * 2)) % 3;
+    world.hearSfx('creatureVoice', this.x, this.y,
+      voice.loudness * (this.elite ? 1.2 : 1) * (busy ? 1.15 : 1), {
+        timbre: voice.timbre,
+        pitch: voice.pitch * (this.elite ? 0.86 : 1),
+        variant: this.voiceVariant,
+        key: 'voice' + this.id,
+        colour: this.def.palette.eye,
+      });
+  }
+
   alert(world, reason = 'sight') {
     if (this.state === STATE.DORMANT) {
       this.dormant = false;
       world.onAmbushWake(this);
     }
-    if (this.state === STATE.IDLE || this.state === STATE.RETURN || this.state === STATE.DORMANT) {
+    if (this.state === STATE.IDLE || this.state === STATE.RETURN
+        || this.state === STATE.DORMANT || this.state === STATE.SEEKING) {
       this.alertPulse = 1.2;
       world.onEnemyAlerted(this, reason);
     }
+    this.seekTarget = null;
     this.state = STATE.CHASE;
     this.lostTimer = this.behaviour === BEHAVIOUR.PURSUER ? 9 : 4.5;
     this.lastKnown = { x: world.player.x, y: world.player.y };
@@ -179,14 +234,34 @@ export class Enemy {
     } else {
       const sees = this.canSeePlayer(world);
       if (sees) {
-        if (this.state === STATE.IDLE || this.state === STATE.RETURN) this.alert(world);
+        // Seeking counts as unaware: something walking over to look at a
+        // noise and finding the player there has to become a chase, or it
+        // stands in the open studying the floor.
+        if (this.state === STATE.IDLE || this.state === STATE.RETURN
+            || this.state === STATE.SEEKING) this.alert(world);
         this.lastKnown = { x: p.x, y: p.y };
         this.lostTimer = this.behaviour === BEHAVIOUR.PURSUER ? 9 : 4.5;
-      } else if (this.state !== STATE.IDLE) {
+      } else if (this.state !== STATE.IDLE && this.state !== STATE.SEEKING) {
+        // Seeking is not losing the player: it never had them. It runs on its
+        // own timer, so it must not be cut short by the give-up clock for a
+        // chase that never started.
         this.lostTimer -= dt;
         if (this.lostTimer <= 0) {
           this.state = this.guard || this.behaviour === BEHAVIOUR.DEFENDER ? STATE.RETURN : STATE.IDLE;
           this.lastKnown = null;
+        }
+      }
+
+      // Walking over to whatever made the noise. Gives up on a timer and
+      // goes back to whatever it was doing, so a distraction buys time
+      // rather than permanently removing a creature from the level.
+      if (this.state === STATE.SEEKING && !sees) {
+        this.seekTimer -= dt;
+        const t = this.seekTarget;
+        const reached = t && Math.hypot(t.x - this.x, t.y - this.y) < 1.2;
+        if (this.seekTimer <= 0 || reached) {
+          this.state = this.guard || this.behaviour === BEHAVIOUR.DEFENDER ? STATE.RETURN : STATE.IDLE;
+          this.seekTarget = null;
         }
       }
 
@@ -198,6 +273,8 @@ export class Enemy {
           this.windup = 0;
           this._release(world, dist);
         }
+      } else if (this.state === STATE.SEEKING && this.seekTarget && !sees) {
+        this._seek(dt, world, speedMul);
       } else {
         switch (this.behaviour) {
           case BEHAVIOUR.CHARGER: this._charger(dt, world, dist, speedMul, rateMul); break;
@@ -214,6 +291,10 @@ export class Enemy {
     // Always applied, so a step already under way finishes cleanly no matter
     // what the behaviour above decided.
     this._applyMovement(dt, world);
+    // Its voice, last, so it speaks from where it ended up.
+    if (!this.sealed && this.state !== STATE.DORMANT) {
+      this.updateVoice(dt, world, world.vis.isVisible(Math.floor(this.x), Math.floor(this.y)));
+    }
   }
 
   _face(dx, dy, dt, rate = 10) {
@@ -257,6 +338,14 @@ export class Enemy {
     if (dir) this._step(world, dt, dir.x, dir.y, speed);
     else if (this.lastKnown) this._step(world, dt, this.lastKnown.x - this.x, this.lastKnown.y - this.y, speed);
     else this.speedNow = 0;
+  }
+
+  // Walks toward whatever it heard. Straight-line steering is enough: the
+  // grid mover follows the passage it is in, and the seek timer bails out of
+  // anything it cannot solve rather than letting it grind into a wall.
+  _seek(dt, world, speedMul) {
+    const t = this.seekTarget;
+    this._step(world, dt, t.x - this.x, t.y - this.y, this.def.speed * speedMul * 0.8);
   }
 
   _wander(world, dt, speed) {
