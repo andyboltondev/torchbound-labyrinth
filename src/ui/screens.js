@@ -277,6 +277,26 @@ export class Screens {
       panel.appendChild(row);
     };
 
+    segmented('Graphics', 'graphics', [
+      { value: 'auto', label: 'Auto' },
+      { value: 'high', label: 'High' },
+      { value: 'medium', label: 'Medium' },
+      { value: 'low', label: 'Low' },
+    ], 'Auto watches the frame rate and sheds effects -- bloom, torch-lit '
+      + 'stonework, ambient motes -- to keep the game above 30fps. Pick a '
+      + 'level by hand to pin it there instead.');
+
+    segmented('Frame rate', 'showFps', [
+      { value: false, label: 'Hidden' },
+      { value: true, label: 'Shown' },
+    ], 'Draws the current frame rate and quality level in the corner.');
+
+    segmented('Room reverb', 'reverb', [
+      { value: true, label: 'On' },
+      { value: false, label: 'Off' },
+    ], 'Sound is coloured by the space you are standing in: a passage rings, '
+      + 'a hall opens out, fog swallows the tail. Turn it off for a dry mix.');
+
     segmented('Direction keys', 'movementFrame', [
       { value: 'dungeon', label: 'Dungeon axes' },
       { value: 'view', label: 'Screen direction' },

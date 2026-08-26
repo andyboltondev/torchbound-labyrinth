@@ -595,3 +595,110 @@ export function hazardOverlay(id) {
   }
   return hazardCache.get(id);
 }
+
+// --- torch lighting overlays ----------------------------------------------
+// The baked lit/dark pair handles how *much* light reaches a tile. These
+// handle where it is coming from: a warm quad per wall face, blended additively
+// in proportion to how squarely that face is turned toward the torch. It costs
+// one small blit per face and it is the difference between architecture that is
+// merely visible and architecture that is being lit by a flame you are holding.
+
+const WARM = '#ff9b4e';
+
+function faceGradient(ctx, x0, y0, x1, y1, peak) {
+  const g = ctx.createLinearGradient(x0, y0, x1, y1);
+  g.addColorStop(0, rgba(WARM, peak));
+  g.addColorStop(0.55, rgba(WARM, peak * 0.42));
+  g.addColorStop(1, rgba(WARM, 0));
+  return g;
+}
+
+function bakeWarmFaces() {
+  const faces = {};
+  faces.left = bake(TILE_W, WALL_CANVAS_H, (ctx) => {
+    ctx.beginPath();
+    ctx.moveTo(0, TILE_H / 2);
+    ctx.lineTo(TILE_W / 2, TILE_H);
+    ctx.lineTo(TILE_W / 2, TILE_H + WALL_H);
+    ctx.lineTo(0, TILE_H / 2 + WALL_H);
+    ctx.closePath();
+    ctx.fillStyle = faceGradient(ctx, 0, TILE_H / 2, 0, TILE_H + WALL_H, 1);
+    ctx.fill();
+  });
+  faces.right = bake(TILE_W, WALL_CANVAS_H, (ctx) => {
+    ctx.beginPath();
+    ctx.moveTo(TILE_W / 2, TILE_H);
+    ctx.lineTo(TILE_W, TILE_H / 2);
+    ctx.lineTo(TILE_W, TILE_H / 2 + WALL_H);
+    ctx.lineTo(TILE_W / 2, TILE_H + WALL_H);
+    ctx.closePath();
+    ctx.fillStyle = faceGradient(ctx, 0, TILE_H / 2, 0, TILE_H + WALL_H, 1);
+    ctx.fill();
+  });
+  faces.top = bake(TILE_W, WALL_CANVAS_H, (ctx) => {
+    diamond(ctx, TILE_W / 2, TILE_H / 2);
+    const g = ctx.createRadialGradient(TILE_W / 2, TILE_H / 2, 0, TILE_W / 2, TILE_H / 2, TILE_W / 2);
+    g.addColorStop(0, rgba(WARM, 0.85));
+    g.addColorStop(1, rgba(WARM, 0.3));
+    ctx.fillStyle = g;
+    ctx.fill();
+  });
+  faces.floor = bake(TILE_W, FLOOR_H, (ctx) => {
+    diamond(ctx, TILE_W / 2, FLOOR_H / 2);
+    const g = ctx.createRadialGradient(TILE_W / 2, FLOOR_H / 2, 0, TILE_W / 2, FLOOR_H / 2, TILE_W / 2);
+    g.addColorStop(0, rgba(WARM, 0.8));
+    g.addColorStop(1, rgba(WARM, 0.25));
+    ctx.fillStyle = g;
+    ctx.fill();
+  });
+  return faces;
+}
+
+let warmFaces = null;
+export function warmLightSprites() {
+  if (!warmFaces) warmFaces = bakeWarmFaces();
+  return warmFaces;
+}
+
+// --- contact shadows ------------------------------------------------------
+// A floor tile with a wall on one side is darker on that side. Baked once per
+// neighbour combination so the whole effect is a single blit per tile.
+// Bits: 1 = west (-x), 2 = north (-y), 4 = east (+x), 8 = south (+y).
+
+// The two upper edges have a wall rising behind them, so they cast; the two
+// lower edges have a wall drawn in front of them and only need a hint of a
+// crease. Deliberately faint -- read as contact, not as a painted-on frame.
+const EDGES = [
+  { bit: 1, mx: 16, my: 8, strength: 0.3 },
+  { bit: 2, mx: 48, my: 8, strength: 0.3 },
+  { bit: 4, mx: 48, my: 24, strength: 0.11 },
+  { bit: 8, mx: 16, my: 24, strength: 0.11 },
+];
+
+const contactCache = new Array(16).fill(null);
+
+export function contactShadow(mask) {
+  if (!mask) return null;
+  const m = mask & 15;
+  if (contactCache[m]) return contactCache[m];
+  const c = bake(TILE_W, FLOOR_H, (ctx) => {
+    diamond(ctx, TILE_W / 2, FLOOR_H / 2);
+    ctx.save();
+    ctx.clip();
+    for (const e of EDGES) {
+      if (!(m & e.bit)) continue;
+      const cx = TILE_W / 2, cy = FLOOR_H / 2;
+      // Straight out from the shared edge toward the middle of the tile, and
+      // a little past it, so the falloff is soft rather than a hard band.
+      const g = ctx.createLinearGradient(e.mx, e.my, cx + (cx - e.mx) * 0.25, cy + (cy - e.my) * 0.25);
+      g.addColorStop(0, `rgba(0,0,0,${e.strength})`);
+      g.addColorStop(0.6, `rgba(0,0,0,${(e.strength * 0.28).toFixed(3)})`);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, TILE_W, FLOOR_H);
+    }
+    ctx.restore();
+  });
+  contactCache[m] = c;
+  return c;
+}

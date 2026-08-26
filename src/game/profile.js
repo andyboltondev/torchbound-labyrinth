@@ -25,6 +25,9 @@ export const DEFAULT_SETTINGS = {
   movementAssist: 'corridor',   // corridor | strict
   screenShake: 1,
   showDamage: true,
+  graphics: 'auto',             // auto | low | medium | high
+  reverb: true,
+  showFps: false,
 };
 
 export class Profile {

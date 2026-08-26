@@ -7,19 +7,46 @@ import { rgba, shade, mix } from './palette.js';
 
 const TAU = Math.PI * 2;
 
+// Where the light is standing, in screen space. The renderer sets it to the
+// player's torch each frame, which is the only light strong enough to throw a
+// shadow anybody would notice.
+const shadowLight = { x: 0, y: -1e6, soft: true };
+
+export function setShadowLight(x, y, soft = true) {
+  shadowLight.x = x;
+  shadowLight.y = y;
+  shadowLight.soft = soft;
+}
+
+// A blob shadow that leans away from the torch and lengthens with distance
+// from it, which is most of what sells a hand-held light source.
 export function groundShadow(ctx, sx, sy, rx, ry, alpha = 0.42) {
+  const dx = sx - shadowLight.x;
+  const dy = (sy - shadowLight.y) * 1.6;      // the view is squashed vertically
+  const d = Math.hypot(dx, dy) || 1;
+  const reach = Math.min(1, d / 300);
+  const ox = (dx / d) * rx * 0.5 * reach;
+  const oy = (dy / d) * ry * 0.5 * reach;
+  const stretch = 1 + reach * 0.55;
+  const a = alpha * (1 - reach * 0.4);
+  const angle = Math.atan2(dy / 1.6, dx);
+
   ctx.save();
-  const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, rx);
-  g.addColorStop(0, rgba('#000000', alpha));
-  g.addColorStop(1, rgba('#000000', 0));
-  ctx.fillStyle = g;
-  ctx.save();
-  ctx.translate(sx, sy);
-  ctx.scale(1, ry / rx);
+  ctx.translate(sx + ox, sy + oy);
+  ctx.rotate(angle);
+  ctx.scale(stretch, ry / rx);
+  if (shadowLight.soft) {
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+    g.addColorStop(0, rgba('#000000', a));
+    g.addColorStop(0.6, rgba('#000000', a * 0.42));
+    g.addColorStop(1, rgba('#000000', 0));
+    ctx.fillStyle = g;
+  } else {
+    ctx.fillStyle = rgba('#000000', a * 0.5);
+  }
   ctx.beginPath();
   ctx.arc(0, 0, rx, 0, TAU);
   ctx.fill();
-  ctx.restore();
   ctx.restore();
 }
 

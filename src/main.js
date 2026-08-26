@@ -2,6 +2,7 @@
 // wires world events through to the interface, audio and music layers.
 
 import { GameLoop } from './core/loop.js';
+import { Perf } from './core/perf.js';
 import { Input } from './core/input.js';
 import { inputDirToGrid } from './render/iso.js';
 import { Renderer } from './render/renderer.js';
@@ -46,6 +47,10 @@ class Game {
     this.run = null;
     this.world = null;
     this.combatHeat = 0;
+    this.perf = new Perf();
+    this.perf.setMode(profile.settings.graphics || 'auto');
+    this.renderer.tier = this.perf.tier;
+    this.spaceTimer = 0;
     this.loop = new GameLoop((dt) => this.update(dt), (alpha, dt) => this.render(alpha, dt));
 
     window.addEventListener('resize', () => this.onResize());
@@ -73,6 +78,7 @@ class Game {
     // The audio context can only start from a gesture, so arm it on the first.
     const arm = () => {
       this.audio.init();
+      this.audio.setReverbEnabled(profile.settings.reverb !== false);
       this.audio.resume();
       window.removeEventListener('pointerdown', arm);
       window.removeEventListener('keydown', arm);
@@ -88,6 +94,13 @@ class Game {
 
   applySettings(key) {
     if (key === 'touchControls') this.refreshTouchMode();
+    if (key === 'graphics') {
+      this.perf.setMode(profile.settings.graphics);
+      this.renderer.tier = this.perf.tier;
+    }
+    if (key === 'reverb' && this.audio.ready) {
+      this.audio.setReverbEnabled(profile.settings.reverb !== false);
+    }
     if (this.world) this.world.strictMovement = profile.settings.movementAssist === 'strict';
   }
 
@@ -102,6 +115,7 @@ class Game {
   // ---------------------------------------------------------- run flow
   startRun(seed) {
     this.audio.init();
+    this.audio.setReverbEnabled(profile.settings.reverb !== false);
     this.audio.resume();
     this.run = new Run(seed || makeSeed());
     this.run.refreshMods();
@@ -135,7 +149,9 @@ class Game {
       this.world.on((type, data) => this.onWorldEvent(type, data));
       this.minimap.bind(level);
       this.renderer.cameraReady = false;
+      this.renderer.onLevel(level);
       this.combatHeat = 0;
+      this.perf.reset();
 
       this.screens.hide();
       this.hud.show();
@@ -320,7 +336,22 @@ class Game {
       this.world.shakeRequest = 0;
     }
     this.combatHeat = Math.max(0, this.combatHeat - dt * 0.22);
+    this.updateAudioSpace(dt);
     this.updateMusic(dt);
+  }
+
+  // Tells the mixer where the listener is and what shape of room they are
+  // standing in. The listener moves every frame; the room only needs
+  // re-evaluating a few times a second.
+  updateAudioSpace(dt) {
+    if (!this.audio.ready) return;
+    const world = this.world;
+    this.audio.setListener(world.player.x, world.player.y);
+    this.spaceTimer -= dt;
+    if (this.spaceTimer > 0) return;
+    this.spaceTimer = 0.25;
+    this.audio.setSpace(world.acoustics, world.acousticProfile, world.acousticMods());
+    if (this.music.running) this.music.setSpace(world.acoustics);
   }
 
   updateMusic(dt) {
@@ -344,6 +375,9 @@ class Game {
   }
 
   render(alpha, dt) {
+    // Measured on the real elapsed frame time, then handed to the renderer as
+    // a budget: 30fps is the floor, and effects are shed to defend it.
+    this.renderer.tier = this.perf.frame(dt);
     if ((this.state === STATE.PLAYING || this.state === STATE.PAUSED) && this.world) {
       if (this.state === STATE.PLAYING) this.renderer.updateCamera(this.world, dt);
       this.renderer.render(this.world, this.state === STATE.PLAYING ? dt : 0);
@@ -354,6 +388,7 @@ class Game {
           this.renderer.width - size - pad,
           this.renderer.height - size - pad - (this.touchEnabled ? 104 : 0), size);
         this.hud.update(this.world, this.run, dt);
+        if (profile.settings.showFps) this.hud.drawFps(this.renderer, this.perf);
       }
     } else {
       const ctx = this.renderer.ctx;

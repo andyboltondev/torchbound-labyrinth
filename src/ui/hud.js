@@ -42,6 +42,22 @@ export class Hud {
   show() { this.root.hidden = false; }
   hide() { this.root.hidden = true; }
 
+  // A frame-rate readout, drawn straight onto the canvas so it costs nothing
+  // in layout and reflects what the renderer actually managed.
+  drawFps(renderer, perf) {
+    const ctx = renderer.ctx;
+    ctx.save();
+    ctx.setTransform(renderer.dpr, 0, 0, renderer.dpr, 0, 0);
+    ctx.font = '600 12px "Trebuchet MS", system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    const fps = Math.round(perf.fps);
+    ctx.fillStyle = fps >= 55 ? 'rgba(111,206,135,0.9)'
+      : fps >= 30 ? 'rgba(232,180,92,0.9)' : 'rgba(194,69,47,0.95)';
+    const text = fps + ' fps  ' + perf.tier.name.toLowerCase();
+    ctx.fillText(text, 14, renderer.height - 12);
+    ctx.restore();
+  }
+
   setTouchMode(on) {
     this.touchMode = on;
     this.actionKey.textContent = on ? 'ACT' : 'E';
