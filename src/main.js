@@ -243,6 +243,13 @@ class Game {
         this.hud.toast('Crossbow recovered  \u2014  F or K to loose', 'good');
         break;
       case 'gateOpened': this.hud.toast('Gate opened', 'good'); break;
+      case 'ladder':
+        // The camera has to cut, not pan: the vault is nowhere near the maze.
+        this.renderer.cameraReady = false;
+        this.renderer.addShake(4);
+        this.hud.toast(data.dir === 'down' ? 'A vault beneath the labyrinth' : 'Back in the labyrinth',
+          data.dir === 'down' ? 'good' : '');
+        break;
       case 'encounterStart':
         this.combatHeat = 1;
         if (data.encounter.label) this.hud.toast(data.encounter.label, 'bad');

@@ -47,6 +47,60 @@ function pointInDiamond(rnd, cx, cy, inset = 0.86) {
   return { x: cx + u * (TILE_W / 2) * inset, y: cy + v * (TILE_H / 2) * inset };
 }
 
+// --- shared texture helpers -----------------------------------------------
+
+// Fine grain, applied inside whatever path is currently clipped. This is what
+// keeps surfaces from reading as flat vector shapes.
+function grain(ctx, w, h, rnd, amount = 0.05, count = 90) {
+  for (let i = 0; i < count; i++) {
+    const x = rnd() * w, y = rnd() * h;
+    const light = rnd() > 0.5;
+    ctx.fillStyle = light
+      ? `rgba(255,252,244,${(amount * rnd()).toFixed(3)})`
+      : `rgba(0,0,0,${(amount * 1.3 * rnd()).toFixed(3)})`;
+    ctx.fillRect(x, y, rnd() > 0.86 ? 2 : 1, 1);
+  }
+}
+
+// One stone: body, a lit bevel along the top and left, a shadowed one along
+// the bottom and right, and a chipped corner or two.
+function stone(ctx, x, y, w, h, colour, rnd, bevel = 1.4) {
+  ctx.fillStyle = colour;
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = 'rgba(255,250,238,0.14)';
+  ctx.fillRect(x, y, w, bevel);
+  ctx.fillRect(x, y, bevel, h);
+  ctx.fillStyle = 'rgba(0,0,0,0.26)';
+  ctx.fillRect(x, y + h - bevel, w, bevel);
+  ctx.fillRect(x + w - bevel, y, bevel, h);
+  if (rnd() > 0.62) {
+    // Knocked-off corner: small, but it stops the blocks looking stamped.
+    const cw = 2 + rnd() * 3;
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    if (rnd() > 0.5) ctx.fillRect(x + w - cw, y, cw, cw);
+    else ctx.fillRect(x, y + h - cw, cw, cw);
+  }
+}
+
+// Staggered courses of masonry filling a rectangle in local space.
+function masonry(ctx, w, h, base, rnd, courses = 3) {
+  const mortar = shade(base, -0.42);
+  ctx.fillStyle = mortar;
+  ctx.fillRect(0, 0, w, h);
+  const ch = h / courses;
+  for (let row = 0; row < courses; row++) {
+    const y = row * ch + 0.8;
+    const bh = ch - 1.6;
+    let x = -((row % 2) * (w * 0.28)) - rnd() * 4;
+    while (x < w) {
+      const bw = w * (0.3 + rnd() * 0.26);
+      const tone = (rnd() - 0.5) * 0.2;
+      stone(ctx, x + 0.8, y, bw - 1.6, bh, shade(base, tone), rnd);
+      x += bw;
+    }
+  }
+}
+
 // --- floor ----------------------------------------------------------------
 
 function drawFloor(ctx, biome, variant) {
@@ -55,40 +109,40 @@ function drawFloor(ctx, biome, variant) {
   const base = biome.floor[variant % biome.floor.length];
 
   diamond(ctx, cx, cy);
-  ctx.fillStyle = base;
-  ctx.fill();
-
-  // Broken flagstone seams: a couple of slightly off-tone slabs.
   ctx.save();
   ctx.clip();
-  const slabs = 2 + Math.floor(rnd() * 3);
+
+  // Mortar bed, then flagstones laid across it in isometric space.
+  ctx.fillStyle = shade(base, -0.4);
+  ctx.fillRect(0, 0, TILE_W, FLOOR_H);
+
+  const slabs = 2 + Math.floor(rnd() * 2);
+  ctx.save();
+  // Skew into the floor plane so the flagstone joints run with the grid.
+  ctx.transform(1, 0.5, -1, 0.5, TILE_W / 2, 0);
+  const span = TILE_W / 2;
+  const step = span / slabs;
   for (let i = 0; i < slabs; i++) {
-    const p = pointInDiamond(rnd, cx, cy, 0.7);
-    ctx.beginPath();
-    const r = 8 + rnd() * 14;
-    ctx.moveTo(p.x - r, p.y);
-    ctx.lineTo(p.x, p.y - r * 0.5);
-    ctx.lineTo(p.x + r * 0.8, p.y + rnd() * 3);
-    ctx.lineTo(p.x - r * 0.3, p.y + r * 0.45);
-    ctx.closePath();
-    ctx.fillStyle = rnd() > 0.5 ? shade(base, 0.05 + rnd() * 0.05) : shade(base, -0.06 - rnd() * 0.05);
-    ctx.fill();
+    for (let j = 0; j < slabs; j++) {
+      const tone = (rnd() - 0.5) * 0.14;
+      stone(ctx, i * step + 0.7, j * step + 0.7, step - 1.4, step - 1.4,
+        shade(base, tone), rnd, 1.2);
+    }
   }
-  // Grit.
-  for (let i = 0; i < 26; i++) {
-    const p = pointInDiamond(rnd, cx, cy);
-    ctx.fillStyle = rgba(rnd() > 0.5 ? '#ffffff' : '#000000', 0.03 + rnd() * 0.05);
-    ctx.fillRect(p.x, p.y, 1 + (rnd() > 0.85 ? 1 : 0), 1);
-  }
-  // Cracks.
-  if (rnd() > 0.45) {
-    ctx.strokeStyle = rgba('#000000', 0.18);
+  ctx.restore();
+
+  grain(ctx, TILE_W, FLOOR_H, rnd, 0.055, 110);
+
+  // Wear: a crack or two wandering across the joints.
+  if (rnd() > 0.4) {
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
     ctx.lineWidth = 1;
+    ctx.lineCap = 'round';
     ctx.beginPath();
     let p = pointInDiamond(rnd, cx, cy, 0.9);
     ctx.moveTo(p.x, p.y);
     for (let i = 0; i < 3; i++) {
-      p = { x: p.x + (rnd() - 0.5) * 18, y: p.y + (rnd() - 0.5) * 9 };
+      p = { x: p.x + (rnd() - 0.5) * 20, y: p.y + (rnd() - 0.5) * 10 };
       ctx.lineTo(p.x, p.y);
     }
     ctx.stroke();
@@ -96,9 +150,10 @@ function drawFloor(ctx, biome, variant) {
   drawBiomeFloorDetail(ctx, biome, rnd, cx, cy);
   ctx.restore();
 
-  // Seam between tiles keeps the grid readable without looking like graph paper.
+  // A soft seam rather than a hard outline: enough to read the grid, not
+  // enough to look like graph paper.
   diamond(ctx, cx, cy);
-  ctx.strokeStyle = rgba('#000000', 0.22);
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
   ctx.lineWidth = 1;
   ctx.stroke();
 }
@@ -188,89 +243,83 @@ function drawWall(ctx, biome, variant, cracked) {
   const rnd = seeded(variant * 6151 + biome.id.length * 33203 + (cracked ? 991 : 7));
   const faces = wallFaces(ctx);
 
-  // Side faces first, then the cap on top.
-  faces.left();
-  ctx.fillStyle = biome.wallLeft;
-  ctx.fill();
-  faces.right();
-  ctx.fillStyle = biome.wallRight;
-  ctx.fill();
-
-  // Stone courses.
-  for (const side of ['left', 'right']) {
+  // Each side is drawn as real masonry: the face is clipped, then the drawing
+  // space is skewed into the isometric plane so courses run with the wall
+  // rather than being painted flat across it.
+  const sides = [
+    { key: 'left', base: biome.wallLeft, skew: [1, 0.5, 0, 1, 0, TOP_CY] },
+    { key: 'right', base: biome.wallRight, skew: [1, -0.5, 0, 1, TILE_W / 2, TILE_H] },
+  ];
+  for (const side of sides) {
     ctx.save();
-    faces[side]();
+    faces[side.key]();
     ctx.clip();
-    const base = side === 'left' ? biome.wallLeft : biome.wallRight;
-    for (let row = 0; row < 4; row++) {
-      const y = TOP_CY + 6 + row * 9 + rnd() * 2;
-      ctx.strokeStyle = rgba('#000000', 0.16 + rnd() * 0.1);
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      if (side === 'left') { ctx.moveTo(0, y); ctx.lineTo(TILE_W / 2, y + TILE_H / 2); }
-      else { ctx.moveTo(TILE_W / 2, y + TILE_H / 2); ctx.lineTo(TILE_W, y); }
-      ctx.stroke();
-      // A brighter block edge here and there gives the masonry some relief.
-      if (rnd() > 0.55) {
-        ctx.strokeStyle = rgba('#ffffff', 0.05);
-        ctx.beginPath();
-        if (side === 'left') { ctx.moveTo(0, y + 1); ctx.lineTo(TILE_W / 2, y + 1 + TILE_H / 2); }
-        else { ctx.moveTo(TILE_W / 2, y + 1 + TILE_H / 2); ctx.lineTo(TILE_W, y + 1); }
-        ctx.stroke();
-      }
-    }
-    // Vertical joints.
-    for (let i = 0; i < 3; i++) {
-      const t = 0.2 + rnd() * 0.6;
-      const x = side === 'left' ? t * (TILE_W / 2) : TILE_W / 2 + t * (TILE_W / 2);
-      ctx.strokeStyle = rgba('#000000', 0.12);
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, BASE_Y);
-      ctx.stroke();
-    }
-    // Ambient occlusion toward the floor.
-    const grad = ctx.createLinearGradient(0, TOP_CY + WALL_H * 0.35, 0, BASE_Y);
-    grad.addColorStop(0, rgba('#000000', 0));
-    grad.addColorStop(1, rgba('#000000', 0.4));
-    ctx.fillStyle = grad;
+    ctx.save();
+    ctx.transform(side.skew[0], side.skew[1], side.skew[2], side.skew[3], side.skew[4], side.skew[5]);
+    masonry(ctx, TILE_W / 2, WALL_H + TILE_H / 2, side.base, rnd, 3);
+    ctx.restore();
+
+    // Ambient occlusion toward the floor, and a little bounce light at the top.
+    const down = ctx.createLinearGradient(0, TOP_CY, 0, BASE_Y);
+    down.addColorStop(0, rgba('#ffffff', 0.05));
+    down.addColorStop(0.45, rgba('#000000', 0));
+    down.addColorStop(1, rgba('#000000', 0.46));
+    ctx.fillStyle = down;
     ctx.fillRect(0, 0, TILE_W, BASE_Y);
-    drawBiomeWallDetail(ctx, biome, rnd, side, base);
+    grain(ctx, TILE_W, BASE_Y, rnd, 0.045, 70);
+    drawBiomeWallDetail(ctx, biome, rnd, side.key, side.base);
     ctx.restore();
   }
 
   // Cap.
   diamond(ctx, TILE_W / 2, TOP_CY);
-  ctx.fillStyle = biome.wallTop;
-  ctx.fill();
   ctx.save();
   ctx.clip();
-  for (let i = 0; i < 14; i++) {
-    const p = pointInDiamond(rnd, TILE_W / 2, TOP_CY, 0.9);
-    ctx.fillStyle = rgba(rnd() > 0.5 ? '#ffffff' : '#000000', 0.05 + rnd() * 0.06);
-    ctx.fillRect(p.x, p.y, 2, 1);
+  ctx.fillStyle = biome.wallTop;
+  ctx.fillRect(0, 0, TILE_W, TILE_H);
+  ctx.save();
+  ctx.transform(1, 0.5, -1, 0.5, TILE_W / 2, 0);
+  const capSpan = TILE_W / 2;
+  for (let i = 0; i < 2; i++) {
+    for (let j = 0; j < 2; j++) {
+      stone(ctx, i * capSpan / 2 + 0.7, j * capSpan / 2 + 0.7,
+        capSpan / 2 - 1.4, capSpan / 2 - 1.4,
+        shade(biome.wallTop, (rnd() - 0.5) * 0.18), rnd, 1.2);
+    }
   }
   ctx.restore();
+  grain(ctx, TILE_W, TILE_H, rnd, 0.06, 60);
+  ctx.restore();
+
+  // Silhouette: a firm dark seam under the cap plus a catch-light along the
+  // two upper edges. This is the deliberate stylised touch -- it keeps the
+  // blocks reading as solid objects in near-darkness.
   diamond(ctx, TILE_W / 2, TOP_CY);
-  ctx.strokeStyle = rgba('#000000', 0.48);
+  ctx.strokeStyle = rgba('#000000', 0.5);
   ctx.lineWidth = 1.4;
   ctx.stroke();
-  // Catch-light along the two upper edges reads as a hard stone corner.
-  ctx.strokeStyle = rgba('#ffffff', 0.16);
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = rgba('#ffffff', 0.2);
+  ctx.lineWidth = 1.2;
   ctx.beginPath();
   ctx.moveTo(0, TOP_CY);
   ctx.lineTo(TILE_W / 2, 0);
   ctx.lineTo(TILE_W, TOP_CY);
   ctx.stroke();
+  // The vertical corner where the two faces meet.
+  ctx.strokeStyle = rgba('#000000', 0.34);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(TILE_W / 2, TILE_H);
+  ctx.lineTo(TILE_W / 2, BASE_Y);
+  ctx.stroke();
 
   // Carved rune band -- the Norse signature, used sparingly.
-  if (!cracked && rnd() > 0.72) {
+  if (!cracked && rnd() > 0.74) {
     ctx.save();
     faces.right();
     ctx.clip();
-    ctx.strokeStyle = rgba(biome.accent, 0.42);
-    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = rgba(biome.accent, 0.5);
+    ctx.lineWidth = 1.7;
     const bx = TILE_W * 0.62, by = TOP_CY + 14;
     for (let i = 0; i < 3; i++) {
       const ox = bx + i * 7, oy = by + i * 3.5;

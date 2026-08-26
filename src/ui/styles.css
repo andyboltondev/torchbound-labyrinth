@@ -152,11 +152,21 @@ html, body {
 /* ------------------------------------------------------- touch controls */
 .touch { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
 .touch[hidden] { display: none; }
-.dpad {
-  position: absolute; left: max(18px, env(safe-area-inset-left));
-  bottom: max(18px, env(safe-area-inset-bottom));
-  width: 148px; height: 148px; pointer-events: auto; touch-action: none;
+/* The whole lower-left of the screen is the movement surface: the pad jumps
+   to wherever the thumb lands, which is far easier to hit than a fixed
+   circle you have to look down for. */
+.dpad-zone {
+  position: absolute; left: 0; bottom: 0; width: 52%; height: 68%;
+  pointer-events: auto; touch-action: none;
 }
+.dpad {
+  position: absolute; width: 148px; height: 148px;
+  left: max(18px, env(safe-area-inset-left));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  opacity: .45; transition: opacity .18s ease-out;
+  pointer-events: none; touch-action: none;
+}
+.dpad.active { opacity: 1; transition: opacity .08s ease-out; }
 .dpad-base {
   position: absolute; inset: 0; border-radius: 50%;
   background: radial-gradient(circle at 50% 45%, rgba(40,50,66,.6), rgba(10,13,19,.5));
@@ -379,8 +389,8 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
   .beast-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 }
 @media (max-height: 520px) {
-  .dpad { width: 120px; height: 120px; }
-  .dpad-stick { width: 52px; height: 52px; margin: -26px 0 0 -26px; }
+  .dpad { width: 122px; height: 122px; }
+  .dpad-stick { width: 54px; height: 54px; margin: -27px 0 0 -27px; }
   .tbtn { width: 62px; height: 62px; }
   .buttons { grid-template-columns: repeat(2, 62px); }
 }

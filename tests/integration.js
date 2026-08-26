@@ -536,6 +536,77 @@ test('taking damage during an encounter forfeits the flawless bonus', () => {
   assert(run.score.level.flawless === before, 'a flawless bonus was paid out after taking damage');
 });
 
+// --- ladders and vaults ----------------------------------------------------
+
+test('a ladder carries the player into a vault and back, without changing depth', () => {
+  const { world, level, run } = makeWorld(6, 'vault-1');
+  assert(level.vaults.length > 0, 'no vault generated on this depth');
+  const vault = level.vaults[0];
+  const depthBefore = run.depth;
+
+  place(world, vault.entry.x, vault.entry.y);
+  step(world, 2);
+  assert(world.interactTarget && world.interactTarget.type === 'ladder',
+    'standing on the ladder offered no prompt');
+  assert(world.interactTarget.enabled, 'the ladder down was disabled');
+  world.interact();
+
+  assert(world.player.mover.tileX === vault.exit.x && world.player.mover.tileY === vault.exit.y,
+    'climbing down did not land the player in the vault');
+  assert(run.depth === depthBefore, 'a ladder changed the depth');
+  assert(!world.finished, 'a ladder completed the level');
+
+  step(world, 2);
+  assert(world.interactTarget && world.interactTarget.type === 'ladder', 'no ladder back up');
+  world.interact();
+  assert(world.player.mover.tileX === vault.entry.x && world.player.mover.tileY === vault.entry.y,
+    'climbing back up did not return the player to the labyrinth');
+});
+
+test('a vault cannot be walked into -- the ladder is the only way in', () => {
+  for (let s = 0; s < 6; s++) {
+    const { world, level } = makeWorld(7, 'vault-walk-' + s);
+    if (!level.vaults.length) continue;
+    const reach = bfsField(level.grid, [level.entrance], (x, y, t) =>
+      t === T.FLOOR || t === T.STAIRS || t === T.ENTRANCE || t === T.GATE || t === T.SECRET);
+    for (const vault of level.vaults) {
+      const inside = reach[level.grid.idx(vault.exit.x, vault.exit.y)];
+      assert(inside < 0, `vault ${vault.index} can be reached on foot`);
+    }
+  }
+});
+
+test('a vault holds a reward and something guarding it', () => {
+  let checked = 0;
+  for (let s = 0; s < 8; s++) {
+    const { level } = makeWorld(8, 'vault-loot-' + s);
+    for (const vault of level.vaults) {
+      const loot = level.props.filter((p) => p.vault === vault.index && p.type !== 'ladder');
+      const guards = level.spawns.filter((sp) => sp.encounter === 'enc_vault_' + vault.index);
+      assert(loot.length > 0, `vault ${vault.index} is empty`);
+      assert(guards.length > 0, `vault ${vault.index} is unguarded`);
+      checked++;
+    }
+  }
+  assert(checked > 0, 'no vaults were generated across eight seeds');
+});
+
+test('finding a vault is scored as a discovery, once', () => {
+  const { world, level, run } = makeWorld(6, 'vault-score');
+  assert(level.vaults.length > 0, 'no vault to find');
+  const vault = level.vaults[0];
+  place(world, vault.entry.x, vault.entry.y);
+  step(world, 2);
+  world.interact();
+  const first = run.score.level.secrets;
+  assert(first > 0, 'finding a vault scored nothing');
+  step(world, 2);
+  world.interact();              // back up
+  step(world, 2);
+  world.interact();              // down again
+  assert(run.score.level.secrets === first, 'a vault paid out twice');
+});
+
 // --- bosses -----------------------------------------------------------------
 
 test('every fifth depth is a boss arena whose exit stays sealed until it dies', () => {
@@ -689,10 +760,11 @@ function objectiveFor(world) {
     if (gate.open) continue;
     if (!held.has(gate.colourIndex)) {
       const key = world.level.keys.find((k) => k.colourIndex === gate.colourIndex && !k.taken);
-      if (key) return { x: key.x, y: key.y, kind: 'key' };
-      // Carried by an enemy: go to the carrier.
+      // A carried key is not lying where it was placed -- hunt the carrier.
+      if (key && key.holder !== 'enemy') return { x: key.x, y: key.y, kind: 'key' };
       const carrier = world.enemies.find((e) => !e.dead && e.carriesKey === gate.colourIndex);
       if (carrier) return { x: Math.floor(carrier.x), y: Math.floor(carrier.y), kind: 'carrier' };
+      if (key) return { x: key.x, y: key.y, kind: 'key' };
     }
     return { x: gate.x, y: gate.y, kind: 'gate' };
   }
@@ -709,6 +781,18 @@ function passableForAuto(world) {
     }
     return false;
   };
+}
+
+// Inside a vault nothing on the main map is reachable on foot, so the only
+// sensible objective is the ladder back out.
+function vaultObjective(world) {
+  const px = world.player.mover.tileX, py = world.player.mover.tileY;
+  for (const vault of world.level.vaults || []) {
+    if (px < vault.rect.x0 || px > vault.rect.x1) continue;
+    if (py < vault.rect.y0 || py > vault.rect.y1) continue;
+    return { x: vault.exit.x, y: vault.exit.y, kind: 'ladder-out' };
+  }
+  return null;
 }
 
 // A sealed room has to be fought out of before anything else matters.
@@ -736,6 +820,7 @@ export function autoplayLevel(world, maxSeconds = 240, onTick = null) {
   let stuckFor = 0;
   let lastPos = { x: world.player.x, y: world.player.y };
   const visited = new Set();
+  const lootedVaults = new Set();
   let transitions = 0;
   let lastTile = '';
 
@@ -744,7 +829,7 @@ export function autoplayLevel(world, maxSeconds = 240, onTick = null) {
     if (world.playerDead) return { ok: false, reason: 'died', frames: frame };
 
     refresh -= dt;
-    const want = sealedObjective(world) || objectiveFor(world);
+    const want = vaultObjective(world) || sealedObjective(world) || objectiveFor(world);
     if (!field || refresh <= 0 || !goal || goal.x !== want.x || goal.y !== want.y) {
       goal = want;
       field = bfsField(world.grid, [{ x: goal.x, y: goal.y }], passableForAuto(world));
@@ -800,16 +885,20 @@ export function autoplayLevel(world, maxSeconds = 240, onTick = null) {
     // wanderer would stall the run rather than test whether it can be run.
     if (nearest && nd < 1.7) slash = true;
     if (world.actionableSecret) slash = true;
-    if (goal && goal.kind === 'fight' && nearest) {
-      mx = nearest.x - world.player.x;
-      my = nearest.y - world.player.y;
-      const m = Math.hypot(mx, my) || 1;
-      mx /= m; my /= m;
-    }
 
     if (onTick) onTick({ frame, gx, gy, here, goal, mx, my, slash });
     world.update(dt, { moveX: mx, moveY: my, slash, fire: false });
-    if (world.interactTarget && world.interactTarget.enabled) world.interact();
+
+    const prompt = world.interactTarget;
+    if (prompt && prompt.enabled) {
+      const diving = prompt.type === 'ladder' && prompt.prop.dir === 'down';
+      // Visit each vault once. Diving into the same one forever is not a
+      // test of anything.
+      if (!diving || !lootedVaults.has(prompt.prop.vault)) {
+        if (diving) lootedVaults.add(prompt.prop.vault);
+        world.interact();
+      }
+    }
 
     // Detect being wedged and jiggle out of it.
     if (frame % 30 === 0) {

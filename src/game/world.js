@@ -124,6 +124,16 @@ export class World {
     const s = this.secretAt(x, y);
     return !!(s && s.discovered);
   }
+  // Vaults live in a strip below the maze on the same grid. They are a
+  // different place, so they are drawn as one: only the layer the player is
+  // standing on is rendered at all.
+  layerAt(y) {
+    const band = this.level.mazeHeight;
+    return band !== undefined && y >= band ? 1 : 0;
+  }
+
+  get playerLayer() { return this.layerAt(Math.floor(this.player.y)); }
+
   zoneAt(x, y) {
     const i = this.grid.idx(Math.floor(x), Math.floor(y));
     return this.level.zoneMap ? this.level.zoneMap[i] : 0;
@@ -675,6 +685,16 @@ export class World {
             type: 'chest', prop, label: 'Open the cursed chest',
             hint: 'Something is bound to it', enabled: true, hx: prop.x, hy: prop.y,
           };
+        } else if (prop.type === 'ladder') {
+          const down = prop.dir === 'down';
+          const vault = this.level.vaults[prop.vault];
+          target = {
+            type: 'ladder', prop,
+            label: down ? 'Climb down the ladder' : 'Climb back up',
+            hint: down ? (vault && vault.visited ? 'Back to the vault' : 'Something is sealed down there')
+              : 'Return to the labyrinth',
+            enabled: true, hx: prop.x, hy: prop.y,
+          };
         } else if ((prop.type === 'shrine' || prop.type === 'shrineSmall') && !prop.used) {
           const heal = prop.flavour === 'heal' || prop.type === 'shrineSmall';
           target = {
@@ -704,6 +724,7 @@ export class World {
       case 'gate': return this.unlockGate(target.gate);
       case 'chest': return this.openChest(target.prop);
       case 'shrine': return this.useShrine(target.prop);
+      case 'ladder': return this.useLadder(target.prop);
       default: return false;
     }
   }
@@ -721,6 +742,30 @@ export class World {
     // that pausing genuinely pauses it.
     this.flow = null;
     this.emit('gateOpened', { gate });
+    return true;
+  }
+
+  // Ladders move you within the same depth: down into a sealed vault that
+  // nothing else connects to, and back up again. They never change level.
+  useLadder(prop) {
+    const dest = prop.link;
+    const vault = this.level.vaults[prop.vault];
+    this.player.placeAt(dest.x, dest.y);
+    this.player.invulnTimer = 0.8;
+    this.flow = null;
+    this.particles.clear();
+    this.playSfx('descend');
+
+    if (prop.dir === 'down' && vault && !vault.visited) {
+      vault.visited = true;
+      this.secretsFound++;
+      const pts = this.run.score.addSecret(320 + this.level.depth * 45, this.run.mods);
+      this.particles.text(dest.x + 0.5, dest.y + 0.5 - 1,
+        'VAULT FOUND  +' + Math.round(pts), '#e8b45c', 16, 2.2);
+      ring(this.particles, dest.x + 0.5, dest.y + 0.5, '#e8b45c', 20, 1.1, 0.8);
+      this.playSfx('reveal');
+    }
+    this.emit('ladder', { dir: prop.dir, vault: prop.vault, first: vault && vault.visited });
     return true;
   }
 
