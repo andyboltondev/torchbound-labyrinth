@@ -39,6 +39,7 @@ class Game {
       chooseRelic: (relic) => this.chooseRelic(relic),
       afterSummary: () => this.showRelicChoice(),
       onTouchModeChange: () => this.refreshTouchMode(),
+      onSettingChanged: (key) => this.applySettings(key),
       get run() { return window.__game ? window.__game.run : null; },
     });
     this.state = STATE.MENU;
@@ -85,6 +86,11 @@ class Game {
     this.refreshTouchMode();
   }
 
+  applySettings(key) {
+    if (key === 'touchControls') this.refreshTouchMode();
+    if (this.world) this.world.strictMovement = profile.settings.movementAssist === 'strict';
+  }
+
   refreshTouchMode() {
     const mode = profile.settings.touchControls;
     const on = mode === 'always' || (mode === 'auto' && isTouchDevice());
@@ -125,6 +131,7 @@ class Game {
       if (this.world) this.world.dispose();
       warmTileSets(level.zoneInfo.map((z) => z.biome).concat([level.biome]));
       this.world = new World(this.run, level, this.run.rng.fork('level' + depth));
+      this.world.strictMovement = profile.settings.movementAssist === 'strict';
       this.world.on((type, data) => this.onWorldEvent(type, data));
       this.minimap.bind(level);
       this.renderer.cameraReady = false;

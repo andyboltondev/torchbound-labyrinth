@@ -20,7 +20,8 @@ export const DEFAULT_SETTINGS = {
   master: 0.8,
   music: 0.55,
   sfx: 0.85,
-  touchControls: 'auto',   // auto | always | never
+  touchControls: 'auto',        // auto | always | never
+  movementAssist: 'corridor',   // corridor | strict
   screenShake: 1,
   showDamage: true,
 };

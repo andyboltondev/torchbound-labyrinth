@@ -11,6 +11,7 @@ import { World } from '../src/game/world.js';
 import { Enemy } from '../src/game/enemies.js';
 import { RELICS, RELIC_BY_ID, computeMods, offerRelics } from '../src/game/relics.js';
 import { T } from '../src/gen/tiles.js';
+import { screenDirToGrid, screenX, screenY } from '../src/render/iso.js';
 import { bfsField, N4 } from '../src/gen/grid.js';
 import { RNG } from '../src/core/rng.js';
 import { hazardBudget, HAZARDS } from '../src/gen/biomes.js';
@@ -118,6 +119,101 @@ test('enemies never end up inside solid rock', () => {
     const tile = level.grid.get(Math.floor(e.x), Math.floor(e.y));
     assert(tile !== T.WALL && tile !== T.SECRET, `${e.def.id} is inside a wall`);
   }
+});
+
+// --- controls ---------------------------------------------------------------
+
+// Clears a square of floor and stands the level down, so a movement test
+// measures the controls and nothing else. Without this the arena can overlap
+// an encounter room, which seals its doorways the moment the player walks in
+// -- correct behaviour, but not what is under test here.
+function clearArena(world, cx, cy, radius = 3) {
+  for (const enc of world.level.encounters) {
+    enc.state = 'cleared';
+    if (enc.sealedCells) world.releaseSeal(enc);
+  }
+  world.sealBlocks.clear();
+  world.enemies.length = 0;
+  for (let y = cy - radius; y <= cy + radius; y++) {
+    for (let x = cx - radius; x <= cx + radius; x++) world.grid.set(x, y, T.FLOOR);
+  }
+  world.flow = null;
+}
+
+// The four cardinals must land exactly on their screen direction. The
+// diagonals cannot: in a 2:1 isometric view a key combination moves along a
+// tile axis, which appears at about 27 degrees from horizontal rather than
+// 45. What matters there is that it goes to the correct quadrant.
+const CARDINALS = {
+  Up: { x: 0, y: -1 }, Down: { x: 0, y: 1 },
+  Left: { x: -1, y: 0 }, Right: { x: 1, y: 0 },
+};
+const DIAGONALS = {
+  'Up+Right': { x: 0.7071, y: -0.7071 }, 'Up+Left': { x: -0.7071, y: -0.7071 },
+  'Down+Right': { x: 0.7071, y: 0.7071 }, 'Down+Left': { x: -0.7071, y: 0.7071 },
+};
+
+// Walks one input direction from the middle of a cleared arena and reports
+// the unit vector the character actually travelled in screen space.
+function screenTravel(world, cx, cy, screen) {
+  place(world, cx, cy);
+  world.player.mover.heading = null;
+  const grid = screenDirToGrid(screen.x, screen.y);
+  const from = { x: screenX(world.player.x, world.player.y), y: screenY(world.player.x, world.player.y) };
+  step(world, 30, { moveX: grid.x, moveY: grid.y, slash: false, fire: false });
+  const to = { x: screenX(world.player.x, world.player.y), y: screenY(world.player.x, world.player.y) };
+  const dx = to.x - from.x, dy = to.y - from.y;
+  const m = Math.hypot(dx, dy);
+  return { dx, dy, m, ux: dx / (m || 1), uy: dy / (m || 1) };
+}
+
+test('every direction key moves the character that way on screen', () => {
+  const { world, level } = makeWorld(3, 'controls-1');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 4);
+
+  for (const [name, screen] of Object.entries(CARDINALS)) {
+    const t = screenTravel(world, cx, cy, screen);
+    assert(t.m > 8, `${name} did not move the character at all`);
+    const alignment = t.ux * screen.x + t.uy * screen.y;
+    assert(alignment > 0.99,
+      `${name} moved along screen vector (${t.ux.toFixed(2)}, ${t.uy.toFixed(2)}) `
+      + `instead of (${screen.x.toFixed(2)}, ${screen.y.toFixed(2)})`);
+  }
+
+  for (const [name, screen] of Object.entries(DIAGONALS)) {
+    const t = screenTravel(world, cx, cy, screen);
+    assert(t.m > 8, `${name} did not move the character at all`);
+    assert(Math.sign(t.ux) === Math.sign(screen.x) && Math.sign(t.uy) === Math.sign(screen.y),
+      `${name} moved into the wrong quadrant: (${t.ux.toFixed(2)}, ${t.uy.toFixed(2)})`);
+  }
+});
+
+test('strict movement refuses to deflect, the corridor assist accepts', () => {
+  const { world, level } = makeWorld(3, 'controls-2');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 4);
+  // Wall off the tile directly "up" on screen, leaving its neighbours open.
+  const up = screenDirToGrid(0, -1);
+  const bx = cx + Math.round(up.x), by = cy + Math.round(up.y);
+  level.grid.set(bx, by, T.WALL);
+
+  world.strictMovement = true;
+  place(world, cx, cy);
+  world.player.mover.heading = null;
+  step(world, 40, { moveX: up.x, moveY: up.y, slash: false, fire: false });
+  assert(world.player.mover.tileX === cx && world.player.mover.tileY === cy,
+    'strict movement deflected into a neighbouring corridor');
+
+  world.strictMovement = false;
+  place(world, cx, cy);
+  world.player.mover.heading = null;
+  step(world, 40, { moveX: up.x, moveY: up.y, slash: false, fire: false });
+  const moved = world.player.mover.tileX !== cx || world.player.mover.tileY !== cy;
+  assert(moved, 'the corridor assist failed to find the open way past a wall');
+  // Whatever it chose, it still has to be upward on screen.
+  const dy = screenY(world.player.x, world.player.y) - screenY(cx + 0.5, cy + 0.5);
+  assert(dy < 0, `the assist moved the character downward (screen dy ${dy.toFixed(1)})`);
 });
 
 // --- keys, gates and the exit ----------------------------------------------

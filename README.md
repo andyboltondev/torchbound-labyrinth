@@ -28,7 +28,7 @@ Any equivalent works too, for example `npx serve` or `python -m http.server`.
 
 | Action | Keyboard | Touch |
 | --- | --- | --- |
-| Move | `WASD` **and** arrow keys (both always active) | floating d-pad |
+| Move | `WASD` **and** arrow keys (both always active), 8-way | floating d-pad |
 | Slash | `Space` / `J` | SLASH |
 | Fire crossbow | `F` / `K` | FIRE (appears once you own one) |
 | Action (doors, gates, stairs, chests, shrines) | `E` / `Enter` | ACT |
@@ -42,6 +42,27 @@ On a touch screen the movement pad is not fixed in a corner: the whole lower
 left of the glass is the movement surface, and the pad anchors wherever your
 thumb lands. The action buttons stay put on the right, because those you want
 in the same place every time.
+
+### What the direction keys do
+
+Up, Down, Left and Right move the character **up, down, left and right in the
+view** -- not north/south/east/west in the dungeon's own axes. There is a test
+that measures this and fails if it ever drifts.
+
+The wrinkle is geometry, not controls. In a 2:1 isometric view the dungeon's
+corridors run *diagonally* across the screen, so the exact screen direction you
+pressed is often a wall. When that happens the mover deflects to the nearest
+open direction, which is 45 degrees off -- it will still carry you upward when
+you press Up, but up-and-left or up-and-right rather than straight up. That is
+the corridor assist, and it is what lets a single key walk you down a passage.
+
+Two ways to steer precisely:
+
+* Press two keys. `Up`+`Right` is the dungeon's north, `Up`+`Left` is west, and
+  so on -- these run exactly along the corridors.
+* Set **Settings -> Movement -> Strict direction**. Each key then means one
+  screen direction and nothing else: blocked is blocked, no deflection. The
+  cost is that walking a corridor needs the two-key combination.
 
 ---
 
@@ -186,13 +207,17 @@ relic offers, hazard mechanics, encounter sealing, flawless forfeiture, boss
 phases and arena gating, ladders into vaults (and the vaults being unwalkable
 into), memory decay, and score arithmetic.
 
+It also pins the control mapping: each direction key is measured against the
+screen vector it is supposed to produce, and the strict/assist behaviours are
+checked against a deliberately walled-off direction.
+
 It finishes with an **autopilot completability test**: a pathfinding bot plays
 24 generated levels across depths 1-14 from entrance to exit, routing to each
 key, unlocking each gate, fighting its way out of rooms that seal behind it,
 and taking the stairs. It is the practical counterpart to the validator -- the
 validator proves a route exists, the bot walks it.
 
-Current status: 40/40 passing.
+Current status: 42/42 passing.
 
 ---
 

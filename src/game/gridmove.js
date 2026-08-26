@@ -50,16 +50,22 @@ export function canStepTo(world, fromX, fromY, dir) {
 
 // Picks the open grid direction that best matches `want`, preferring to carry
 // on in a straight line when two options are equally good.
-export function chooseGridDirection(world, tileX, tileY, want, heading, isBlocked) {
+//
+// `strict` disables the corridor assist: the requested direction is taken or
+// nothing is. That makes a single arrow key mean exactly one screen direction
+// and never a 45-degree deflection, at the cost of needing two keys to walk a
+// corridor (corridors run diagonally on screen in an isometric view).
+export function chooseGridDirection(world, tileX, tileY, want, heading, isBlocked, strict = false) {
   const m = Math.hypot(want.x, want.y);
   if (m < 0.001) return null;
   const wx = want.x / m, wy = want.y / m;
+  const threshold = strict ? 0.95 : MIN_ALIGNMENT;
   let best = null;
   let bestScore = -Infinity;
   for (const dir of GRID_DIRS) {
     const len = dir.x !== 0 && dir.y !== 0 ? SQRT2 : 1;
     const dot = (dir.x / len) * wx + (dir.y / len) * wy;
-    if (dot < MIN_ALIGNMENT) continue;
+    if (dot < threshold) continue;
     if (!canStepTo(world, tileX, tileY, dir)) continue;
     if (isBlocked && isBlocked(tileX + dir.x, tileY + dir.y)) continue;
     let score = dot;
@@ -186,7 +192,8 @@ export class GridMover {
       if (dot < -0.3 && canHold()) { this.slideSteps--; return this.heading; }
     }
 
-    const dir = chooseGridDirection(world, this.tileX, this.tileY, desired, this.heading, opts.isBlocked);
+    const dir = chooseGridDirection(world, this.tileX, this.tileY, desired,
+      this.heading, opts.isBlocked, opts.strict);
     if (dir && opts.ice) this.slideSteps = ICE_SLIDE_TILES;
     return dir;
   }

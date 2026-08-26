@@ -67,6 +67,9 @@ export class World {
     this.revealRadius = 0;
     this.lowHealthPulse = 0;
     this.secretsFound = 0;
+    // When true, a direction key moves exactly that way on screen or not at
+    // all -- no deflecting into a corridor that is merely nearby.
+    this.strictMovement = false;
     this.listeners = new Set();
     this.damageTakenThisLevel = 0;
     this.shakeRequest = 0;

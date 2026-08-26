@@ -246,6 +246,41 @@ export class Screens {
     slider('Sound effects', 'sfx');
     slider('Screen shake', 'screenShake', 0, 1.5, 0.1, (v) => Math.round(v * 100) + '%');
 
+    const segmented = (labelText, key, options, hint) => {
+      const row = el('div', 'setting');
+      const label = el('div');
+      label.style.flex = '1 1 auto';
+      label.appendChild(el('div', null, labelText));
+      if (hint) {
+        const h = el('div', 'hint', hint);
+        h.style.marginTop = '2px';
+        label.appendChild(h);
+      }
+      row.appendChild(label);
+      const group = el('div', 'seg');
+      for (const opt of options) {
+        const b = el('button', profile.settings[key] === opt.value ? 'on' : '', opt.label);
+        b.addEventListener('click', () => {
+          profile.settings[key] = opt.value;
+          profile.saveSettings();
+          for (const other of group.children) other.className = '';
+          b.className = 'on';
+          if (this.host.onSettingChanged) this.host.onSettingChanged(key);
+          if (this.host.audio) this.host.audio.play('uiClick');
+        });
+        group.appendChild(b);
+      }
+      row.appendChild(group);
+      panel.appendChild(row);
+    };
+
+    segmented('Movement', 'movementAssist', [
+      { value: 'corridor', label: 'Follow corridors' },
+      { value: 'strict', label: 'Strict direction' },
+    ], 'Corridors run diagonally on screen. "Follow corridors" lets one key '
+      + 'carry you along them; "Strict" makes each key mean exactly one '
+      + 'direction and nothing else.');
+
     const seg = el('div', 'setting');
     seg.appendChild(el('label', null, 'Touch controls'));
     const group = el('div', 'seg');

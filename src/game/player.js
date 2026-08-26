@@ -84,6 +84,7 @@ export class Player {
     this.mover.update(dt, world, hasInput ? { x: intent.moveX, y: intent.moveY } : null, {
       speed,
       ice,
+      strict: world.strictMovement,
       onEnterTile: (x, y) => world.onPlayerEnterTile(x, y),
     });
 
