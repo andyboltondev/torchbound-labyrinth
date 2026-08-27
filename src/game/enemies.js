@@ -204,11 +204,17 @@ export class Enemy {
         // Out of the ground, and the ground keeps the hole. From here it is a
         // creature like any other -- being buried was a way of arriving, not a
         // second set of rules to carry around for the rest of the depth.
+        //
+        // One or the other, never both: coming up through a floor and stepping
+        // out of a shadow are two ways of arriving, and firing both doubled the
+        // stone burst, played two sounds over each other and shook the screen
+        // twice as hard as anything else in the game.
         this.entombed = false;
         this.digging = DIG_SECONDS;
         world.onUnearthed(this);
+      } else {
+        world.onAmbushWake(this);
       }
-      world.onAmbushWake(this);
     }
     if (this.state === STATE.IDLE || this.state === STATE.RETURN
         || this.state === STATE.DORMANT || this.state === STATE.SEEKING) {
