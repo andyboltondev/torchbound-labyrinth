@@ -15,9 +15,10 @@ export const DEFAULT_BINDINGS = {
   pause: ['Escape', 'KeyP'],
   bestiary: ['KeyB'],
   map: ['KeyM'],
-  // T only. Q sits under the ring finger of a hand on WASD, so it was being
-  // hit while walking and putting the torch out mid-corridor.
-  torch: ['KeyT'],
+  // Both, on purpose. Q falls under the ring finger of a hand already on
+  // WASD, which is where it wants to be for anyone playing that way; T is
+  // for everyone else and is the one the interface prints first.
+  torch: ['KeyT', 'KeyQ'],
 };
 
 // The one description of what the controls are. The settings panel, the home
@@ -36,7 +37,7 @@ export const CONTROLS = [
     note: 'once you have found a crossbow' },
   { id: 'action', label: 'Act', keys: 'E / Enter', touch: 'ACT', group: 'fight',
     note: 'gates, stairs, chests, shrines, fires, captives, altars' },
-  { id: 'torch', label: 'Douse or relight your torch', keys: 'T', touch: 'TORCH', group: 'fight' },
+  { id: 'torch', label: 'Douse or relight your torch', keys: 'T / Q', touch: 'TORCH', group: 'fight' },
   { id: 'map', label: 'Open the map', keys: 'M', touch: 'tap the minimap', group: 'screens' },
   { id: 'bestiary', label: 'Bestiary', keys: 'B', touch: 'bestiary button', group: 'screens' },
   { id: 'pause', label: 'Pause', keys: 'Esc / P', touch: 'pause button', group: 'screens' },

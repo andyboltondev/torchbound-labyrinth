@@ -50,7 +50,7 @@ request that the version in the stamp still matches `version.json`.
 | Slash | `Space` / `J` | SLASH |
 | Fire crossbow | `F` / `K` | FIRE (appears once you own one) |
 | Action (doors, gates, stairs, chests, shrines, fires, captives, altars) | `E` / `Enter` | ACT |
-| Douse or relight your torch | `T` | TORCH |
+| Douse or relight your torch | `T` / `Q` | TORCH |
 | Open the map | `M` | tap the minimap |
 | Bestiary | `B` | bestiary button |
 | Pause | `Esc` / `P` | pause button |

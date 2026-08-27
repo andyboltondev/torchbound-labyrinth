@@ -940,17 +940,29 @@ test('the controls are described in exactly one place, and it covers them all', 
   for (const control of CONTROLS) {
     assert(control.label && control.keys, `${control.id} is missing a label or its keys`);
   }
-  // Q used to double for the torch and sits under a hand on WASD.
-  assert(!BINDINGS.torch.includes('KeyQ'), 'the torch is bound to Q again');
-  const seen = new Set();
+  // The torch answers to both T and Q: Q falls under the ring finger of a
+  // hand already on WASD, and losing it is felt by anyone playing that way.
+  assert(BINDINGS.torch.includes('KeyT') && BINDINGS.torch.includes('KeyQ'),
+    'the torch should answer to both T and Q');
+
+  // No key may mean two different things.
+  const claimed = new Map();
   for (const [action, codes] of Object.entries(BINDINGS)) {
     for (const code of codes) {
-      const key = code + ':' + (action === 'up' || action === 'down'
-        || action === 'left' || action === 'right' ? 'move' : action);
-      assert(!seen.has(code) || key.endsWith(':move'),
-        `${code} is bound to more than one thing`);
-      seen.add(code);
+      const already = claimed.get(code);
+      assert(already === undefined || already === action,
+        `${code} is bound to both ${already} and ${action}`);
+      claimed.set(code, action);
     }
+  }
+
+  // Anything printed as an alternative has to actually be bound to it.
+  for (const control of CONTROLS) {
+    const codes = BINDINGS[control.id];
+    if (!codes) continue;
+    const printed = control.keys.split('/').length;
+    assert(printed === codes.length,
+      `${control.id} prints ${printed} key(s) as "${control.keys}" but is bound to ${codes.length}`);
   }
 });
 
