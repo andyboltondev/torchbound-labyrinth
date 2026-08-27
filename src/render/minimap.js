@@ -155,6 +155,136 @@ export class Minimap {
     ctx.restore();
   }
 
+  // The whole chart, for the map screen. Fitted to the box at `zoom` 1 and
+  // scaled about the centre from there, so zooming in never loses the middle
+  // of the view. Everything is drawn from the same data the corner widget
+  // uses -- there is no second map, only a second way of looking at it.
+  drawFull(ctx, world, box, view) {
+    if (!this.level) return null;
+    this.updateChart(world);
+    const grid = this.level.grid;
+    const band = this.level.mazeHeight;
+    const layer = world.playerLayer;
+    const y0 = band === undefined ? 0 : (layer === 1 ? band : 0);
+    const y1 = band === undefined ? grid.h : (layer === 1 ? grid.h : band);
+
+    const mapW = grid.w * CELL;
+    const mapH = (y1 - y0) * CELL;
+    const fit = Math.min(box.w / mapW, box.h / mapH);
+    const scale = fit * view.zoom;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(box.x, box.y, box.w, box.h);
+    ctx.clip();
+    ctx.translate(box.x + box.w / 2 + view.panX, box.y + box.h / 2 + view.panY);
+    ctx.scale(scale, scale);
+    ctx.translate(-mapW / 2, -(y0 * CELL + mapH / 2));
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(this.buffer, 0, 0);
+
+    const unit = 1 / scale;
+    this.drawRememberedAll(ctx, world, y0, y1);
+    this.drawMarkers(ctx, world, unit);
+    this.drawEnemies(ctx, world, unit);
+    this.drawEchoes(ctx, world, unit);
+    this.drawPlayer(ctx, world, world.player.x * CELL, world.player.y * CELL, unit);
+    ctx.restore();
+    return { scale, mapW, mapH };
+  }
+
+  // The full-chart version of the warm patch. Unbounded, because the map
+  // screen is showing the whole level and is not drawn every frame.
+  drawRememberedAll(ctx, world, y0, y1) {
+    const grid = this.level.grid;
+    const vis = world.vis;
+    for (let ty = y0; ty < y1; ty++) {
+      for (let tx = 0; tx < grid.w; tx++) {
+        const i = grid.idx(tx, ty);
+        if (!vis.seen[i]) continue;
+        const mem = vis.memory[i];
+        if (mem <= 0.06) continue;
+        const tile = grid.cells[i];
+        if (tile === T.WALL || tile === T.SECRET) continue;
+        ctx.globalAlpha = mem * (vis.visGen[i] === vis.gen ? 0.85 : 0.5);
+        ctx.fillStyle = tile === T.STAIRS ? '#6fce87' : '#7d8ea8';
+        ctx.fillRect(tx * CELL, ty * CELL, CELL, CELL);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // What is actually on the chart right now, counted by kind, for the legend.
+  // Only things the player has found: a legend that lists what you have not
+  // discovered yet is a spoiler with a key next to it.
+  legend(world) {
+    const level = this.level;
+    if (!level) return [];
+    const vis = world.vis;
+    const grid = level.grid;
+    const layer = world.playerLayer;
+    const known = (x, y) => {
+      const gx = Math.floor(x), gy = Math.floor(y);
+      return grid.inBounds(gx, gy) && !!vis.seen[grid.idx(gx, gy)]
+        && world.layerAt(gy) === layer;
+    };
+    const rows = new Map();
+    const add = (key, name, colour, shape) => {
+      const row = rows.get(key) || { key, name, colour, shape, count: 0 };
+      row.count++;
+      rows.set(key, row);
+    };
+
+    if (known(level.stairs.x, level.stairs.y)) {
+      add('stairs', 'The way down', '#6fce87', 'down');
+    }
+    for (const k of level.keys) {
+      if (k.taken || k.holder === 'enemy' || !known(k.x, k.y)) continue;
+      const col = keyColour(k.colourIndex);
+      add('key' + k.colourIndex, col.name + ' Key', col.glow, 'diamond');
+    }
+    for (const g of level.gates) {
+      if (!known(g.x, g.y)) continue;
+      const col = keyColour(g.colourIndex);
+      add('gate' + g.colourIndex + (g.open ? 'o' : ''),
+        col.name + (g.open ? ' Gate (open)' : ' Gate'), col.glow, 'square');
+    }
+    for (const prop of level.props) {
+      if (!known(prop.x, prop.y)) continue;
+      if (prop.hidden && !world.revealedProps.has(prop.id)) continue;
+      const m = PROP_MARKS[prop.type];
+      if (!m) continue;
+      const spent = prop.consumed || prop.opened || prop.used;
+      if (spent && !m.keepWhenSpent) continue;
+      add(prop.type, PROP_NAMES[prop.type] || prop.type, m.colour, m.shape);
+    }
+    return Array.from(rows.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // Draws one legend swatch into a small canvas context, so the legend and
+  // the chart cannot disagree about what a marker looks like.
+  drawSwatch(ctx, x, y, colour, shape, size = 5) {
+    ctx.fillStyle = colour;
+    ctx.beginPath();
+    if (shape === 'diamond') {
+      ctx.moveTo(x, y - size); ctx.lineTo(x + size, y);
+      ctx.lineTo(x, y + size); ctx.lineTo(x - size, y);
+    } else if (shape === 'square') {
+      ctx.rect(x - size * 0.8, y - size * 0.8, size * 1.6, size * 1.6);
+    } else if (shape === 'down') {
+      ctx.moveTo(x - size, y - size); ctx.lineTo(x + size, y - size); ctx.lineTo(x, y + size);
+    } else if (shape === 'up') {
+      ctx.moveTo(x - size, y + size); ctx.lineTo(x + size, y + size); ctx.lineTo(x, y - size);
+    } else {
+      ctx.arc(x, y, size, 0, Math.PI * 2);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(6,8,12,0.75)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
   // The warm patch: floor the torch is on now, plus whatever is still fresh
   // in memory. Bounded to the window the widget can show, so its cost does
   // not grow with the size of the level.
@@ -414,6 +544,14 @@ export class Minimap {
 
 // How each kind of prop appears once found. Most things stop being worth a
 // mark once they are used up; a ladder is worth remembering either way.
+// What each kind of thing is called in the legend.
+const PROP_NAMES = {
+  ladder: 'Ladder', chest: 'Chest', cursedChest: 'Cursed chest',
+  shrine: 'Shrine', shrineSmall: 'Small shrine', potion: 'Draught',
+  arrows: 'Bolts', crossbow: 'Crossbow', treasure: 'Treasure',
+  prisoner: 'Someone chained', mapScrap: 'A map', altar: 'Sacrifice altar',
+};
+
 const PROP_MARKS = {
   ladder: { colour: '#8fd7ff', shape: 'down', size: 2.8, keepWhenSpent: true },
   chest: { colour: '#e8b45c', shape: 'square', size: 2.4 },

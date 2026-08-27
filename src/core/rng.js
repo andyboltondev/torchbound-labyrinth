@@ -73,6 +73,23 @@ export class RNG {
 }
 
 // Convenience: a run seed that is short enough for a human to retype.
+// Tidies a seed somebody typed or pasted into the shape the generator wants.
+// Deliberately forgiving: trailing spaces, capitals and the odd stray
+// character are the player's tools slipping, not the player meaning something
+// different, and two people who think they typed the same seed must get the
+// same labyrinth.
+export function normaliseSeed(text) {
+  const cleaned = String(text || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 32);
+  return cleaned || null;
+}
+
 export function makeSeed(rng = Math.random) {
   const words = 'fenrir jotun mimir vidar skadi bragi hodr njord ratatosk hugin munin draupnir gungnir sleipnir yggdrasil valhalla bifrost'.split(' ');
   const w = words[Math.floor(rng() * words.length)];

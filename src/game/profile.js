@@ -32,6 +32,8 @@ export const DEFAULT_SETTINGS = {
   graphics: 'auto',             // auto | low | medium | high
   reverb: true,
   showFps: false,
+  // The opening guide. Dismissed with its own checkbox, brought back here.
+  showGuide: true,
 };
 
 export class Profile {

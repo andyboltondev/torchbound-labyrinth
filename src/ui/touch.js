@@ -193,6 +193,20 @@ export class TouchControls {
     this.input.setStick(dx / (m || 1), dy / (m || 1));
   }
 
+  // How much of the bottom-right corner the action buttons are standing in,
+  // in CSS pixels including their inset from the edge. Measured rather than
+  // assumed: the pad has four buttons now and they resize on a coarse
+  // pointer, so a hard-coded number went stale and the minimap ended up
+  // underneath them.
+  reserve() {
+    const buttons = this.root.querySelector('.buttons');
+    if (!buttons || this.root.hidden) return 0;
+    const box = buttons.getBoundingClientRect();
+    if (!box.height) return 0;
+    const gap = Math.max(0, window.innerHeight - box.bottom);
+    return Math.ceil(box.height + gap + 10);
+  }
+
   // The torch button says what the torch is doing, not what pressing it does:
   // the player can see the flame in their own hand either way, and a button
   // that changes its own label is read as a state twice as often as a verb.

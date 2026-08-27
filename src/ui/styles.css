@@ -670,6 +670,126 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
 .relic-pill b { color: var(--gold); font-weight: 600; }
 .hint { font-size: 12px; color: var(--stone-dim); line-height: 1.6; }
 
+/* ------------------------------------------------------------- seeds */
+.seed-row { display: flex; gap: 9px; align-items: center; margin: 4px 0 6px; flex-wrap: wrap; }
+.seed-label {
+  font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--stone-dim);
+  flex: 0 0 auto;
+}
+.seed-input {
+  flex: 1 1 180px; min-width: 0; padding: 10px 13px;
+  font-family: var(--ui); font-size: 13.5px; letter-spacing: .04em;
+  background: rgba(6,8,12,.85); color: var(--parchment);
+  border: 1px solid var(--panel-edge); border-radius: 4px;
+}
+.seed-input:focus { outline: none; border-color: var(--gold-dim); box-shadow: 0 0 0 3px rgba(232,180,92,.12); }
+.seed-note { margin: 0 0 16px; }
+.seed-chip {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 14px 0 4px; padding: 9px 12px; border-radius: 5px;
+  background: rgba(12,16,23,.65); border: 1px solid var(--panel-edge);
+}
+.seed-chip-label { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--stone-dim); }
+.seed-chip-value {
+  flex: 1 1 auto; font-family: var(--ui); font-size: 14px; letter-spacing: .06em;
+  color: var(--gold); user-select: text; -webkit-user-select: text;
+}
+
+/* --------------------------------------------------------- the guide */
+.guide-panel .screen-sub { margin-bottom: 14px; }
+.guide-keys, .guide-touch { display: flex; flex-wrap: wrap; gap: 22px; align-items: flex-start; }
+.keycluster { flex: 0 0 auto; }
+.keycluster-title {
+  font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--stone-dim); margin-bottom: 8px; text-align: center;
+}
+/* The four caps in the shape the fingers actually find them. */
+.keypad { display: grid; grid-template-columns: repeat(3, 54px); grid-template-rows: repeat(2, 46px); gap: 5px; }
+.keycap {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  border-radius: 5px; border: 1px solid var(--panel-edge);
+  background: linear-gradient(rgba(38,46,62,.9), rgba(18,23,32,.9));
+  box-shadow: 0 2px 0 rgba(0,0,0,.45);
+}
+.keycap b { font-family: var(--display); font-size: 17px; color: var(--parchment); font-weight: 500; }
+.keycap i { font-style: normal; font-size: 9px; letter-spacing: .06em; color: var(--gold-dim); }
+.keycap.up { grid-column: 2; grid-row: 1; }
+.keycap.left { grid-column: 1; grid-row: 2; }
+.keycap.down { grid-column: 2; grid-row: 2; }
+.keycap.right { grid-column: 3; grid-row: 2; }
+.guide-compass-note { flex: 1 1 220px; min-width: 200px; }
+
+.guide-glass-half { flex: 0 0 auto; }
+.guide-pad { position: relative; width: 150px; height: 150px; }
+.guide-dbtn {
+  position: absolute; width: 52px; height: 52px; border-radius: 50%;
+  display: grid; place-items: center; font-style: normal; font-size: 11px;
+  color: var(--stone); background: rgba(20,26,36,.85); border: 2px solid rgba(143,160,184,.35);
+}
+.guide-dbtn.n { top: 0; right: 0; } .guide-dbtn.e { bottom: 0; right: 0; }
+.guide-dbtn.s { bottom: 0; left: 0; } .guide-dbtn.w { top: 0; left: 0; }
+.guide-stick-base {
+  position: absolute; inset: 22px; border-radius: 50%;
+  border: 2px dashed rgba(143,160,184,.3); background: rgba(20,26,36,.55);
+}
+.guide-stick-nub {
+  position: absolute; left: 54px; top: 54px; width: 42px; height: 42px; border-radius: 50%;
+  background: rgba(50,64,86,.9); border: 2px solid rgba(143,160,184,.5);
+}
+.guide-pad-note {
+  position: absolute; left: 0; right: 0; bottom: -4px; text-align: center;
+  font-size: 10.5px; color: var(--stone-dim);
+}
+.guide-buttons { display: grid; grid-template-columns: repeat(2, 66px); gap: 10px; }
+.guide-tbtn {
+  width: 66px; height: 66px; border-radius: 50%; display: grid; place-items: center;
+  font-style: normal; font-size: 10px; letter-spacing: .08em; font-weight: 700;
+  color: var(--parchment); background: rgba(20,26,36,.82); border: 2px solid rgba(143,160,184,.35);
+}
+.guide-tbtn.slash { border-color: rgba(232,180,92,.6); color: var(--gold); }
+.guide-tbtn.fire { border-color: rgba(168,216,239,.55); color: var(--frost); }
+.guide-tbtn.action { border-color: rgba(111,206,135,.5); color: var(--good); }
+.guide-tbtn.torch { border-color: rgba(255,154,58,.5); color: var(--ember); }
+
+.guide-actions {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 9px 20px; margin: 20px 0 4px;
+}
+.guide-action { display: flex; gap: 11px; align-items: flex-start; }
+.guide-cap {
+  flex: 0 0 auto; min-width: 74px; text-align: center; padding: 5px 9px; border-radius: 4px;
+  font-size: 11px; letter-spacing: .05em; color: var(--parchment);
+  background: rgba(12,16,23,.8); border: 1px solid var(--panel-edge);
+}
+.guide-action-body { display: flex; flex-direction: column; gap: 1px; font-size: 12.5px; }
+.guide-action-body b { color: var(--stone); font-weight: 500; }
+.guide-action-body small { font-size: 10.5px; color: var(--stone-dim); line-height: 1.4; }
+.guide-pad-choice { margin-top: 16px; }
+.guide-again { display: flex; align-items: center; gap: 9px; margin-top: 16px; font-size: 12.5px; color: var(--stone); cursor: pointer; }
+.guide-again input { width: 16px; height: 16px; accent-color: var(--gold); }
+.guide-reset-note { margin-top: 4px; }
+
+/* ------------------------------------------------------------- the map */
+.map-panel { display: flex; flex-direction: column; }
+.map-stage {
+  position: relative; margin: 2px 0 10px; border-radius: 6px; overflow: hidden;
+  border: 1px solid var(--panel-edge); background: rgba(8,10,15,.9);
+  height: min(52vh, 460px); touch-action: none; cursor: grab;
+}
+.map-stage:active { cursor: grabbing; }
+.map-canvas { display: block; width: 100%; height: 100%; }
+.map-zoom { display: flex; gap: 8px; justify-content: center; margin-bottom: 12px; }
+.map-zoom .btn { min-width: 62px; }
+.map-legend { border-top: 1px solid var(--panel-edge); padding-top: 12px; }
+.map-legend-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px 16px; margin-top: 8px;
+}
+.map-legend-item { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--stone); }
+.map-swatch { flex: 0 0 auto; width: 18px; height: 18px; }
+.map-legend-name { flex: 1 1 auto; }
+.map-legend-count { font-style: normal; color: var(--stone-dim); font-variant-numeric: tabular-nums; }
+
 /* The altar's offers. Three cards, warmer and more expensive left to right,
    so the price is legible before the reward is read. */
 .offer-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 4px 0 18px; }
@@ -697,16 +817,64 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
 
 /* The build stamp. Deliberately the quietest thing on the panel: it exists so
    a screenshot can be traced back to a commit, not to be read while playing. */
-.build-stamp {
-  margin: 18px 0 0; text-align: center; font-size: 10.5px; letter-spacing: .08em;
+.build-stamp { margin: 18px 0 0; text-align: center; }
+.build-stamp-btn {
+  display: block; width: 100%; padding: 2px 0; background: none; border: 0; cursor: pointer;
+  font-family: var(--ui); font-size: 10.5px; letter-spacing: .08em;
   color: var(--stone-dim); opacity: .62; font-variant-numeric: tabular-nums;
-  user-select: text; -webkit-user-select: text;
+  transition: opacity .12s, color .12s;
 }
-.build-stamp b { font-weight: 500; color: var(--stone); }
-.build-stamp small { display: block; margin-top: 3px; font-size: 9.5px; opacity: .8; }
-.controls-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px 22px; margin-top: 10px; }
-.controls-grid div { font-size: 12.5px; color: var(--stone); display: flex; justify-content: space-between; gap: 10px; }
-.controls-grid b { color: var(--parchment); font-weight: 500; }
+.build-stamp-btn:hover, .build-stamp-btn:focus-visible { opacity: 1; color: var(--gold-dim); outline: none; }
+.build-stamp-btn b { font-weight: 500; color: inherit; }
+.build-stamp-btn small { display: block; margin-top: 3px; font-size: 9.5px; opacity: .8; }
+.build-stamp-links { display: flex; gap: 8px; justify-content: center; margin-top: 8px; flex-wrap: wrap; }
+
+/* ------------------------------------------------------ release notes */
+.release-picker { display: flex; gap: 8px; align-items: center; margin: 2px 0 16px; }
+.release-select {
+  flex: 1 1 auto; min-width: 0; padding: 10px 12px; border-radius: 4px;
+  font-family: var(--ui); font-size: 13px; color: var(--parchment);
+  background: rgba(6,8,12,.85); border: 1px solid var(--panel-edge);
+}
+.release-select:focus { outline: none; border-color: var(--gold-dim); }
+.release-picker .btn { min-width: 42px; font-size: 16px; line-height: 1; }
+.release-picker .btn:disabled { opacity: .3; cursor: default; }
+.release-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 4px; }
+.release-stamp b {
+  font-family: var(--ui); font-size: 13px; letter-spacing: .06em; color: var(--gold);
+  font-weight: 500; font-variant-numeric: tabular-nums;
+}
+.release-stamp small { display: block; margin-top: 2px; font-size: 10.5px; color: var(--stone-dim); }
+.release-current {
+  font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 999px; color: var(--good);
+  border: 1px solid rgba(111,206,135,.4);
+}
+.release-headline {
+  font-family: var(--display); font-style: italic; font-size: 15px;
+  color: var(--stone); line-height: 1.6; margin: 10px 0 4px;
+}
+.release-note { margin: 8px 0 0; }
+.release-section {
+  font-family: var(--ui); font-size: 10px; letter-spacing: .18em; text-transform: uppercase;
+  color: var(--stone-dim); margin: 18px 0 6px; font-weight: 400;
+}
+.release-list { margin: 0; padding-left: 18px; }
+.release-list li { font-size: 12.5px; color: var(--stone); line-height: 1.65; margin-bottom: 6px; }
+.controls-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 22px; margin-top: 10px; }
+.control-row {
+  font-size: 12.5px; color: var(--stone); display: flex; justify-content: space-between;
+  gap: 12px; align-items: baseline; padding-bottom: 5px;
+  border-bottom: 1px solid rgba(43,52,68,.45);
+}
+.control-label { display: flex; flex-direction: column; gap: 1px; }
+.control-note { font-size: 10.5px; color: var(--stone-dim); line-height: 1.35; }
+.control-keys { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex: 0 0 auto; }
+.control-key { color: var(--parchment); font-weight: 500; white-space: nowrap; }
+.control-touch {
+  font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--gold-dim); font-weight: 400; white-space: nowrap;
+}
 .near-miss { text-align: center; padding: 20px 0; }
 .near-miss .place { font-family: var(--display); font-size: clamp(38px, 9vw, 68px); color: var(--stone); letter-spacing: .06em; }
 .near-miss .gap { font-size: 15px; color: var(--gold); margin-top: 6px; }

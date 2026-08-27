@@ -12,6 +12,10 @@ import { Enemy } from '../src/game/enemies.js';
 import { RELICS, RELIC_BY_ID, computeMods, offerRelics, baseMods, MOD_BETTER } from '../src/game/relics.js';
 import { T } from '../src/gen/tiles.js';
 import { inputDirToGrid, screenDirToGrid, screenX, screenY } from '../src/render/iso.js';
+import { CONTROLS, DEFAULT_BINDINGS as BINDINGS } from '../src/core/input.js';
+import { makeSeed, normaliseSeed } from '../src/core/rng.js';
+import { RELEASES } from '../src/game/releases.js';
+import { VERSION } from '../src/core/version.js';
 import { bfsField, N4 } from '../src/gen/grid.js';
 import { RNG } from '../src/core/rng.js';
 import { SoundField } from '../src/game/soundfield.js';
@@ -917,6 +921,121 @@ test('a hall file written by a stranger is read without trusting it', () => {
     assert(r.name.length <= 18, `a name of ${r.name.length} characters got through`);
   }
   assert(rows.some((r) => r.name === 'Cheat' && r.depth === 1), 'a negative depth was not clamped');
+});
+
+// --- controls and seeds ----------------------------------------------------
+
+test('the controls are described in exactly one place, and it covers them all', () => {
+  // Every action that has a key binding and is used during play must appear
+  // in the list the interface renders from, or a screen will quietly stop
+  // mentioning it -- which is how the torch and the map went undocumented.
+  const played = ['slash', 'fire', 'action', 'pause', 'bestiary', 'map', 'torch'];
+  for (const action of played) {
+    assert(BINDINGS[action], `${action} has no key binding`);
+    assert(CONTROLS.some((c) => c.id === action),
+      `${action} is bound to a key but is not in the control list`);
+  }
+  // Movement is described as four compass entries rather than by action name.
+  for (const dir of ['north', 'east', 'south', 'west']) {
+    assert(CONTROLS.some((c) => c.id === dir), `${dir} is missing from the control list`);
+  }
+  for (const control of CONTROLS) {
+    assert(control.label && control.keys, `${control.id} is missing a label or its keys`);
+  }
+  // The torch answers to both T and Q: Q falls under the ring finger of a
+  // hand already on WASD, and losing it is felt by anyone playing that way.
+  assert(BINDINGS.torch.includes('KeyT') && BINDINGS.torch.includes('KeyQ'),
+    'the torch should answer to both T and Q');
+
+  // No key may mean two different things.
+  const claimed = new Map();
+  for (const [action, codes] of Object.entries(BINDINGS)) {
+    for (const code of codes) {
+      const already = claimed.get(code);
+      assert(already === undefined || already === action,
+        `${code} is bound to both ${already} and ${action}`);
+      claimed.set(code, action);
+    }
+  }
+
+  // Anything printed as an alternative has to actually be bound to it.
+  for (const control of CONTROLS) {
+    const codes = BINDINGS[control.id];
+    if (!codes) continue;
+    const printed = control.keys.split('/').length;
+    assert(printed === codes.length,
+      `${control.id} prints ${printed} key(s) as "${control.keys}" but is bound to ${codes.length}`);
+  }
+});
+
+test('a seed typed by hand gives the labyrinth it names', () => {
+  // Whatever the player pastes in, two people who think they typed the same
+  // seed have to get the same level.
+  const messy = ['  Fenrir 1234!! ', 'FENRIR--1234', 'fenrir 1234'];
+  for (const text of messy) {
+    assert(normaliseSeed(text) === 'fenrir-1234',
+      `"${text}" normalised to "${normaliseSeed(text)}"`);
+  }
+  assert(normaliseSeed('') === null, 'an empty seed should ask for a new one');
+  assert(normaliseSeed('!!!') === null, 'a seed of nothing but punctuation should be no seed');
+
+  const shape = (seed) => {
+    const run = new Run(seed);
+    run.depth = 1;
+    run.refreshMods();
+    const level = generateLevel({ depth: 1, seed, context: run.levelContext() });
+    return [level.floorCells.length, level.rooms.length,
+      level.stairs.x, level.stairs.y, level.props.length].join(':');
+  };
+  assert(shape('fenrir-1234') === shape('fenrir-1234'), 'the same seed gave two labyrinths');
+  assert(shape('fenrir-1234') !== shape('mimir-9999'), 'two seeds gave the same labyrinth');
+  // makeSeed produces something that survives a round trip through the field.
+  for (let i = 0; i < 40; i++) {
+    const seed = makeSeed();
+    assert(normaliseSeed(seed) === seed, `generated seed "${seed}" is not its own normal form`);
+  }
+});
+
+// --- release notes ---------------------------------------------------------
+
+test('the version being played has release notes, and they are in order', () => {
+  // The one that matters: bumping version.json without writing down what
+  // changed fails here rather than shipping a screen with a hole in it.
+  const mine = RELEASES.find((r) => r.version === VERSION.number);
+  assert(mine, `nothing is written down for the version being played (${VERSION.number})`);
+
+  const parse = (v) => v.split('.').map(Number);
+  const seen = new Set();
+  for (let i = 0; i < RELEASES.length; i++) {
+    const r = RELEASES[i];
+    assert(/^\d+\.\d+\.\d+$/.test(r.version), `"${r.version}" is not a version number`);
+    assert(!seen.has(r.version), `${r.version} is listed twice`);
+    seen.add(r.version);
+    if (i === 0) continue;
+    const [a, b] = [parse(RELEASES[i - 1].version), parse(r.version)];
+    const newer = a[0] !== b[0] ? a[0] > b[0] : a[1] !== b[1] ? a[1] > b[1] : a[2] > b[2];
+    assert(newer, `${RELEASES[i - 1].version} is not newer than ${r.version}`);
+  }
+});
+
+test('every release says something, and says when it was', () => {
+  for (const r of RELEASES) {
+    assert(r.headline && r.headline.length > 12, `${r.version} has no headline`);
+    assert(r.sections && r.sections.length, `${r.version} lists no changes`);
+    for (const section of r.sections) {
+      assert(section.title, `${r.version} has a section with no title`);
+      assert(section.notes && section.notes.length, `${r.version}: "${section.title}" is empty`);
+      for (const note of section.notes) {
+        assert(note.length > 20, `${r.version}: "${note}" is too short to mean anything`);
+      }
+    }
+    // Everything except the version being played has to carry its own stamp;
+    // that one borrows the running build, because it has not been built yet.
+    if (r.version === VERSION.number) continue;
+    assert(/^\d{8}-\d{6}$/.test(r.build || ''), `${r.version} has no build stamp`);
+    assert(/^\d{4}-\d{2}-\d{2}$/.test(r.date || ''), `${r.version} has no date`);
+    assert(Number.isInteger(r.pr) && r.pr > 0, `${r.version} names no pull request`);
+  }
 });
 
 // --- keys, gates and the exit ----------------------------------------------
