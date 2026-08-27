@@ -16,6 +16,7 @@ import { bfsField, N4 } from '../src/gen/grid.js';
 import { RNG } from '../src/core/rng.js';
 import { SoundField } from '../src/game/soundfield.js';
 import { HP_FLOOR, REWARD_BY_ID, SACRIFICE_BY_ID } from '../src/game/altars.js';
+import { toCsv, parseCsv, normalise, rank, merge, HALL_SIZE } from '../src/game/hall.js';
 import { hazardBudget, HAZARDS } from '../src/gen/biomes.js';
 import { DIFFICULTIES, DIFFICULTY_LIST } from '../src/game/difficulty.js';
 
@@ -679,6 +680,67 @@ test('forgetting wipes the chart, and charting fills it without marking anything
   assert(world.vis.discoveredCount < walked + 40,
     `forgetting left ${world.vis.discoveredCount} tiles charted`);
   assert(world.hints.length === 0, 'forgetting left the hints behind');
+});
+
+// --- the hall of fame ------------------------------------------------------
+
+test('the hall round-trips through CSV without losing or inventing anything', () => {
+  const rows = [
+    { name: 'Ragnvald', score: 48200, depth: 17, bosses: 3, kills: 210, secrets: 6,
+      diff: 'ashenvow', build: 'Berserker', date: '2026-08-27', seed: 'abc', version: '1.2.0' },
+    { name: 'Sigrun, the Bold', score: 41750, depth: 15, bosses: 2, kills: 180, secrets: 4,
+      diff: 'torchbound', build: 'Ranger', date: '2026-08-26', seed: 'd,e"f', version: '1.2.0' },
+  ];
+  const csv = toCsv(rows);
+  const back = parseCsv(csv);
+  assert(back.length === 2, `read ${back.length} rows back from two`);
+  // A name with a comma in it and a seed with a quote in it are exactly the
+  // two things a hand-rolled CSV writer gets wrong.
+  assert(back[1].name === 'Sigrun, the Bold', `name came back as "${back[1].name}"`);
+  assert(back[1].seed === 'd,e"f', `seed came back as "${back[1].seed}"`);
+  assert(back[0].score === 48200 && back[0].depth === 17, 'numbers did not survive the trip');
+});
+
+test('the hall keeps fifty names, in order, and never the same run twice', () => {
+  const many = [];
+  for (let i = 0; i < 80; i++) {
+    many.push({ name: 'Name' + i, score: i * 100, depth: 1 + (i % 20), diff: 'torchbound' });
+  }
+  const ranked = rank(many.map(normalise));
+  assert(ranked.length === HALL_SIZE, `the hall held ${ranked.length} names`);
+  assert(ranked[0].score === 7900, 'the hall is not in order');
+  for (let i = 1; i < ranked.length; i++) {
+    assert(ranked[i - 1].score >= ranked[i].score, 'the hall is out of order at ' + i);
+  }
+
+  // Merging a table into itself must be a no-op, or importing your own
+  // export doubles every name you have.
+  const twice = merge(ranked, ranked);
+  assert(twice.length === ranked.length, `merging with itself grew the hall to ${twice.length}`);
+
+  // ...but a genuinely new name gets in and pushes the last one out.
+  const grown = merge(ranked, [normalise({ name: 'Newcomer', score: 99999, depth: 30, diff: 'ashenvow' })]);
+  assert(grown.length === HALL_SIZE, 'the hall overflowed');
+  assert(grown[0].name === 'Newcomer', 'a record score did not take first place');
+});
+
+test('a hall file written by a stranger is read without trusting it', () => {
+  const hostile = [
+    'name,score,depth,diff',
+    ',999999,50,ashenvow',                          // no name: dropped
+    'Nobody,,3,torchbound',                          // no score: dropped
+    'Ghost,-500,4,torchbound',                       // a negative score is no score
+    'Cheat,500,-9,torchbound',                       // a negative depth is clamped
+    'A very long name indeed that goes on and on,120,4,torchbound',
+    'Fine,1500,7,torchbound',
+  ].join(String.fromCharCode(10));
+  const rows = parseCsv(hostile);
+  assert(rows.length === 3, `read ${rows.length} rows from three valid ones`);
+  for (const r of rows) {
+    assert(r.score > 0 && r.depth >= 1, 'a nonsense row got through unclamped');
+    assert(r.name.length <= 18, `a name of ${r.name.length} characters got through`);
+  }
+  assert(rows.some((r) => r.name === 'Cheat' && r.depth === 1), 'a negative depth was not clamped');
 });
 
 // --- keys, gates and the exit ----------------------------------------------

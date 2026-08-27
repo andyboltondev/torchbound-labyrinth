@@ -541,6 +541,20 @@ table.board td { padding: 9px 10px; border-bottom: 1px solid rgba(43,52,68,.5); 
 table.board tr.you td { background: rgba(232,180,92,.1); color: var(--gold); }
 table.board td.rank { font-family: var(--display); color: var(--gold-dim); width: 46px; }
 table.board td.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.board td.when { color: var(--stone-dim); font-size: 11.5px; }
+table.board td.empty { text-align: center; color: var(--stone-dim); padding: 26px 10px; }
+/* Fifty rows will not fit on a phone, so the table gets its own scroll strip
+   with the header pinned to the top of it. */
+.board-wrap.tall { max-height: min(46vh, 420px); overflow-y: auto; }
+.board-wrap.tall table.board th {
+  position: sticky; top: 0; z-index: 1; background: var(--panel);
+  box-shadow: 0 1px 0 var(--panel-edge);
+}
+.hall-filter { margin-bottom: 10px; }
+.hall-files { justify-content: flex-start; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.hall-note { color: var(--gold-dim); }
+.btn.danger { border-color: rgba(194,69,47,.5); color: var(--blood); }
+.btn.danger:hover { border-color: var(--blood); }
 table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
 
 /* ------------------------------------------------------------ relics */

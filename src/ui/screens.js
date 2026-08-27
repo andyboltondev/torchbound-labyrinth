@@ -2,6 +2,7 @@
 // bestiary, settings, pause, relic choice, score summary and run end.
 
 import { profile, DEFAULT_SETTINGS } from '../game/profile.js';
+import { rank } from '../game/hall.js';
 import { DIFFICULTY_LIST, difficultyById } from '../game/difficulty.js';
 import { ENEMY_LIST, BOSSES, ENEMIES } from '../game/enemyData.js';
 import { RELIC_BY_ID } from '../game/relics.js';
@@ -230,22 +231,42 @@ export class Screens {
   }
 
   // ----------------------------------------------------- hall of fame
+  // Fifty names, scrollable, filterable by mode, and a table you can take
+  // away with you. The file is the point: a hall of fame kept on one machine
+  // that cannot be moved off it is a hall of fame you lose with the browser.
   screen_hall(data = {}) {
-    const panel = el('div', 'panel');
+    const panel = el('div', 'panel wide');
     panel.appendChild(el('h2', 'screen-title', 'Hall of Fame'));
-    panel.appendChild(el('p', 'screen-sub', 'The ten deepest names still spoken in the mead hall.'));
+    panel.appendChild(el('p', 'screen-sub',
+      'The fifty deepest names still spoken in the mead hall. Kept on this '
+      + 'machine, in a file you can carry.'));
 
+    const filter = data.filter || 'all';
+    const modes = el('div', 'seg hall-filter');
+    modes.setAttribute('role', 'group');
+    modes.setAttribute('aria-label', 'Filter by mode');
+    const addMode = (value, label) => {
+      const b = el('button', filter === value ? 'on' : '', label);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(filter === value));
+      b.addEventListener('click', this.click(() => this.show('hall', { ...data, filter: value })));
+      modes.appendChild(b);
+    };
+    addMode('all', 'All');
+    for (const d of DIFFICULTY_LIST) if (d.ranked) addMode(d.id, d.name);
+    panel.appendChild(modes);
+
+    const board = rank(profile.board).filter((e) => filter === 'all' || e.diff === filter);
     const table = el('table', 'board');
     const head = el('tr');
-    for (const h of ['', 'Name', 'Build', 'Mode', 'Depth', 'Bosses', 'Score']) {
+    for (const h of ['', 'Name', 'Path', 'Mode', 'Depth', 'Foes', 'When', 'Score']) {
       head.appendChild(el('th', null, h));
     }
     table.appendChild(head);
 
-    const board = profile.board.slice().sort((a, b) => b.score - a.score).slice(0, 10);
     board.forEach((entry, i) => {
       const tr = el('tr');
-      if (data.highlight !== undefined && data.highlight === i) {
+      if (data.highlight !== undefined && data.highlight === i && filter === 'all') {
         tr.className = 'you';
         tr.setAttribute('aria-current', 'true');
       }
@@ -256,18 +277,88 @@ export class Screens {
       tr.appendChild(el('td', 'mode ' + diff.id, diff.name));
       tr.appendChild(el('td', 'num', 'D' + entry.depth));
       tr.appendChild(el('td', 'num', String(entry.bosses || 0)));
+      const when = el('td', 'num when', entry.date || '\u2014');
+      if (entry.version) when.title = 'Build ' + entry.version;
+      tr.appendChild(when);
       tr.appendChild(el('td', 'num', formatScore(entry.score)));
       table.appendChild(tr);
     });
-    const wrap = el('div', 'board-wrap');
+    if (!board.length) {
+      const tr = el('tr');
+      const td = el('td', 'empty', 'No names carved here yet.');
+      td.colSpan = 8;
+      tr.appendChild(td);
+      table.appendChild(tr);
+    }
+    const wrap = el('div', 'board-wrap tall');
     wrap.appendChild(table);
     panel.appendChild(wrap);
+
+    if (data.note) panel.appendChild(el('p', 'hint hall-note', data.note));
     panel.appendChild(el('p', 'hint',
       'Hearthlight descents are not carved here: a run that cannot be lost '
       + 'cannot be ranked against one that can.'));
+    panel.appendChild(this._hallFileRow(data));
 
     const row = el('div', 'btn-row');
     row.appendChild(button('Back', 'btn', this.click(() => this.show(data.from || 'home'))));
+    panel.appendChild(row);
+    return panel;
+  }
+
+  // Taking the table off this machine, and putting one back. Import merges
+  // rather than replaces, and the same export read twice adds nothing the
+  // second time, so there is no way to lose names by pressing the wrong one.
+  _hallFileRow(data) {
+    const row = el('div', 'btn-row hall-files');
+    row.appendChild(button('Export CSV', 'btn ghost small', this.click(() => {
+      const blob = new Blob([profile.exportHall()], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'torchbound-hall-of-fame.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    })));
+
+    const picker = el('input');
+    picker.type = 'file';
+    picker.accept = '.csv,text/csv,text/plain';
+    picker.hidden = true;
+    picker.addEventListener('change', () => {
+      const file = picker.files && picker.files[0];
+      if (!file) return;
+      file.text().then((text) => profile.importHall(text)).then((result) => {
+        const note = result.read
+          ? `Read ${result.read} name${result.read === 1 ? '' : 's'}; `
+            + `${result.added} new to this hall.`
+          : 'That file held no names this hall could read.';
+        this.show('hall', { ...data, note, highlight: undefined });
+      });
+    });
+    row.appendChild(picker);
+    row.appendChild(button('Import CSV', 'btn ghost small', this.click(() => picker.click())));
+    row.appendChild(button('Clear the hall', 'btn ghost small danger', this.click(() => {
+      this.show('confirmClearHall', data);
+    })));
+    return row;
+  }
+
+  screen_confirmClearHall(data = {}) {
+    const panel = el('div', 'panel');
+    panel.appendChild(el('h2', 'screen-title', 'Strike every name?'));
+    panel.appendChild(el('p', 'screen-sub',
+      'Every name in the hall is scratched off, including the ones that were '
+      + 'here when you arrived. Export first if you want them back.'));
+    const row = el('div', 'btn-row');
+    row.appendChild(button('Keep them', 'btn primary',
+      this.click(() => this.show('hall', { ...data, note: undefined }))));
+    row.appendChild(button('Strike them all', 'btn ghost danger', this.click(() => {
+      profile.clearHall();
+      this.show('hall', { ...data, note: 'The stone is bare.', highlight: undefined });
+    })));
     panel.appendChild(row);
     return panel;
   }
@@ -782,12 +873,18 @@ export class Screens {
       const submit = button('Carve it', 'btn primary', () => {
         const name = (input.value || 'Nameless').trim().slice(0, 14) || 'Nameless';
         try { localStorage.setItem('torchbound.lastName', name); } catch (e) { /* ignore */ }
-        const placed = profile.submit({
+        submit.disabled = true;
+        // Carving waits for the table to be free, so it is a promise. The
+        // wait is measured in tens of milliseconds and nothing else is
+        // happening, but the button is locked so it cannot be pressed twice.
+        profile.submit({
           name, score, depth: run.depth, bosses: run.bossesDefeated,
-          build: run.build, diff: run.difficulty.id,
+          kills: run.score.runBest.kills, secrets: run.score.runBest.secrets,
+          build: run.build, diff: run.difficulty.id, seed: run.seed,
+        }).then((placed) => {
+          if (this.host.audio) this.host.audio.play('fanfare');
+          this.show('hall', { highlight: placed ? placed - 1 : undefined, from: 'home' });
         });
-        if (this.host.audio) this.host.audio.play('fanfare');
-        this.show('hall', { highlight: placed - 1, from: 'home' });
       });
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit.click(); });
       entry.appendChild(input);
