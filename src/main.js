@@ -34,13 +34,15 @@ class Game {
     this.touch = new TouchControls(this.input);
     this.screens = new Screens({
       audio: this.audio,
-      start: (difficultyId) => this.startRun(null, difficultyId),
+      start: (difficultyId, seed) => this.startRun(seed || null, difficultyId),
       retry: () => this.retryDepth(),
       resume: () => this.resume(),
       quit: (reason) => this.endRun(reason || 'quit'),
       chooseRelic: (relic) => this.chooseRelic(relic),
       takeOffer: (offer) => this.takeOffer(offer),
       leaveAltar: () => this.leaveAltar(),
+      closeMap: () => this.closeMap(),
+      closeGuide: () => this.closeGuide(),
       afterSummary: () => this.showRelicChoice(),
       onTouchModeChange: () => this.refreshTouchMode(),
       onSettingChanged: (key) => this.applySettings(key),
@@ -61,6 +63,17 @@ class Game {
     window.addEventListener('orientationchange', () => setTimeout(() => this.onResize(), 200));
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && this.state === STATE.PLAYING) this.pause();
+    });
+    // Tapping the corner chart opens the full one. It is drawn on the canvas
+    // rather than in the document, so the hit test is done by hand.
+    this.canvas.addEventListener('pointerdown', (e) => {
+      if (this.state !== STATE.PLAYING) return;
+      const box = this.minimapBox();
+      const rect = this.canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left, y = e.clientY - rect.top;
+      if (x < box.x || x > box.x + box.size || y < box.y || y > box.y + box.size) return;
+      e.preventDefault();
+      this.openMap();
     });
     document.getElementById('btnPause').addEventListener('click', () => this.pause());
     document.getElementById('btnBestiary').addEventListener('click', () => {
@@ -95,11 +108,22 @@ class Game {
     };
     window.addEventListener('pointerdown', arm);
     window.addEventListener('keydown', arm);
+
+    // The simulation is stopped while the map is up, so the ordinary input
+    // pump is not running and cannot close it. Esc and M both do, from here.
+    window.addEventListener('keydown', (e) => {
+      if (this.screens.current !== 'map') return;
+      if (e.code !== 'Escape' && e.code !== 'KeyM') return;
+      e.preventDefault();
+      this.closeMap();
+    });
   }
 
   onResize() {
     this.renderer.resize();
     this.refreshTouchMode();
+    this._mapBox = null;
+    if (this.screens.current === 'map' && this.screens._onResize) this.screens._onResize();
   }
 
   applySettings(key) {
@@ -121,6 +145,10 @@ class Game {
     this.touch.setVisible(on && this.state === STATE.PLAYING);
     this.hud.setTouchMode(on);
     this.touchEnabled = on;
+    // Measured after the pad has been shown or hidden, so the minimap knows
+    // how much of the corner is spoken for.
+    this.mapReserve = on ? this.touch.reserve() : 0;
+    this._mapBox = null;
   }
 
   // ---------------------------------------------------------- run flow
@@ -190,14 +218,11 @@ class Game {
       if (level.gates.length) {
         this.hud.toast(level.gates.length + ' sealed gate' + (level.gates.length > 1 ? 's' : '') + ' ahead');
       }
-      // A first-ever run gets told how to hold the sword.
-      if (profile.stats.runs === 0 && depth === 1) {
-        const touch = this.touchEnabled;
-        setTimeout(() => this.hud.toast(touch
-          ? 'Drag anywhere on the left to move' : 'Move with WASD or the arrow keys'), 1400);
-        setTimeout(() => this.hud.toast(touch
-          ? 'SLASH to strike, ACT to use things' : 'Space to slash, E to act'), 3600);
-        setTimeout(() => this.hud.toast('Your torch is the only light. Find the stairs.'), 5800);
+      // The opening guide, on the first depth of a descent, until the player
+      // says otherwise. It stops the world rather than talking over it.
+      if (depth === 1 && profile.settings.showGuide !== false) this.openGuide();
+      else if (depth === 1 && profile.stats.runs === 0) {
+        setTimeout(() => this.hud.toast('Your torch is the only light. Find the stairs.'), 1400);
       }
     }, 60);
   }
@@ -266,6 +291,45 @@ class Game {
     }
     this.run.descend();
     this.loadLevel();
+  }
+
+  openGuide() {
+    if (this.state !== STATE.PLAYING) return;
+    this.state = STATE.PAUSED;
+    this.input.releaseAll();
+    this.touch.setVisible(false);
+    if (this.audio.ready) this.audio.master.gain.value = profile.settings.master * 0.55;
+    this.screens.show('guide', { touch: this.touchEnabled });
+  }
+
+  closeGuide() {
+    if (this.state !== STATE.PAUSED) return;
+    this.screens.hide();
+    this.state = STATE.PLAYING;
+    this.input.clearEdges();
+    this.refreshTouchMode();
+    if (this.audio.ready) this.audio.master.gain.value = profile.settings.master;
+    this.hud.toast('Your torch is the only light. Find the stairs.');
+  }
+
+  // The chart, full size. Stops the world the same way an altar does: the
+  // simulation is untouched and resuming puts the player back where they were.
+  openMap() {
+    if (this.state !== STATE.PLAYING || !this.world) return;
+    this.state = STATE.PAUSED;
+    this.input.releaseAll();
+    this.touch.setVisible(false);
+    if (this.audio.ready) this.audio.master.gain.value = profile.settings.master * 0.55;
+    this.screens.show('map', { world: this.world, minimap: this.minimap });
+  }
+
+  closeMap() {
+    if (this.state !== STATE.PAUSED) return;
+    this.screens.hide();
+    this.state = STATE.PLAYING;
+    this.input.clearEdges();
+    this.refreshTouchMode();
+    if (this.audio.ready) this.audio.master.gain.value = profile.settings.master;
   }
 
   // An altar stops the world while the choice is being made. It is the same
@@ -337,6 +401,24 @@ class Game {
       ranked: this.run.difficulty.ranked,
     });
     this.screens.show('gameover', { run: this.run, reason });
+  }
+
+  // Where the minimap goes, and how big it is allowed to be. It sits above
+  // whatever the touch pad has reserved rather than at a fixed offset, and
+  // shrinks rather than climbing into the vitals when there is not room for
+  // both. Cached, because it only changes when the viewport or the touch mode
+  // does, and it is read every frame.
+  minimapBox() {
+    const w = this.renderer.width, h = this.renderer.height;
+    if (this._mapBox && this._mapBoxKey === w + 'x' + h + ':' + this.mapReserve) return this._mapBox;
+    const pad = 14;
+    const topSafe = 118;              // clear of the vitals and the score block
+    const reserve = this.mapReserve || 0;
+    let size = Math.round(clamp(Math.min(w, h) * 0.2, 96, 172));
+    size = Math.round(clamp(Math.min(size, h - reserve - pad * 2 - topSafe), 68, 172));
+    this._mapBoxKey = w + 'x' + h + ':' + this.mapReserve;
+    this._mapBox = { x: w - size - pad, y: h - size - pad - reserve, size };
+    return this._mapBox;
   }
 
   // ------------------------------------------------------- world events
@@ -468,6 +550,7 @@ class Game {
     };
     if (this.input.consume('action')) this.world.interact();
     if (this.input.consume('torch')) this.world.toggleTorch();
+    if (this.input.consume('map')) { this.openMap(); return; }
 
     this.world.update(dt, intent);
 
@@ -522,11 +605,8 @@ class Game {
       if (this.state === STATE.PLAYING) this.renderer.updateCamera(this.world, dt);
       this.renderer.render(this.world, this.state === STATE.PLAYING ? dt : 0);
       if (this.state === STATE.PLAYING) {
-        const size = Math.round(clamp(Math.min(this.renderer.width, this.renderer.height) * 0.2, 96, 172));
-        const pad = 14;
-        this.minimap.draw(this.renderer.ctx, this.world,
-          this.renderer.width - size - pad,
-          this.renderer.height - size - pad - (this.touchEnabled ? 104 : 0), size);
+        const box = this.minimapBox();
+        this.minimap.draw(this.renderer.ctx, this.world, box.x, box.y, box.size);
         this.hud.update(this.world, this.run, dt);
         if (profile.settings.showFps) this.hud.drawFps(this.renderer, this.perf);
       }

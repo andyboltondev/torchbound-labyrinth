@@ -12,6 +12,8 @@ import { Enemy } from '../src/game/enemies.js';
 import { RELICS, RELIC_BY_ID, computeMods, offerRelics, baseMods, MOD_BETTER } from '../src/game/relics.js';
 import { T } from '../src/gen/tiles.js';
 import { inputDirToGrid, screenDirToGrid, screenX, screenY } from '../src/render/iso.js';
+import { CONTROLS, DEFAULT_BINDINGS as BINDINGS } from '../src/core/input.js';
+import { makeSeed, normaliseSeed } from '../src/core/rng.js';
 import { bfsField, N4 } from '../src/gen/grid.js';
 import { RNG } from '../src/core/rng.js';
 import { SoundField } from '../src/game/soundfield.js';
@@ -917,6 +919,67 @@ test('a hall file written by a stranger is read without trusting it', () => {
     assert(r.name.length <= 18, `a name of ${r.name.length} characters got through`);
   }
   assert(rows.some((r) => r.name === 'Cheat' && r.depth === 1), 'a negative depth was not clamped');
+});
+
+// --- controls and seeds ----------------------------------------------------
+
+test('the controls are described in exactly one place, and it covers them all', () => {
+  // Every action that has a key binding and is used during play must appear
+  // in the list the interface renders from, or a screen will quietly stop
+  // mentioning it -- which is how the torch and the map went undocumented.
+  const played = ['slash', 'fire', 'action', 'pause', 'bestiary', 'map', 'torch'];
+  for (const action of played) {
+    assert(BINDINGS[action], `${action} has no key binding`);
+    assert(CONTROLS.some((c) => c.id === action),
+      `${action} is bound to a key but is not in the control list`);
+  }
+  // Movement is described as four compass entries rather than by action name.
+  for (const dir of ['north', 'east', 'south', 'west']) {
+    assert(CONTROLS.some((c) => c.id === dir), `${dir} is missing from the control list`);
+  }
+  for (const control of CONTROLS) {
+    assert(control.label && control.keys, `${control.id} is missing a label or its keys`);
+  }
+  // Q used to double for the torch and sits under a hand on WASD.
+  assert(!BINDINGS.torch.includes('KeyQ'), 'the torch is bound to Q again');
+  const seen = new Set();
+  for (const [action, codes] of Object.entries(BINDINGS)) {
+    for (const code of codes) {
+      const key = code + ':' + (action === 'up' || action === 'down'
+        || action === 'left' || action === 'right' ? 'move' : action);
+      assert(!seen.has(code) || key.endsWith(':move'),
+        `${code} is bound to more than one thing`);
+      seen.add(code);
+    }
+  }
+});
+
+test('a seed typed by hand gives the labyrinth it names', () => {
+  // Whatever the player pastes in, two people who think they typed the same
+  // seed have to get the same level.
+  const messy = ['  Fenrir 1234!! ', 'FENRIR--1234', 'fenrir 1234'];
+  for (const text of messy) {
+    assert(normaliseSeed(text) === 'fenrir-1234',
+      `"${text}" normalised to "${normaliseSeed(text)}"`);
+  }
+  assert(normaliseSeed('') === null, 'an empty seed should ask for a new one');
+  assert(normaliseSeed('!!!') === null, 'a seed of nothing but punctuation should be no seed');
+
+  const shape = (seed) => {
+    const run = new Run(seed);
+    run.depth = 1;
+    run.refreshMods();
+    const level = generateLevel({ depth: 1, seed, context: run.levelContext() });
+    return [level.floorCells.length, level.rooms.length,
+      level.stairs.x, level.stairs.y, level.props.length].join(':');
+  };
+  assert(shape('fenrir-1234') === shape('fenrir-1234'), 'the same seed gave two labyrinths');
+  assert(shape('fenrir-1234') !== shape('mimir-9999'), 'two seeds gave the same labyrinth');
+  // makeSeed produces something that survives a round trip through the field.
+  for (let i = 0; i < 40; i++) {
+    const seed = makeSeed();
+    assert(normaliseSeed(seed) === seed, `generated seed "${seed}" is not its own normal form`);
+  }
 });
 
 // --- keys, gates and the exit ----------------------------------------------

@@ -4,7 +4,7 @@
 // The movement axis produced here is SCREEN relative (-y is up on screen).
 // Converting to isometric grid space is the player controller's job.
 
-const DEFAULT_BINDINGS = {
+export const DEFAULT_BINDINGS = {
   up: ['KeyW', 'ArrowUp'],
   down: ['KeyS', 'ArrowDown'],
   left: ['KeyA', 'ArrowLeft'],
@@ -15,8 +15,32 @@ const DEFAULT_BINDINGS = {
   pause: ['Escape', 'KeyP'],
   bestiary: ['KeyB'],
   map: ['KeyM'],
-  torch: ['KeyT', 'KeyQ'],
+  // T only. Q sits under the ring finger of a hand on WASD, so it was being
+  // hit while walking and putting the torch out mid-corridor.
+  torch: ['KeyT'],
 };
+
+// The one description of what the controls are. The settings panel, the home
+// screen and the opening guide all render from this, so they cannot drift
+// apart from each other or from the bindings above.
+//
+// `keys` is what to print, not what to parse -- the bindings are the truth,
+// and this is how they are said out loud.
+export const CONTROLS = [
+  { id: 'north', label: 'Move north', keys: 'W / Up', touch: 'pad', group: 'move' },
+  { id: 'east', label: 'Move east', keys: 'D / Right', touch: 'pad', group: 'move' },
+  { id: 'south', label: 'Move south', keys: 'S / Down', touch: 'pad', group: 'move' },
+  { id: 'west', label: 'Move west', keys: 'A / Left', touch: 'pad', group: 'move' },
+  { id: 'slash', label: 'Slash', keys: 'Space / J', touch: 'SLASH', group: 'fight' },
+  { id: 'fire', label: 'Loose a bolt', keys: 'F / K', touch: 'FIRE', group: 'fight',
+    note: 'once you have found a crossbow' },
+  { id: 'action', label: 'Act', keys: 'E / Enter', touch: 'ACT', group: 'fight',
+    note: 'gates, stairs, chests, shrines, fires, captives, altars' },
+  { id: 'torch', label: 'Douse or relight your torch', keys: 'T', touch: 'TORCH', group: 'fight' },
+  { id: 'map', label: 'Open the map', keys: 'M', touch: 'tap the minimap', group: 'screens' },
+  { id: 'bestiary', label: 'Bestiary', keys: 'B', touch: 'bestiary button', group: 'screens' },
+  { id: 'pause', label: 'Pause', keys: 'Esc / P', touch: 'pause button', group: 'screens' },
+];
 
 export class Input {
   constructor(bindings = DEFAULT_BINDINGS) {

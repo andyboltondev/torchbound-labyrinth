@@ -3,6 +3,8 @@
 
 import { profile, DEFAULT_SETTINGS } from '../game/profile.js';
 import { rank } from '../game/hall.js';
+import { CONTROLS } from '../core/input.js';
+import { makeSeed, normaliseSeed } from '../core/rng.js';
 import { DIFFICULTY_LIST, difficultyById } from '../game/difficulty.js';
 import { ENEMY_LIST, BOSSES, ENEMIES } from '../game/enemyData.js';
 import { RELIC_BY_ID } from '../game/relics.js';
@@ -18,6 +20,23 @@ const el = (tag, cls, text) => {
   if (cls) node.className = cls;
   if (text !== undefined) node.textContent = text;
   return node;
+};
+
+// The distance between two live pointers, for pinch zoom.
+// Falls back to selecting the seed when the clipboard is not available --
+// over plain http, or in a webview that refuses it -- so the player can still
+// copy it by hand rather than being told nothing happened.
+const selectSeed = (node) => {
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+};
+
+const pinchSpan = (pointers) => {
+  const [a, b] = Array.from(pointers.values());
+  return Math.hypot(a.x - b.x, a.y - b.y);
 };
 
 const button = (label, cls = 'btn', onClick) => {
@@ -104,6 +123,58 @@ export class Screens {
     return p;
   }
 
+  // The one rendering of the controls, built from the binding table in
+  // input.js and used by the home screen, the settings panel and the opening
+  // guide. Three places used to list them by hand and all three had drifted:
+  // none of them mentioned the torch or the map.
+  _controlsGrid(opts = {}) {
+    const wrap = el('div', 'controls-block');
+    const touch = opts.touch !== undefined ? opts.touch : this.host.touchEnabled;
+    const grid = el('div', 'controls-grid');
+    for (const control of CONTROLS) {
+      const d = el('div', 'control-row');
+      const label = el('span', 'control-label');
+      label.appendChild(document.createTextNode(control.label));
+      if (control.note && opts.notes !== false) {
+        label.appendChild(el('small', 'control-note', control.note));
+      }
+      d.appendChild(label);
+      const keys = el('b', 'control-keys');
+      keys.appendChild(el('span', 'control-key', control.keys));
+      if (touch && control.touch) {
+        keys.appendChild(el('span', 'control-touch', control.touch));
+      }
+      d.appendChild(keys);
+      grid.appendChild(d);
+    }
+    wrap.appendChild(grid);
+    return wrap;
+  }
+
+  // The seed, wherever the player might want to write it down or hand it on.
+  // A button rather than a label: the whole value of a seed is that it can be
+  // given to somebody else, and selecting text off a game screen is a chore.
+  _seedChip(run) {
+    if (!run || !run.seed) return el('span');
+    const wrap = el('div', 'seed-chip');
+    wrap.appendChild(el('span', 'seed-chip-label', 'Seed'));
+    const value = el('code', 'seed-chip-value', run.seed);
+    wrap.appendChild(value);
+    const copy = button('Copy', 'btn ghost small', this.click(() => {
+      const done = () => {
+        copy.textContent = 'Copied';
+        setTimeout(() => { copy.textContent = 'Copy'; }, 1600);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(run.seed).then(done, () => selectSeed(value));
+      } else {
+        selectSeed(value);
+      }
+    }));
+    wrap.appendChild(copy);
+    return wrap;
+  }
+
   click(fn) {
     return (e) => {
       if (this.host.audio) this.host.audio.play('uiClick');
@@ -127,7 +198,7 @@ export class Screens {
     const columns = el('div', 'home-split');
 
     const menu = el('div', 'menu');
-    menu.appendChild(button('Begin the Descent', 'btn primary',
+    menu.appendChild(button('Begin the descent', 'btn primary',
       this.click(() => this.show('difficulty'))));
     menu.appendChild(button('Bestiary', 'btn', this.click(() => this.show('bestiary', { from: 'home' }))));
     menu.appendChild(button('Settings', 'btn ghost', this.click(() => this.show('settings', { from: 'home' }))));
@@ -151,12 +222,11 @@ export class Screens {
     panel.appendChild(stats);
 
     const controls = el('div');
-    controls.style.marginTop = '16px';
-    controls.appendChild(el('p', 'hint', 'Move with WASD or the arrow keys: they walk the '
-      + 'dungeon’s compass, so Up is north and the corridors run with your keys. '
-      + 'Space or J to slash, F or K to loose a bolt, E to act, T to put out '
-      + 'your torch or light it again, Esc to pause. '
-      + 'On a touch screen the controls appear on the glass.'));
+    controls.style.marginTop = '18px';
+    controls.appendChild(el('p', 'hint', 'The keys walk the dungeon’s compass, so Up '
+      + 'is north and the corridors run with your keys. On a touch screen the '
+      + 'controls appear on the glass instead.'));
+    controls.appendChild(this._controlsGrid({ notes: false }));
     panel.appendChild(controls);
     panel.appendChild(this._buildStamp());
     return panel;
@@ -200,6 +270,27 @@ export class Screens {
     panel.appendChild(el('p', 'screen-sub',
       'Chosen once, for the whole descent. The labyrinth does not renegotiate.'));
 
+    // The seed. Left blank the labyrinth picks its own; typed or pasted in,
+    // two people get the same one.
+    const seedRow = el('div', 'seed-row');
+    seedRow.appendChild(el('label', 'seed-label', 'Seed'));
+    const seedInput = el('input', 'seed-input');
+    seedInput.id = 'run-seed';
+    seedInput.maxLength = 32;
+    seedInput.placeholder = 'leave blank for a new one';
+    seedInput.setAttribute('aria-label', 'Seed for this descent');
+    seedInput.spellcheck = false;
+    seedInput.autocomplete = 'off';
+    seedRow.appendChild(seedInput);
+    seedRow.appendChild(button('Roll', 'btn ghost small', this.click(() => {
+      seedInput.value = makeSeed();
+    })));
+    panel.appendChild(seedRow);
+    panel.appendChild(el('p', 'hint seed-note',
+      'The same seed and the same mode give the same labyrinth. Later depths '
+      + 'also take account of what you are carrying, so two descents match all '
+      + 'the way down only if they make the same choices.'));
+
     const grid = el('div', 'difficulty-grid');
     for (const diff of DIFFICULTY_LIST) {
       const card = el('button', 'difficulty-card'
@@ -221,7 +312,7 @@ export class Screens {
         profile.settings.difficulty = diff.id;
         profile.saveSettings();
         if (this.host.audio) this.host.audio.play('relicTake');
-        this.host.start(diff.id);
+        this.host.start(diff.id, normaliseSeed(seedInput.value));
       });
       grid.appendChild(card);
     }
@@ -304,7 +395,7 @@ export class Screens {
     panel.appendChild(this._hallFileRow(data));
 
     const row = el('div', 'btn-row');
-    row.appendChild(button('Back', 'btn', this.click(() => this.show(data.from || 'home'))));
+    row.appendChild(button('Back', 'btn primary', this.click(() => this.show(data.from || 'home'))));
     panel.appendChild(row);
     return panel;
   }
@@ -387,7 +478,7 @@ export class Screens {
     panel.appendChild(bossGrid);
 
     const row = el('div', 'btn-row');
-    row.appendChild(button('Back', 'btn', this.click(() => {
+    row.appendChild(button('Back', 'btn primary', this.click(() => {
       if (data.from === 'pause') this.show('pause');
       else this.show(data.from || 'home');
     })));
@@ -591,25 +682,22 @@ export class Screens {
     const controls = el('div');
     controls.style.marginTop = '22px';
     controls.appendChild(el('h2', 'screen-title', 'Controls'));
-    const grid = el('div', 'controls-grid');
-    const pairs = [
-      ['Move north', 'W / Up'], ['Move east', 'D / Right'],
-      ['Move south', 'S / Down'], ['Move west', 'A / Left'],
-      ['Slash', 'Space / J'], ['Fire crossbow', 'F / K'],
-      ['Action', 'E / Enter'], ['Pause', 'Esc / P'], ['Bestiary', 'B'],
-    ];
-    for (const [a, b] of pairs) {
-      const d = el('div');
-      d.appendChild(document.createTextNode(a));
-      d.appendChild(el('b', null, b));
-      grid.appendChild(d);
-    }
-    controls.appendChild(grid);
+    controls.appendChild(this._controlsGrid());
+    const guideRow = el('div', 'btn-row');
+    guideRow.style.justifyContent = 'flex-start';
+    guideRow.appendChild(button(
+      profile.settings.showGuide === false ? 'Show the opening guide again' : 'See the opening guide',
+      'btn ghost small', this.click(() => {
+        profile.settings.showGuide = true;
+        profile.saveSettings();
+        this.show('guide', { from: data.from, standalone: true });
+      })));
+    controls.appendChild(guideRow);
     panel.appendChild(controls);
     panel.appendChild(this._visibilityLegend());
 
     const row = el('div', 'btn-row');
-    row.appendChild(button('Back', 'btn', this.click(() => {
+    row.appendChild(button('Back', 'btn primary', this.click(() => {
       if (data.from === 'pause') this.show('pause');
       else this.show(data.from || 'home');
     })));
@@ -618,6 +706,292 @@ export class Screens {
   }
 
   // ----------------------------------------------------------- pause
+  // ----------------------------------------------------------- guide
+  // Shown once, before the first depth. Illustrated rather than listed,
+  // because a wall of key names is the thing a new player skips. Which half
+  // it shows follows how they are actually going to play: keys, or glass.
+  screen_guide(data = {}) {
+    const touch = data.touch !== undefined ? data.touch : this.host.touchEnabled;
+    const panel = el('div', 'panel wide guide-panel');
+    panel.appendChild(el('h2', 'screen-title', 'Before you go down'));
+    panel.appendChild(el('p', 'screen-sub', touch
+      ? 'Everything happens on the glass. The pad walks the dungeon\u2019s compass.'
+      : 'WASD and the arrow keys both work, always, and they walk the '
+        + 'dungeon\u2019s compass \u2014 Up is north.'));
+
+    panel.appendChild(touch ? this._guideTouch() : this._guideKeys());
+
+    const grid = el('div', 'guide-actions');
+    for (const control of CONTROLS) {
+      if (control.group === 'move') continue;
+      const row = el('div', 'guide-action');
+      row.appendChild(el('span', 'guide-cap', touch && control.touch ? control.touch : control.keys));
+      const body = el('span', 'guide-action-body');
+      body.appendChild(el('b', null, control.label));
+      if (control.note) body.appendChild(el('small', null, control.note));
+      row.appendChild(body);
+      grid.appendChild(row);
+    }
+    panel.appendChild(grid);
+
+    if (touch) {
+      panel.appendChild(this._guidePadChoice(data));
+      panel.appendChild(el('p', 'hint',
+        'The diamond is turned to match the view: its four buttons sit where '
+        + 'the camera draws the four dungeon axes. The stick anchors wherever '
+        + 'your thumb lands. You can change this later in Settings.'));
+    } else {
+      panel.appendChild(el('p', 'hint',
+        'All of this can be changed later in Settings, along with what a '
+        + 'blocked direction does and which way the keys point.'));
+    }
+
+    const again = el('label', 'guide-again');
+    const box = el('input');
+    box.type = 'checkbox';
+    box.checked = profile.settings.showGuide === false;
+    box.addEventListener('change', () => {
+      profile.settings.showGuide = !box.checked;
+      profile.saveSettings();
+    });
+    again.appendChild(box);
+    again.appendChild(el('span', null, 'Do not show this again'));
+    panel.appendChild(again);
+    panel.appendChild(el('p', 'hint guide-reset-note', 'Settings can bring it back.'));
+
+    const row = el('div', 'btn-row');
+    row.appendChild(button(data.standalone ? 'Back' : 'Take up the torch', 'btn primary',
+      this.click(() => {
+        if (data.standalone) this.show('settings', { from: data.from });
+        else if (this.host.closeGuide) this.host.closeGuide();
+      })));
+    panel.appendChild(row);
+    return panel;
+  }
+
+  _guidePadChoice(data) {
+    const seg = el('div', 'setting guide-pad-choice');
+    seg.appendChild(el('label', 'setting-label', 'Movement pad'));
+    const group = el('div', 'seg');
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', 'Movement pad');
+    for (const [value, label] of [['diamond', 'Diamond'], ['stick', 'Floating stick']]) {
+      const b = el('button', profile.settings.touchPad === value ? 'on' : '', label);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(profile.settings.touchPad === value));
+      b.addEventListener('click', this.click(() => {
+        profile.settings.touchPad = value;
+        profile.saveSettings();
+        if (this.host.onTouchModeChange) this.host.onTouchModeChange();
+        this.show('guide', data);
+      }));
+      group.appendChild(b);
+    }
+    seg.appendChild(group);
+    return seg;
+  }
+
+  // Two key clusters drawn as key caps, side by side, with the compass
+  // bearing on each one. Seeing WASD and the arrows next to each other is the
+  // fastest way to say "both of these, all the time".
+  _guideKeys() {
+    const wrap = el('div', 'guide-keys');
+    const cluster = (title, caps) => {
+      const box = el('div', 'keycluster');
+      box.appendChild(el('div', 'keycluster-title', title));
+      const pad = el('div', 'keypad');
+      for (const cap of caps) {
+        const k = el('div', 'keycap ' + cap.at);
+        k.appendChild(el('b', null, cap.key));
+        k.appendChild(el('i', null, cap.dir));
+        pad.appendChild(k);
+      }
+      box.appendChild(pad);
+      return box;
+    };
+    wrap.appendChild(cluster('WASD', [
+      { key: 'W', dir: 'north', at: 'up' },
+      { key: 'A', dir: 'west', at: 'left' },
+      { key: 'S', dir: 'south', at: 'down' },
+      { key: 'D', dir: 'east', at: 'right' },
+    ]));
+    wrap.appendChild(cluster('Arrow keys', [
+      { key: '\u2191', dir: 'north', at: 'up' },
+      { key: '\u2190', dir: 'west', at: 'left' },
+      { key: '\u2193', dir: 'south', at: 'down' },
+      { key: '\u2192', dir: 'east', at: 'right' },
+    ]));
+    wrap.appendChild(el('p', 'hint guide-compass-note',
+      'Press two together to walk a diagonal. The view is isometric, so north '
+      + 'is drawn up and to the right \u2014 the keys follow the corridors, not '
+      + 'the screen.'));
+    return wrap;
+  }
+
+  // The glass, laid out as it actually is: movement under the left thumb,
+  // the four action buttons under the right.
+  _guideTouch() {
+    const wrap = el('div', 'guide-touch');
+    const stick = profile.settings.touchPad === 'stick';
+    const left = el('div', 'guide-glass-half');
+    left.appendChild(el('div', 'keycluster-title', stick ? 'Floating stick' : 'Diamond pad'));
+    const pad = el('div', 'guide-pad' + (stick ? ' stick' : ''));
+    if (stick) {
+      pad.appendChild(el('i', 'guide-stick-base'));
+      pad.appendChild(el('i', 'guide-stick-nub'));
+      pad.appendChild(el('span', 'guide-pad-note', 'Drag anywhere on the left'));
+    } else {
+      for (const [cls, label] of [['n', 'N'], ['e', 'E'], ['s', 'S'], ['w', 'W']]) {
+        pad.appendChild(el('i', 'guide-dbtn ' + cls, label));
+      }
+    }
+    left.appendChild(pad);
+    wrap.appendChild(left);
+
+    const right = el('div', 'guide-glass-half');
+    right.appendChild(el('div', 'keycluster-title', 'Action buttons'));
+    const btns = el('div', 'guide-buttons');
+    for (const [cls, label] of [['torch', 'TORCH'], ['action', 'ACT'], ['fire', 'FIRE'], ['slash', 'SLASH']]) {
+      btns.appendChild(el('i', 'guide-tbtn ' + cls, label));
+    }
+    right.appendChild(btns);
+    wrap.appendChild(right);
+    return wrap;
+  }
+
+  // ------------------------------------------------------------- map
+  // The whole chart, zoomable and pannable, with a legend of everything found
+  // on this depth. Drawn on demand rather than every frame: the game is
+  // stopped while it is open, so nothing on it moves unless the player does
+  // something to it.
+  screen_map(data = {}) {
+    const world = data.world;
+    const minimap = data.minimap;
+    const panel = el('div', 'panel wide map-panel');
+    panel.appendChild(el('h2', 'screen-title', 'The chart'));
+    panel.appendChild(el('p', 'screen-sub',
+      'Everything you have walked, and everything you have laid eyes on. '
+      + 'Drag to move it, scroll or pinch to close in.'));
+
+    const stage = el('div', 'map-stage');
+    const canvas = el('canvas', 'map-canvas');
+    stage.appendChild(canvas);
+    panel.appendChild(stage);
+
+    const view = { zoom: 1, panX: 0, panY: 0 };
+    const ctx = canvas.getContext('2d');
+    const redraw = () => {
+      if (!world || !minimap) return;
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const w = stage.clientWidth || 480;
+      const h = stage.clientHeight || 300;
+      if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+      }
+      canvas.style.width = w + 'px';
+      canvas.style.height = h + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = 'rgba(8,10,15,0.9)';
+      ctx.fillRect(0, 0, w, h);
+      minimap.drawFull(ctx, world, { x: 0, y: 0, w, h }, view);
+    };
+
+    // Zoom about the middle, which is where the eye already is.
+    const setZoom = (next) => {
+      const clamped = Math.max(1, Math.min(6, next));
+      if (clamped === view.zoom) return;
+      const ratio = clamped / view.zoom;
+      view.panX *= ratio;
+      view.panY *= ratio;
+      view.zoom = clamped;
+      redraw();
+    };
+    stage.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      setZoom(view.zoom * (e.deltaY < 0 ? 1.18 : 1 / 1.18));
+    }, { passive: false });
+
+    // One pointer drags; two pinch.
+    const pointers = new Map();
+    let pinchFrom = 0;
+    stage.addEventListener('pointerdown', (e) => {
+      stage.setPointerCapture(e.pointerId);
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.size === 2) pinchFrom = pinchSpan(pointers);
+    });
+    const release = (e) => {
+      pointers.delete(e.pointerId);
+      pinchFrom = 0;
+    };
+    stage.addEventListener('pointerup', release);
+    stage.addEventListener('pointercancel', release);
+    stage.addEventListener('pointermove', (e) => {
+      const prev = pointers.get(e.pointerId);
+      if (!prev) return;
+      if (pointers.size === 1) {
+        view.panX += e.clientX - prev.x;
+        view.panY += e.clientY - prev.y;
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        redraw();
+        return;
+      }
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const span = pinchSpan(pointers);
+      if (pinchFrom > 8 && span > 8) {
+        setZoom(view.zoom * (span / pinchFrom));
+        pinchFrom = span;
+      }
+    });
+
+    const zoomRow = el('div', 'map-zoom');
+    zoomRow.appendChild(button('\u2212', 'btn ghost small', this.click(() => setZoom(view.zoom / 1.4))));
+    zoomRow.appendChild(button('Fit', 'btn ghost small', this.click(() => {
+      view.zoom = 1; view.panX = 0; view.panY = 0; redraw();
+    })));
+    zoomRow.appendChild(button('+', 'btn ghost small', this.click(() => setZoom(view.zoom * 1.4))));
+    panel.appendChild(zoomRow);
+
+    panel.appendChild(this._mapLegend(world, minimap));
+
+    const row = el('div', 'btn-row');
+    row.appendChild(button('Back', 'btn primary', this.click(() => {
+      if (this.host.closeMap) this.host.closeMap();
+    })));
+    panel.appendChild(row);
+
+    // The stage has no size until it is in the document.
+    setTimeout(redraw, 0);
+    this._onResize = redraw;
+    return panel;
+  }
+
+  // Only what has been found. A legend that lists what you have not
+  // discovered yet is a spoiler with a key beside it.
+  _mapLegend(world, minimap) {
+    const wrap = el('div', 'map-legend');
+    wrap.appendChild(el('div', 'legend-title', 'What you have found'));
+    const rows = (world && minimap) ? minimap.legend(world) : [];
+    if (!rows.length) {
+      wrap.appendChild(el('p', 'hint', 'Nothing yet. The chart fills in as you walk.'));
+      return wrap;
+    }
+    const list = el('div', 'map-legend-grid');
+    for (const row of rows) {
+      const item = el('div', 'map-legend-item');
+      const swatch = el('canvas', 'map-swatch');
+      swatch.width = 18; swatch.height = 18;
+      minimap.drawSwatch(swatch.getContext('2d'), 9, 9, row.colour, row.shape, 5);
+      item.appendChild(swatch);
+      item.appendChild(el('span', 'map-legend-name', row.name));
+      if (row.count > 1) item.appendChild(el('i', 'map-legend-count', '\u00d7' + row.count));
+      list.appendChild(item);
+    }
+    wrap.appendChild(list);
+    return wrap;
+  }
+
   // ---------------------------------------------------------- altar
   // Three offers at most, ordered smallest first so the eye reads up to the
   // expensive one rather than being hit with it. Walking away is a button of
@@ -667,13 +1041,14 @@ export class Screens {
     panel.appendChild(el('p', 'screen-sub',
       run ? `Depth ${depthLabel(run.depth)}  \u2014  ${run.build}` : ''));
 
+    if (run) panel.appendChild(this._seedChip(run));
     if (run) panel.appendChild(this._relicList(run));
 
     const menu = el('div', 'menu');
     menu.appendChild(button('Resume', 'btn primary', this.click(() => this.host.resume())));
     menu.appendChild(button('Bestiary', 'btn', this.click(() => this.show('bestiary', { from: 'pause' }))));
     menu.appendChild(button('Settings', 'btn', this.click(() => this.show('settings', { from: 'pause' }))));
-    menu.appendChild(button('Abandon Run', 'btn ghost', this.click(() => this.show('confirmQuit'))));
+    menu.appendChild(button('Abandon the descent', 'btn ghost', this.click(() => this.show('confirmQuit'))));
     panel.appendChild(menu);
     panel.appendChild(this._buildStamp());
     return panel;
@@ -685,7 +1060,7 @@ export class Screens {
     panel.appendChild(el('p', 'screen-sub',
       'Your score so far will still be offered to the Hall of Fame. The run itself ends here.'));
     const row = el('div', 'btn-row');
-    row.appendChild(button('Keep Going', 'btn primary', this.click(() => this.show('pause'))));
+    row.appendChild(button('Keep going', 'btn primary', this.click(() => this.show('pause'))));
     row.appendChild(button('Abandon', 'btn ghost', this.click(() => this.host.quit())));
     panel.appendChild(row);
     return panel;
@@ -743,7 +1118,7 @@ export class Screens {
     panel.appendChild(running);
 
     const row = el('div', 'btn-row');
-    row.appendChild(button('Claim a Relic', 'btn primary', this.click(() => this.host.afterSummary())));
+    row.appendChild(button('Claim a relic', 'btn primary', this.click(() => this.host.afterSummary())));
     panel.appendChild(row);
     return panel;
   }
@@ -752,7 +1127,7 @@ export class Screens {
   screen_relics(data) {
     const { offers, run, guaranteed } = data;
     const panel = el('div', 'panel wide');
-    panel.appendChild(el('h2', 'screen-title', guaranteed ? 'Spoils of the Great Foe' : 'Choose a Relic'));
+    panel.appendChild(el('h2', 'screen-title', guaranteed ? 'Spoils of the great foe' : 'Choose a relic'));
     panel.appendChild(el('p', 'screen-sub',
       'One only. What you take shapes the rest of the descent.'));
 
@@ -859,6 +1234,7 @@ export class Screens {
     add('mode', run.difficulty.name);
     if (run.retries) add('stairs retaken', String(run.retries));
     panel.appendChild(stats);
+    panel.appendChild(this._seedChip(run));
     panel.appendChild(this._relicList(run));
 
     if (rank) {
@@ -894,7 +1270,7 @@ export class Screens {
       entry.appendChild(submit);
       panel.appendChild(entry);
       const row = el('div', 'btn-row');
-      row.appendChild(button('Descend Again', 'btn', this.click(() => this.host.start())));
+      row.appendChild(button('Descend again', 'btn', this.click(() => this.host.start())));
       row.appendChild(button('Skip the hall', 'btn ghost', this.click(() => this.show('home'))));
       panel.appendChild(row);
     } else if (!ranked) {
@@ -905,8 +1281,8 @@ export class Screens {
         + 'Torchbound or Ashenvow when you want a name on the stone.'));
       panel.appendChild(note);
       const row = el('div', 'btn-row');
-      row.appendChild(button('Descend Again', 'btn primary', this.click(() => this.host.start())));
-      row.appendChild(button('Change Mode', 'btn', this.click(() => this.show('difficulty'))));
+      row.appendChild(button('Descend again', 'btn primary', this.click(() => this.host.start())));
+      row.appendChild(button('Change mode', 'btn', this.click(() => this.show('difficulty'))));
       row.appendChild(button('Home', 'btn ghost', this.click(() => this.show('home'))));
       panel.appendChild(row);
     } else {
@@ -917,7 +1293,7 @@ export class Screens {
         `You were ${formatScore(miss.gap)} points from the Hall of Fame.`));
       panel.appendChild(near);
       const row = el('div', 'btn-row');
-      row.appendChild(button('Descend Again', 'btn primary', this.click(() => this.host.start())));
+      row.appendChild(button('Descend again', 'btn primary', this.click(() => this.host.start())));
       row.appendChild(button('Hall of Fame', 'btn', this.click(() => this.show('hall'))));
       row.appendChild(button('Home', 'btn ghost', this.click(() => this.show('home'))));
       panel.appendChild(row);

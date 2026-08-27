@@ -50,9 +50,14 @@ request that the version in the stamp still matches `version.json`.
 | Slash | `Space` / `J` | SLASH |
 | Fire crossbow | `F` / `K` | FIRE (appears once you own one) |
 | Action (doors, gates, stairs, chests, shrines, fires, captives, altars) | `E` / `Enter` | ACT |
-| Douse or relight your torch | `T` / `Q` | TORCH |
-| Pause | `Esc` / `P` | pause button |
+| Douse or relight your torch | `T` | TORCH |
+| Open the map | `M` | tap the minimap |
 | Bestiary | `B` | bestiary button |
+| Pause | `Esc` / `P` | pause button |
+
+This table is generated from `CONTROLS` in `src/core/input.js`, which is also
+what the home screen, the settings panel and the opening guide render from --
+three hand-written copies had drifted, and none of them mentioned the torch.
 
 Stairs never trigger by walking onto them -- they always require an explicit
 Action press, so you cannot fall into the next depth by accident.
@@ -117,6 +122,24 @@ Two settings cover the rest, under Settings:
 * **Touch pad** -- *Diamond* (default) or *Floating stick*.
 
 ---
+
+## The map, the guide and seeds
+
+`M` (or a tap on the corner chart) opens the full map: the whole discovered
+level, drag to pan, scroll or pinch to zoom, with a legend of everything found
+on this depth and how many of each. It is the same chart the corner widget
+draws, at a different size -- there is no second map.
+
+The first depth of a descent opens with an illustrated guide: WASD and the
+arrow keys drawn as key caps with their compass bearings, or the touch pad and
+its four buttons with a diamond/stick choice on the spot. It has a "do not
+show this again" box, and Settings can bring it back.
+
+Every descent has a **seed**, shown on the difficulty screen before you start
+and on the pause and run-end screens with a Copy button. Typing or pasting one
+in gives that labyrinth: the same seed and the same mode generate the same
+level. Later depths also read what the player is carrying, so two descents
+match all the way down only if they make the same choices.
 
 ## Difficulty
 
