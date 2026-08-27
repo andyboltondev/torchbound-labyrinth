@@ -258,6 +258,71 @@ test('a blocked diagonal takes the nearest way round, unless told to stop', () =
     'strict mode deflected a blocked diagonal');
 });
 
+test('the character turns the moment you turn, not a tile later', () => {
+  const { world, level } = makeWorld(3, 'facing-1');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 6);
+  place(world, cx, cy);
+  world.player.mover.heading = null;
+
+  const turns = [
+    { name: 'east to north', from: { x: 1, y: 0 }, to: { x: 0, y: -1 } },
+    { name: 'east to west', from: { x: 1, y: 0 }, to: { x: -1, y: 0 } },   // a full about-face
+    { name: 'north to south-west', from: { x: 0, y: -1 }, to: { x: -0.7071, y: 0.7071 } },
+  ];
+
+  for (const turn of turns) {
+    place(world, cx, cy);
+    world.player.mover.heading = null;
+    // Settle into a run in the first direction.
+    step(world, 40, { moveX: turn.from.x, moveY: turn.from.y, slash: false, fire: false });
+    const startTile = { x: world.player.mover.tileX, y: world.player.mover.tileY };
+
+    // Now turn, and measure how far the feet travel before the body agrees.
+    let frames = 0;
+    const want = Math.atan2(turn.to.y, turn.to.x);
+    const facing = () => {
+      let d = Math.atan2(world.player.faceY, world.player.faceX) - want;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      return Math.abs(d);
+    };
+    while (frames < 120 && facing() > 0.2) {
+      world.update(1 / 60, { moveX: turn.to.x, moveY: turn.to.y, slash: false, fire: false });
+      frames++;
+    }
+    const tiles = Math.abs(world.player.mover.tileX - startTile.x)
+      + Math.abs(world.player.mover.tileY - startTile.y);
+    assert(facing() <= 0.2,
+      `${turn.name}: never came round (${(facing() * 57.3).toFixed(0)} degrees off after ${frames} frames)`);
+    // The feet finish the step they are committed to; the body must not need
+    // a whole tile of travel to notice.
+    assert(tiles <= 1,
+      `${turn.name}: took ${tiles} tiles of walking to face the right way`);
+    assert(frames <= 18,
+      `${turn.name}: took ${frames} frames (${(frames / 60).toFixed(2)}s) to come round`);
+  }
+});
+
+test('a swing in progress still locks the facing where it was aimed', () => {
+  const { world, level } = makeWorld(3, 'facing-2');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 6);
+  place(world, cx, cy);
+  step(world, 30, { moveX: 1, moveY: 0, slash: false, fire: false });
+  const aimed = { x: world.player.faceX, y: world.player.faceY };
+
+  // Swing, and try to turn away mid-arc.
+  world.update(1 / 60, { moveX: 1, moveY: 0, slash: true, fire: false });
+  assert(world.player.attack, 'the swing did not start');
+  for (let i = 0; i < 10; i++) {
+    world.update(1 / 60, { moveX: -1, moveY: 0, slash: false, fire: false });
+    if (!world.player.attack) break;
+  }
+  const drift = Math.hypot(world.player.faceX - aimed.x, world.player.faceY - aimed.y);
+  assert(drift < 0.05, `the arc swept round with the feet (drifted ${drift.toFixed(2)})`);
+});
+
 test('a doorway one tile off the line pulls you through it', () => {
   const { world, level } = makeWorld(3, 'doorway-1');
   const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);

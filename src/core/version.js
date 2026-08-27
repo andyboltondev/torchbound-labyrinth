@@ -7,8 +7,8 @@
 export const VERSION = {
   number: '1.2.0',
   codename: 'Deeper Dark',
-  build: '20260827-044811',
-  commit: 'c7f0785',
+  build: '20260827-045337',
+  commit: 'a9e59e6',
   branch: 'build-stamp-and-doorway-assist',
   pr: null,
 };
