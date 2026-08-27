@@ -24,6 +24,24 @@ Any equivalent works too, for example `npx serve` or `python -m http.server`.
 
 ---
 
+## Build number
+
+The game has no build step, so its identity is a generated source file.
+`version.json` holds the semantic version; `tools/stamp_version.py` writes
+`src/core/version.js` with that plus a UTC timestamp, the commit it was cut
+from, the branch and -- in CI -- the pull request number.
+
+```bash
+python tools/stamp_version.py          # stamp from the working tree
+python tools/stamp_version.py --check  # non-zero if it disagrees with version.json
+```
+
+It shows at the foot of the home screen and the pause menu as
+`Build 1.2.0-20260827-044811` with the commit under it, so a screenshot names
+the code it came from. The Pages workflow re-stamps at deploy, so the live
+game reports when it actually shipped; a second workflow checks on every pull
+request that the version in the stamp still matches `version.json`.
+
 ## Controls
 
 | Action | Keyboard | Touch |
@@ -31,12 +49,20 @@ Any equivalent works too, for example `npx serve` or `python -m http.server`.
 | Move | `WASD` **and** arrow keys (both always active), 8-way | diamond pad |
 | Slash | `Space` / `J` | SLASH |
 | Fire crossbow | `F` / `K` | FIRE (appears once you own one) |
-| Action (doors, gates, stairs, chests, shrines) | `E` / `Enter` | ACT |
+| Action (doors, gates, stairs, chests, shrines, fires, captives, altars) | `E` / `Enter` | ACT |
+| Douse or relight your torch | `T` / `Q` | TORCH |
 | Pause | `Esc` / `P` | pause button |
 | Bestiary | `B` | bestiary button |
 
 Stairs never trigger by walking onto them -- they always require an explicit
 Action press, so you cannot fall into the next depth by accident.
+
+Pressing into the stone beside a one-tile opening steps you into the opening
+rather than doing nothing, so a doorway you are a tile short of does not have
+to be lined up with by hand. The tolerance is exactly one tile and the wall
+has to continue past the gap, so a lone pillar is still an obstacle to walk
+round; *Settings > Blocked direction > Stop* opts out of it along with the
+rest of the movement assist.
 
 On a touch screen the default movement pad is a **diamond**: four buttons on a
 frame rotated 45 degrees, so each one sits on the side of the pad the corridor
@@ -140,15 +166,17 @@ src/
   core/      rng, fixed-timestep loop, input, storage, events, math
   gen/       tiles, biomes/hazards, grid queries, the generator, the validator
   game/      run state, world runtime, player, enemy AI, bosses, relics,
-             difficulty modes, scoring, physics, persistence, enemy data
+             difficulty modes, scoring, physics, persistence, enemy data,
+             sound propagation, sacrifice altars, gore, the hall of fame
   render/    isometric projection, baked tile sprites, lighting/FOV,
-             particles, actors, props, ambience, post-processing,
-             the scene renderer, minimap
+             particles, actors, props, ambience, vermin, blood and bodies,
+             post-processing, the scene renderer, minimap
   audio/     synthesised sound effects, acoustic probe, procedural impulse
              responses, adaptive procedural music
   ui/        HUD, screens, touch controls, styles
 tests/       seeded generation suite, gameplay integration suite
-tools/       dev server (also accepts frame uploads), dev harness
+tools/       dev server (also accepts frame uploads), dev harness,
+             the build stamper
 ```
 
 `core/perf.js` is the one module every expensive part of the renderer answers
@@ -302,6 +330,82 @@ The mote field is deterministic -- positions come from a hash wrapped around
 the player -- so it allocates nothing and parallaxes correctly because it lives
 in grid space.
 
+### Hearing
+
+Sound is the half of the labyrinth that works with the torch out, so it is a
+real system rather than a mixer trick. `game/soundfield.js` runs Dijkstra
+outward from the listener over the walkable grid, costing a tile per tile and
+about a tile and a half per bend. Anything that makes a noise looks itself up
+in that field, which answers three questions at once: how loud it arrives, how
+many corners it turned, and which way it left the listener to get here.
+
+* Volume falls with the distance the sound actually travelled, not the
+  distance across, so stone genuinely blocks it.
+* Every bend takes more of the top off it and pushes more of it into the
+  reverb, so "round the corner" is audibly different from "over there".
+* It is mixed at the mouth of the corner it came round rather than through the
+  wall, because the field records the first step out of the listener.
+
+Hearing reaches about 1.9x what the torch lights, and further again once the
+torch is out. The field is built four and a half times a second and costs
+0.027ms; a second field is built on demand when something loud happens, so
+creatures can decide whether they heard it.
+
+Every archetype has a voice with its own timbre, pitch and loudness -- a groan
+for the barrow-dead, a snarl for the hound, wood creaking for the root horror
+-- generated from one parameterised synth with three variants each. They only
+speak when the player cannot already see them.
+
+A crossbow bolt clattering off stone is heard by anything unaware within about
+twelve tiles of open path, and it walks over to look. That is what makes the
+field of view below into a mechanic rather than a detail.
+
+### What can see you
+
+Creatures see a wedge, not a circle. Each archetype has its own field of view
+-- a barrow hound is nearly all-round because it hunts by nose, a bone slinger
+only sees down its own arm -- with a couple of tiles of hearing behind it.
+Once something is already chasing you the wedge stops mattering, so this
+changes stalking and not fighting. The minimap draws each visible creature's
+wedge cast against the walls, so it stops at stone.
+
+### Fire
+
+Four sizes: wall sconces, braziers, firepits and campfires, the larger three
+placed in the middle of any room big enough to swallow a torch. All of them
+cast real light through the same visibility pass the player's torch uses.
+Roughly a third have gone out, and more of them the deeper you go; a cold one
+can be lit with the Action button if you are still carrying a flame, and it
+stays lit.
+
+Every flame breathes on three sines at unrelated rates offset by its own seed,
+so a row of braziers never pulses together.
+
+The player's own torch can be put out. Sight collapses from seven and a half
+tiles to under three, hearing sharpens by a third, vermin stop running from
+you, and most of what hunts you loses the thing it was tracking -- though the
+creatures that prefer the dark get *better* at finding you. Relighting is
+free: the cost of the dark is the dark.
+
+### What a fight leaves behind
+
+Blood, bodies and boots, in `game/gore.js`. Every creature has its own colour
+-- sap for the root horror, meltwater for the frost revenant, green for
+whatever the mire lurker has instead, scorch marks where an ember fiend falls
+-- and it stays on the floor for the rest of the depth, as does the body.
+Walking through a fresh pool carries it five tiles, two prints a tile, fading
+as it wears off. All of it is a fixed ring buffer, so a long fight overwrites
+its own oldest splashes rather than growing.
+
+### Altars
+
+At most one a level and never on depth one. Three offers, each pairing a
+reward with a sacrifice of the same size, so the decision is which currency
+you can spare and never which offer is the good deal. Nothing is offered that
+cannot be paid or would not be wanted, and walking away is a button the same
+size as the rest. See `game/altars.js`; the world applies an offer, the module
+decides what may be asked.
+
 ### Performance
 
 30fps is the floor and 60fps is the target. A quality controller measures the
@@ -403,9 +507,47 @@ horn open out and lengthens their tails. Each biome has a written four-note
 motif rather than a die rolled every fourth beat, and a bass layer sits under
 the chord roots.
 
+It starts on the first gesture of the session and does not stop again. Every
+transition in the game is a crossfade of the same layers plus a different
+pattern generator, across five scenes:
+
+| Scene | Character | Shape |
+| --- | --- | --- |
+| Menu | Melancholy | Slow, minor, pad and drone, one distant horn line, no drum |
+| Hall of Fame | Sombre | Fuller, with a rising figure and a low swell under it |
+| The labyrinth | Atmospheric, adaptive | The layered score above, plus a rocky layer that fades in above 40% intensity |
+| Boss hall | Energetic action | The riff machinery with everything open, drum on every beat |
+| Relic table | Relaxed and upbeat | Swung sixteenths, a bouncing bass, a bright tune, snare on two and four |
+
+The rocky layer is two detuned saws through a soft clipper. It is deliberately
+not a style choice: while exploring it only arrives with the trouble, so the
+guitar is something that happens to you.
+
+Walking into a room nobody has been into yet bends the drone up a whole tone,
+opens its filter and puts an unresolved suspended fourth over the pad for two
+seconds. Once per room.
+
 Room reverb can be turned off in Settings for a dry mix.
 
 ---
+
+## The Hall of Fame
+
+Fifty names, kept locally, as a flat CSV table -- the format a person can
+open, read, sort and paste somewhere else with no tooling. Each row carries
+the name, score, depth, great foes, kills, secrets, mode, the relic path the
+run took, the date, the seed and the build it was played on.
+
+Writing is safe against a second tab: every write re-reads the stored table
+and merges into it rather than overwriting, under an advisory timestamped lock
+so a tab that dies mid-write cannot wedge the hall shut. Export and Import sit
+on the hall screen; import merges and fingerprints each run, so reading your
+own export back adds nothing the second time.
+
+There is no global board. GitHub Pages serves static files, so a player's
+browser has nothing to write to and a file kept out of the repository cannot
+be read by the deployed game either; the export is the honest version of
+sharing a score until there is somewhere to put it.
 
 ## Tests
 
@@ -432,8 +574,20 @@ mode offering a retry can also claim a place on the board.
 
 It also pins the control mapping: each direction key is measured against the
 compass direction it is supposed to walk, with the drift-free guarantee
-checked against a deliberately walled-off direction, and the screen-relative
-frame checked separately.
+checked against a deliberately walled-off direction, the screen-relative frame
+checked separately, and the doorway assist checked both for finding an opening
+one tile off the line and for refusing to shunt the player round a pillar.
+
+It also pins the newer systems: that sound will not cross a wall and that a
+dog-leg costs more than a straight run of the same length and says so; that a
+noise pulls an unaware creature off its post and that it gives up again; that
+dousing the torch costs sight and buys hearing; that a cold fire needs a lit
+torch; that blood is left where things bleed and carried a few tiles on the
+boots; that a map scrap marks one real thing without lighting the road to it;
+that killing a captive who did not ask for it costs and that mercy does not;
+that an altar never asks for something the player cannot pay, across a sweep
+of health and score states; and that the hall of fame round-trips through CSV
+without losing a name with a comma in it.
 
 **Balance curve** -- plays whole descents and reports clear rate, health lost
 and time taken per depth. Not pass/fail: it is there to be looked at when
