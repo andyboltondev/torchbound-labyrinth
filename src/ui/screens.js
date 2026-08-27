@@ -10,7 +10,8 @@ import { ENEMY_LIST, BOSSES, ENEMIES } from '../game/enemyData.js';
 import { RELIC_BY_ID } from '../game/relics.js';
 import { formatScore, depthLabel } from '../core/util.js';
 import { drawEnemy, drawBoss } from '../render/actors.js';
-import { BUILD_STRING, BUILD_DETAIL } from '../core/version.js';
+import { BUILD_STRING, BUILD_DETAIL, VERSION } from '../core/version.js';
+import { RELEASES, REPO } from '../game/releases.js';
 
 // What each size of bargain is called. The player never sees the word "tier".
 const TIER_NAME = { 1: 'A small thing', 2: 'A real price', 3: 'Everything it can ask' };
@@ -32,6 +33,25 @@ const selectSeed = (node) => {
   const sel = window.getSelection();
   sel.removeAllRanges();
   sel.addRange(range);
+};
+
+// A short, honest description of what the game is running in. Read off the
+// user agent, which is a blunt instrument, so it says what it can recognise
+// and shrugs rather than guessing. Nothing here identifies a person.
+const describeBrowser = () => {
+  const ua = navigator.userAgent || '';
+  const browser = /Edg\//.test(ua) ? 'Edge'
+    : /OPR\//.test(ua) ? 'Opera'
+      : /Firefox\//.test(ua) ? 'Firefox'
+        : /Chrome\//.test(ua) ? 'Chrome'
+          : /Safari\//.test(ua) ? 'Safari' : 'an unknown browser';
+  const os = /Windows/.test(ua) ? 'Windows'
+    : /Android/.test(ua) ? 'Android'
+      : /iPhone|iPad|iPod/.test(ua) ? 'iOS'
+        : /Mac OS X/.test(ua) ? 'macOS'
+          : /Linux/.test(ua) ? 'Linux' : 'an unknown system';
+  const screen = window.innerWidth + 'x' + window.innerHeight;
+  return browser + ' on ' + os + ', ' + screen;
 };
 
 const pinchSpan = (pointers) => {
@@ -115,12 +135,21 @@ export class Screens {
   // The build stamp, shown on the home screen and in the pause menu. The
   // detail line names the commit (and pull request, when the build came from
   // one) so a report of "it did this on build X" can be traced to the code.
-  _buildStamp() {
-    const p = el('p', 'build-stamp');
-    p.appendChild(el('b', null, BUILD_STRING));
-    if (BUILD_DETAIL) p.appendChild(el('small', null, BUILD_DETAIL));
-    p.title = BUILD_STRING + '  ·  ' + BUILD_DETAIL;
-    return p;
+  _buildStamp(from) {
+    const wrap = el('div', 'build-stamp');
+    const open = el('button', 'build-stamp-btn');
+    open.type = 'button';
+    open.appendChild(el('b', null, BUILD_STRING));
+    if (BUILD_DETAIL) open.appendChild(el('small', null, BUILD_DETAIL));
+    open.title = 'What changed in this version';
+    open.addEventListener('click', this.click(() => this.show('releases', { from })));
+    wrap.appendChild(open);
+    const links = el('div', 'build-stamp-links');
+    links.appendChild(button('What changed', 'btn ghost small',
+      this.click(() => this.show('releases', { from }))));
+    links.appendChild(this._bugReportButton(from === 'pause' ? this.host.run : null));
+    wrap.appendChild(links);
+    return wrap;
   }
 
   // The one rendering of the controls, built from the binding table in
@@ -173,6 +202,31 @@ export class Screens {
     }));
     wrap.appendChild(copy);
     return wrap;
+  }
+
+  // Opens a prefilled bug report on the tracker. Everything it fills in is
+  // game state -- the build, the seed, the depth, the mode, and a coarse
+  // browser string -- so the player never has to go and find any of it, and
+  // nothing personal travels with it. It opens the form rather than filing
+  // anything: the player reads it and presses the button themselves.
+  _bugReportButton(run, label = 'Report a bug') {
+    return button(label, 'btn ghost small', this.click(() => {
+      const params = new URLSearchParams({
+        template: 'bug_report.yml',
+        labels: 'bug',
+        build: BUILD_STRING + (BUILD_DETAIL ? '  (' + BUILD_DETAIL + ')' : ''),
+        device: describeBrowser(),
+      });
+      if (run) {
+        if (run.seed) params.set('seed', run.seed);
+        params.set('where', 'Depth ' + run.depth
+          + (run.difficulty ? ', ' + run.difficulty.name : ''));
+      } else {
+        params.set('where', 'In the menus');
+      }
+      const url = 'https://github.com/' + REPO + '/issues/new?' + params.toString();
+      window.open(url, '_blank', 'noopener');
+    }));
   }
 
   click(fn) {
@@ -228,7 +282,7 @@ export class Screens {
       + 'controls appear on the glass instead.'));
     controls.appendChild(this._controlsGrid({ notes: false }));
     panel.appendChild(controls);
-    panel.appendChild(this._buildStamp());
+    panel.appendChild(this._buildStamp('home'));
     return panel;
   }
 
@@ -692,6 +746,10 @@ export class Screens {
         profile.saveSettings();
         this.show('guide', { from: data.from, standalone: true });
       })));
+    guideRow.appendChild(button('What changed', 'btn ghost small',
+      this.click(() => this.show('releases', { from: 'settings', settingsFrom: data.from }))));
+    guideRow.appendChild(this._bugReportButton(
+      data.from === 'pause' ? this.host.run : null));
     controls.appendChild(guideRow);
     panel.appendChild(controls);
     panel.appendChild(this._visibilityLegend());
@@ -706,6 +764,109 @@ export class Screens {
   }
 
   // ----------------------------------------------------------- pause
+  // -------------------------------------------------- release notes
+  // Every version, newest first, chosen from a dropdown or stepped through
+  // with the arrows either side of it. What changed to *play*, not what moved
+  // in the source -- so it is written by hand rather than generated.
+  screen_releases(data = {}) {
+    const chosen = data.version || VERSION.number;
+    const index = Math.max(0, RELEASES.findIndex((r) => r.version === chosen));
+    const release = RELEASES[index] || RELEASES[0];
+    const panel = el('div', 'panel wide releases-panel');
+    panel.appendChild(el('h2', 'screen-title', 'What changed'));
+    panel.appendChild(el('p', 'screen-sub',
+      'Every version of the labyrinth so far, newest first.'));
+
+    if (!release) {
+      panel.appendChild(el('p', 'hint', 'No releases recorded yet.'));
+      panel.appendChild(this._backRow(data));
+      return panel;
+    }
+
+    // Picker: a select, because the list will keep growing, with a step
+    // either side so it can also be walked without opening anything.
+    const picker = el('div', 'release-picker');
+    const go = (to) => this.show('releases', { ...data, version: to });
+    const prev = button('\u2039', 'btn ghost small',
+      this.click(() => go(RELEASES[index + 1].version)));
+    prev.disabled = index >= RELEASES.length - 1;
+    prev.setAttribute('aria-label', 'Older release');
+    picker.appendChild(prev);
+
+    const select = el('select', 'release-select');
+    select.setAttribute('aria-label', 'Choose a release');
+    for (const r of RELEASES) {
+      const opt = el('option', null,
+        r.version + (r.codename ? '  \u2014  ' + r.codename : '')
+        + (r.version === VERSION.number ? '   (you are playing this)' : ''));
+      opt.value = r.version;
+      if (r.version === release.version) opt.selected = true;
+      select.appendChild(opt);
+    }
+    select.addEventListener('change', () => go(select.value));
+    picker.appendChild(select);
+
+    const next = button('\u203a', 'btn ghost small',
+      this.click(() => go(RELEASES[index - 1].version)));
+    next.disabled = index <= 0;
+    next.setAttribute('aria-label', 'Newer release');
+    picker.appendChild(next);
+    panel.appendChild(picker);
+
+    panel.appendChild(this._releaseBody(release));
+    panel.appendChild(this._backRow(data));
+    return panel;
+  }
+
+  _releaseBody(release) {
+    const wrap = el('div', 'release');
+    const head = el('div', 'release-head');
+    // The version being played has no stamp of its own in the table, because
+    // it does not have one until it is built. Borrow the real one.
+    const running = release.version === VERSION.number;
+    const build = release.build || (running ? VERSION.build : null);
+    const stamp = el('div', 'release-stamp');
+    stamp.appendChild(el('b', null, build
+      ? 'Build ' + release.version + '-' + build
+      : 'Version ' + release.version));
+    const when = release.date || (build
+      ? build.slice(0, 4) + '-' + build.slice(4, 6) + '-' + build.slice(6, 8) : '');
+    const meta = el('small');
+    meta.textContent = [when, release.pr ? 'pull request #' + release.pr : '']
+      .filter(Boolean).join('  ·  ');
+    stamp.appendChild(meta);
+    head.appendChild(stamp);
+    if (running) head.appendChild(el('span', 'release-current', 'You are playing this'));
+    wrap.appendChild(head);
+
+    if (release.reconstructed) {
+      // Say so rather than pretending. These predate the build stamp.
+      wrap.appendChild(el('p', 'hint release-note',
+        'This one shipped before the game started stamping its own builds. '
+        + 'The number and the time are reconstructed from the commit that '
+        + 'released it, so no copy of this version ever printed them.'));
+    }
+    if (release.headline) wrap.appendChild(el('p', 'release-headline', release.headline));
+
+    for (const section of release.sections || []) {
+      wrap.appendChild(el('h3', 'release-section', section.title));
+      const list = el('ul', 'release-list');
+      for (const note of section.notes) list.appendChild(el('li', null, note));
+      wrap.appendChild(list);
+    }
+    return wrap;
+  }
+
+  _backRow(data) {
+    const row = el('div', 'btn-row');
+    row.appendChild(button('Back', 'btn primary', this.click(() => {
+      if (data.from === 'pause') this.show('pause');
+      else if (data.from === 'settings') this.show('settings', { from: data.settingsFrom || 'home' });
+      else this.show(data.from || 'home');
+    })));
+    return row;
+  }
+
   // ----------------------------------------------------------- guide
   // Shown once, before the first depth. Illustrated rather than listed,
   // because a wall of key names is the thing a new player skips. Which half
@@ -1050,7 +1211,7 @@ export class Screens {
     menu.appendChild(button('Settings', 'btn', this.click(() => this.show('settings', { from: 'pause' }))));
     menu.appendChild(button('Abandon the descent', 'btn ghost', this.click(() => this.show('confirmQuit'))));
     panel.appendChild(menu);
-    panel.appendChild(this._buildStamp());
+    panel.appendChild(this._buildStamp('pause'));
     return panel;
   }
 

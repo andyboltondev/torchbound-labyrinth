@@ -14,6 +14,8 @@ import { T } from '../src/gen/tiles.js';
 import { inputDirToGrid, screenDirToGrid, screenX, screenY } from '../src/render/iso.js';
 import { CONTROLS, DEFAULT_BINDINGS as BINDINGS } from '../src/core/input.js';
 import { makeSeed, normaliseSeed } from '../src/core/rng.js';
+import { RELEASES } from '../src/game/releases.js';
+import { VERSION } from '../src/core/version.js';
 import { bfsField, N4 } from '../src/gen/grid.js';
 import { RNG } from '../src/core/rng.js';
 import { SoundField } from '../src/game/soundfield.js';
@@ -991,6 +993,48 @@ test('a seed typed by hand gives the labyrinth it names', () => {
   for (let i = 0; i < 40; i++) {
     const seed = makeSeed();
     assert(normaliseSeed(seed) === seed, `generated seed "${seed}" is not its own normal form`);
+  }
+});
+
+// --- release notes ---------------------------------------------------------
+
+test('the version being played has release notes, and they are in order', () => {
+  // The one that matters: bumping version.json without writing down what
+  // changed fails here rather than shipping a screen with a hole in it.
+  const mine = RELEASES.find((r) => r.version === VERSION.number);
+  assert(mine, `nothing is written down for the version being played (${VERSION.number})`);
+
+  const parse = (v) => v.split('.').map(Number);
+  const seen = new Set();
+  for (let i = 0; i < RELEASES.length; i++) {
+    const r = RELEASES[i];
+    assert(/^\d+\.\d+\.\d+$/.test(r.version), `"${r.version}" is not a version number`);
+    assert(!seen.has(r.version), `${r.version} is listed twice`);
+    seen.add(r.version);
+    if (i === 0) continue;
+    const [a, b] = [parse(RELEASES[i - 1].version), parse(r.version)];
+    const newer = a[0] !== b[0] ? a[0] > b[0] : a[1] !== b[1] ? a[1] > b[1] : a[2] > b[2];
+    assert(newer, `${RELEASES[i - 1].version} is not newer than ${r.version}`);
+  }
+});
+
+test('every release says something, and says when it was', () => {
+  for (const r of RELEASES) {
+    assert(r.headline && r.headline.length > 12, `${r.version} has no headline`);
+    assert(r.sections && r.sections.length, `${r.version} lists no changes`);
+    for (const section of r.sections) {
+      assert(section.title, `${r.version} has a section with no title`);
+      assert(section.notes && section.notes.length, `${r.version}: "${section.title}" is empty`);
+      for (const note of section.notes) {
+        assert(note.length > 20, `${r.version}: "${note}" is too short to mean anything`);
+      }
+    }
+    // Everything except the version being played has to carry its own stamp;
+    // that one borrows the running build, because it has not been built yet.
+    if (r.version === VERSION.number) continue;
+    assert(/^\d{8}-\d{6}$/.test(r.build || ''), `${r.version} has no build stamp`);
+    assert(/^\d{4}-\d{2}-\d{2}$/.test(r.date || ''), `${r.version} has no date`);
+    assert(Number.isInteger(r.pr) && r.pr > 0, `${r.version} names no pull request`);
   }
 });
 

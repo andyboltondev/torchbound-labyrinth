@@ -817,13 +817,50 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
 
 /* The build stamp. Deliberately the quietest thing on the panel: it exists so
    a screenshot can be traced back to a commit, not to be read while playing. */
-.build-stamp {
-  margin: 18px 0 0; text-align: center; font-size: 10.5px; letter-spacing: .08em;
+.build-stamp { margin: 18px 0 0; text-align: center; }
+.build-stamp-btn {
+  display: block; width: 100%; padding: 2px 0; background: none; border: 0; cursor: pointer;
+  font-family: var(--ui); font-size: 10.5px; letter-spacing: .08em;
   color: var(--stone-dim); opacity: .62; font-variant-numeric: tabular-nums;
-  user-select: text; -webkit-user-select: text;
+  transition: opacity .12s, color .12s;
 }
-.build-stamp b { font-weight: 500; color: var(--stone); }
-.build-stamp small { display: block; margin-top: 3px; font-size: 9.5px; opacity: .8; }
+.build-stamp-btn:hover, .build-stamp-btn:focus-visible { opacity: 1; color: var(--gold-dim); outline: none; }
+.build-stamp-btn b { font-weight: 500; color: inherit; }
+.build-stamp-btn small { display: block; margin-top: 3px; font-size: 9.5px; opacity: .8; }
+.build-stamp-links { display: flex; gap: 8px; justify-content: center; margin-top: 8px; flex-wrap: wrap; }
+
+/* ------------------------------------------------------ release notes */
+.release-picker { display: flex; gap: 8px; align-items: center; margin: 2px 0 16px; }
+.release-select {
+  flex: 1 1 auto; min-width: 0; padding: 10px 12px; border-radius: 4px;
+  font-family: var(--ui); font-size: 13px; color: var(--parchment);
+  background: rgba(6,8,12,.85); border: 1px solid var(--panel-edge);
+}
+.release-select:focus { outline: none; border-color: var(--gold-dim); }
+.release-picker .btn { min-width: 42px; font-size: 16px; line-height: 1; }
+.release-picker .btn:disabled { opacity: .3; cursor: default; }
+.release-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 4px; }
+.release-stamp b {
+  font-family: var(--ui); font-size: 13px; letter-spacing: .06em; color: var(--gold);
+  font-weight: 500; font-variant-numeric: tabular-nums;
+}
+.release-stamp small { display: block; margin-top: 2px; font-size: 10.5px; color: var(--stone-dim); }
+.release-current {
+  font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 999px; color: var(--good);
+  border: 1px solid rgba(111,206,135,.4);
+}
+.release-headline {
+  font-family: var(--display); font-style: italic; font-size: 15px;
+  color: var(--stone); line-height: 1.6; margin: 10px 0 4px;
+}
+.release-note { margin: 8px 0 0; }
+.release-section {
+  font-family: var(--ui); font-size: 10px; letter-spacing: .18em; text-transform: uppercase;
+  color: var(--stone-dim); margin: 18px 0 6px; font-weight: 400;
+}
+.release-list { margin: 0; padding-left: 18px; }
+.release-list li { font-size: 12.5px; color: var(--stone); line-height: 1.65; margin-bottom: 6px; }
 .controls-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 22px; margin-top: 10px; }
 .control-row {
   font-size: 12.5px; color: var(--stone); display: flex; justify-content: space-between;

@@ -36,6 +36,21 @@ python tools/stamp_version.py          # stamp from the working tree
 python tools/stamp_version.py --check  # non-zero if it disagrees with version.json
 ```
 
+The stamp at the foot of the home screen and the pause menu is a button: it
+opens **What changed**, a screen with every version's notes, chosen from a
+dropdown or stepped through with the arrows. `src/game/releases.js` holds them,
+written by hand -- a changelog is for players, so it says what is different to
+play rather than what moved in the source. Everything before 1.3.0 predates
+the stamp; those numbers are reconstructed from the merge that shipped each
+one and the screen says so rather than pretending. A test fails if
+`version.json` is bumped without notes being written for it.
+
+Beside it is **Report a bug**, which opens a prefilled issue on the tracker
+with the build, seed, depth, mode and a coarse browser string already filled
+in, against the form in `.github/ISSUE_TEMPLATE/bug_report.yml`. It opens the
+form; the player reads it and files it themselves. Nothing that identifies a
+person travels with it.
+
 It shows at the foot of the home screen and the pause menu as
 `Build 1.2.0-20260827-044811` with the commit under it, so a screenshot names
 the code it came from. The Pages workflow re-stamps at deploy, so the live

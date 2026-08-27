@@ -1,0 +1,104 @@
+name: Report a bug
+description: Something in the labyrinth did not behave. No technical knowledge needed.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. Fill in what you can — a half-filled report
+        is much better than none, and the only field that is really required is
+        the first one.
+
+        If you opened this from the **Report a bug** button in the game, the
+        build, seed, depth and mode below are already filled in for you.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: In your own words. What did you see, and what did you expect instead?
+      placeholder: |
+        I walked into the big room on depth 4 and the torch went out on its own.
+        I expected it to stay lit until I pressed T.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: What were you doing just before?
+      description: >
+        Roughly what you were up to. Anything you can remember helps — even
+        "I was fighting two hounds and pressed slash a lot".
+      placeholder: |
+        1. Started a Torchbound run
+        2. Got to depth 4 and found the altar
+        3. Took the "all but a little" offer
+        4. The screen went black
+    validations:
+      required: false
+
+  - type: dropdown
+    id: repeatable
+    attributes:
+      label: Does it happen again if you try the same thing?
+      options:
+        - "I have not tried"
+        - "Yes, every time"
+        - "Sometimes"
+        - "No, it only happened once"
+    validations:
+      required: false
+
+  - type: input
+    id: build
+    attributes:
+      label: Build number
+      description: >
+        At the bottom of the home screen and the pause menu, like
+        `Build 1.3.0-20260827-063910`.
+      placeholder: "Build 1.3.0-20260827-063910"
+    validations:
+      required: false
+
+  - type: input
+    id: seed
+    attributes:
+      label: Seed
+      description: >
+        On the pause screen, with a Copy button beside it. With this, anyone can
+        walk into the same labyrinth you did.
+      placeholder: "fenrir-1234"
+    validations:
+      required: false
+
+  - type: input
+    id: where
+    attributes:
+      label: Where were you?
+      description: The depth and mode, or which menu you were on.
+      placeholder: "Depth 4, Torchbound"
+    validations:
+      required: false
+
+  - type: input
+    id: device
+    attributes:
+      label: Browser and device
+      description: >
+        Whatever you know — "Chrome on Windows", "Safari on an iPhone", or just
+        "my phone" is fine.
+      placeholder: "Chrome on Windows 11"
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: >
+        Screenshots or a short clip are enormously helpful. Drag them straight
+        into this box.
+    validations:
+      required: false
