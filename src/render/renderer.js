@@ -17,7 +17,8 @@ import { PostFX } from './postfx.js';
 import { TIERS } from '../core/perf.js';
 import { rgba, shade } from './palette.js';
 import { drawPlayer, drawEnemy, drawBoss, drawFlame, setShadowLight } from './actors.js';
-import { drawGate, drawKeyItem, drawProp, drawDecor, drawSconce } from './props.js';
+import { drawGate, drawKeyItem, drawProp, drawDecor, drawSconce, drawPushBlock, drawDecal }
+  from './props.js';
 import { clamp, damp } from '../core/util.js';
 
 const FADE_ALPHA = 0.38;
@@ -375,6 +376,18 @@ export class Renderer {
     const layer = world.playerLayer;
     const onLayer = (y) => world.layerAt(Math.floor(y)) === layer;
 
+    // Marks on the floor. First into the list at each tile, so they lie under
+    // everything standing on it -- and dropped entirely on the cheapest tier,
+    // where they are the first thing worth giving up: they are atmosphere, and
+    // a machine that is struggling needs the frame more than the atmosphere.
+    if (this.tier.ambience > 0.2) {
+      for (const decal of level.decals || []) {
+        if (!onLayer(decal.y)) continue;
+        const v = seenAt(Math.floor(decal.x), Math.floor(decal.y));
+        if (v.lit <= 0.02 && v.mem <= MEMORY_MIN) continue;
+        list.push({ d: decal.x + decal.y + 0.001, kind: 'decal', item: decal, lit: v.lit, mem: v.mem });
+      }
+    }
     for (const d of level.decor) {
       if (!onLayer(d.y)) continue;
       const s = seenAt(Math.floor(d.x), Math.floor(d.y));
@@ -389,6 +402,15 @@ export class Renderer {
       // it is standing on, which is what makes finding them worth doing.
       const own = s.lit === false ? 0 : 0.6;
       list.push({ d: s.x + s.y + 0.006, kind: 'sconce', item: s, lit: Math.max(v.lit, own), mem: v.mem });
+    }
+    // Pushable stones sort with the props rather than with the walls, because
+    // they move: a wall is baked into the tile behind it, and this is not.
+    for (const block of world.blocks) {
+      const at = world.blockPosition(block);
+      if (!onLayer(at.y)) continue;
+      const v = seenAt(Math.floor(at.x), Math.floor(at.y));
+      if (v.lit <= 0.02 && v.mem <= MEMORY_MIN) continue;
+      list.push({ d: at.x + at.y + 0.008, kind: 'block', item: block, at, lit: v.lit, mem: v.mem });
     }
     for (const prop of level.props) {
       if (prop.consumed || !onLayer(prop.y)) continue;
@@ -405,6 +427,9 @@ export class Renderer {
     }
     for (const e of world.enemies) {
       if (e.dead || !onLayer(e.y)) continue;
+      // Still under the floor. Nothing is drawn, not even a silhouette --
+      // the whole of the idea is that there is no tell until there is one.
+      if (e.entombed) continue;
       const gx = Math.floor(e.x), gy = Math.floor(e.y);
       const lit = vis.lightAt(gx, gy);
       const revealed = world.revealRadius > 0 && e.speedNow > 0.3 &&
@@ -431,6 +456,14 @@ export class Renderer {
       switch (entry.kind) {
         case 'wall': this.drawWall(world, entry, t); break;
         case 'gate': this.drawGateEntry(world, entry, t); break;
+        case 'decal':
+          // Fainter than anything else on the tile, and fainter again from
+          // memory: a scratch you are only remembering is not evidence, it is
+          // a suggestion that there was some.
+          ctx.globalAlpha = entry.lit > 0.02 ? 0.3 + entry.lit * 0.5 : 0.1 + entry.mem * 0.12;
+          drawDecal(ctx, entry.item, t);
+          ctx.globalAlpha = 1;
+          break;
         case 'decor':
           ctx.globalAlpha = entry.lit > 0.02 ? 0.35 + entry.lit * 0.65 : 0.14 + entry.mem * 0.16;
           drawDecor(ctx, entry.item, t);
@@ -439,6 +472,11 @@ export class Renderer {
         case 'sconce':
           ctx.globalAlpha = entry.lit > 0.02 ? Math.min(1, 0.4 + entry.lit * 0.6) : 0.18 + entry.mem * 0.2;
           drawSconce(ctx, entry.item, t);
+          ctx.globalAlpha = 1;
+          break;
+        case 'block':
+          ctx.globalAlpha = entry.lit > 0.02 ? 0.4 + entry.lit * 0.6 : 0.2 + entry.mem * 0.2;
+          drawPushBlock(ctx, entry.item, entry.at, t);
           ctx.globalAlpha = 1;
           break;
         case 'prop':
@@ -505,8 +543,16 @@ export class Renderer {
     const vy = p.y - (entry.y + 0.5);
     const m = Math.hypot(vx, vy) || 1;
     const strength = entry.lit * entry.lit * world.torch.flicker * (faded ? 0.35 : 1);
-    const left = Math.max(0, vy / m) * strength * 0.16;
-    const right = Math.max(0, vx / m) * strength * 0.16;
+    // The dot product is squared before it is used. Raw, it falls off as the
+    // cosine, which is nearly flat for the first forty degrees either side of
+    // square-on -- so most of a corner came out at almost the same brightness
+    // and the corner stopped reading as one. Squaring keeps the face that is
+    // turned towards the flame exactly where it was and darkens the one that
+    // is turning away, which is the whole of what makes a corner a corner.
+    const lx = Math.max(0, vy / m);
+    const rx = Math.max(0, vx / m);
+    const left = lx * lx * strength * 0.2;
+    const right = rx * rx * strength * 0.2;
     const top = strength * 0.06;
     if (left < 0.015 && right < 0.015 && top < 0.015) return;
     ctx.save();

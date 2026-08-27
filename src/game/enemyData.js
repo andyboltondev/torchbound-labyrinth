@@ -130,6 +130,26 @@ export const ENEMIES = {
     lore: 'The tomb tried to grow over a warrior. Neither of them won.',
     threat: 'Slow, enormously tough, and its reach is longer than it looks.',
   },
+  gravebound: {
+    id: 'gravebound', name: 'Gravebound', behaviour: BEHAVIOUR.AMBUSHER,
+    // Buried, and it does not know it is buried. Nothing about it is visible
+    // or audible until somebody walks close enough to be worth getting up for
+    // -- see `entombed` in enemies.js, and the trigger radius there.
+    entombed: true,
+    hp: 20, damage: 8, speed: 2.5, attackCooldown: 1.0, attackRange: 0.9,
+    // It does not see: it feels the floor. The detection range is short on
+    // purpose and the same whether the torch is lit or not, which makes
+    // dousing a torch no defence at all against the one thing underneath you.
+    detect: 2.4, torchSensitivity: 1, prefersDark: false,
+    fov: 360,
+    score: 90, minDepth: 3, radius: 0.32, height: 0.9,
+    material: 'bone',
+    blood: '#4a4238',   // grave dirt, mostly
+    voice: { timbre: 'clatter', pitch: 380, loudness: 0.9, every: 5 },
+    palette: { body: '#8a8172', trim: '#3a352c', eye: '#9fd0ff' },
+    lore: 'Buried standing, facing the passage, so it would be first up when the hall was needed again.',
+    threat: 'No warning at all until you are on top of it. Then it is out of the floor and swinging.',
+  },
   valkyr_wraith: {
     id: 'valkyr_wraith', name: 'Valkyr Wraith', behaviour: BEHAVIOUR.SKIRMISHER,
     hp: 52, damage: 15, speed: 3.4, attackCooldown: 1.05, attackRange: 1.2,
@@ -168,6 +188,20 @@ export const HEARING_REACH = 1.9;
 // What a creature sounds like when nothing in its definition says. Nothing
 // uses this today; it exists so a new archetype is quiet rather than silent.
 export const DEFAULT_VOICE = { timbre: 'groan', pitch: 140, loudness: 0.9, every: 7 };
+
+// How far a voice trails off past the edge of ordinary earshot. One knob
+// rather than eleven, so the creatures keep their loudness relative to each
+// other and this can be tuned, or taken back out, in one place. A groan is the
+// labyrinth telling you what is ahead before your torch does, and it was only
+// reaching about as far as the light -- so the warning and the thing it warned
+// about arrived together.
+//
+// Passed as the `tail` argument to SoundField.hear, which lengthens the quiet
+// end of the falloff without lifting the near field: a creature two tiles away
+// is exactly as loud as it always was. Occlusion behind a shut gate and the
+// smearing added by each corner are worked out from the distance the sound
+// actually travelled through open ground and are untouched by this.
+export const VOICE_REACH = 1.5;
 
 export const ELITE_MOD = {
   hp: 2.15, damage: 1.4, speed: 1.08, score: 2.6, radius: 1.18,

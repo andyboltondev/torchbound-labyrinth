@@ -27,8 +27,16 @@ function gateLookup(level) {
 
 // `openColours` is a Set of colour indices the player is assumed to hold.
 // `secretsSolid` models the honest case: cracked walls are not a route.
-function passableFactory(level, gateMap, openColours, secretsSolid = true, forceClosed = -1) {
+// `blocksSolid` models the same honesty about pushable stones: they are in the
+// way until somebody shoves them, so anything the depth *requires* has to be
+// reachable without shoving one. Set it false for the orphan sweep, where a
+// pocket behind a block is genuinely reachable and is not stranded floor.
+function passableFactory(level, gateMap, openColours, secretsSolid = true, forceClosed = -1,
+  blocksSolid = true) {
+  const blocked = new Set();
+  if (blocksSolid) for (const b of level.blocks || []) blocked.add(level.grid.idx(b.x, b.y));
   return (x, y, t) => {
+    if (blocked.size && blocked.has(level.grid.idx(x, y))) return false;
     if (t === T.FLOOR || t === T.STAIRS || t === T.ENTRANCE) return true;
     if (t === T.SECRET) return !secretsSolid;
     if (t === T.GATE) {
@@ -171,7 +179,7 @@ export function validateLevel(level) {
   // Floor the player can never stand on is a generation bug, so allow only
   // cells that open up once secrets are broken.
   const generous = floodWithLadders(level, [level.entrance],
-    passableFactory(level, gateMap, allColours, false));
+    passableFactory(level, gateMap, allColours, false, -1, false));
   let orphans = 0;
   for (let y = 0; y < grid.h; y++) {
     for (let x = 0; x < grid.w; x++) {
@@ -200,6 +208,53 @@ export function validateLevel(level) {
     }
   }
 
+  // --- 6c. a pushable block never stands between you and the way on --------
+  //
+  // Same discipline as a cracked wall: optional content is optional, and the
+  // way to be sure is to model it as never having been dealt with. If the
+  // depth is still completable with every block treated as solid stone, then
+  // no route through one is mandatory -- and the pocket each block guards is
+  // a reward rather than a lock.
+  const blocks = level.blocks || [];
+  if (blocks.length) {
+    const blockAt = new Set(blocks.map((b) => grid.idx(b.x, b.y)));
+    const pocketAt = new Set((level.blockPockets || []).map((p) => grid.idx(p.x, p.y)));
+
+    // Nothing the depth requires may live on a block or inside its pocket.
+    const named = [['the entrance', level.entrance], ['the exit', level.stairs]]
+      .concat(level.keys.map((k) => ['key ' + k.colourIndex, k]))
+      .concat(level.gates.map((g) => ['gate ' + g.id, g]));
+    for (const [what, at] of named) {
+      const i = grid.idx(Math.floor(at.x), Math.floor(at.y));
+      if (blockAt.has(i)) errors.push(what + ' is underneath a pushable block');
+      if (pocketAt.has(i)) errors.push(what + ' is inside a block pocket');
+    }
+
+    // ...and with every block left where it stands, the depth loses no ground
+    // at all beyond the blocks themselves and what they are guarding. Stated
+    // as containment rather than as "the stairs are still reachable", because
+    // that also covers key ordering, gate bottlenecks and vault ladders
+    // without having to reason about each of them separately.
+    const shovable = floodWithLadders(level, [level.entrance],
+      passableFactory(level, gateMap, allColours, true, -1, false));
+    const asFound = floodWithLadders(level, [level.entrance],
+      passableFactory(level, gateMap, allColours, true, -1, true));
+    let lost = 0;
+    for (let i = 0; i < shovable.length; i++) {
+      if (shovable[i] < 0 || asFound[i] >= 0) continue;
+      if (blockAt.has(i) || pocketAt.has(i)) continue;
+      lost++;
+    }
+    if (lost > 0) errors.push(`${lost} floor cells are cut off by a pushable block`);
+
+    for (const b of blocks) {
+      if (!standableAt(grid, b.x + 0.5, b.y + 0.5))
+        errors.push(`block ${b.id} is not standing on floor`);
+      if (!standableAt(grid, b.alcove.x + 0.5, b.alcove.y + 0.5))
+        errors.push(`block ${b.id} guards solid rock`);
+    }
+  }
+
   // --- 7. entities stand on real ground ------------------------------------
   const standable = (x, y) => standableAt(grid, x, y);
   for (const s of level.spawns) {
@@ -207,6 +262,8 @@ export function validateLevel(level) {
   }
   for (const p of level.props) {
     if (!standable(p.x, p.y)) errors.push(`prop ${p.type} is inside a wall`);
+    // The generous flood shoves blocks and breaks secrets, so a prop behind
+    // either is not stranded -- it is earned.
     if (!p.hidden && generous[grid.idx(Math.floor(p.x), Math.floor(p.y))] < 0)
       errors.push(`prop ${p.type} is stranded`);
   }

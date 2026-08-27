@@ -10,7 +10,9 @@ import { Particles, burstSparks, burstBlood, burstStone, ring, footDust } from '
 import { Player } from './player.js';
 import { Enemy } from './enemies.js';
 import { Boss } from './boss.js';
-import { ENEMIES, enemyPoolFor, DEFAULT_BLOOD, HEARING_REACH } from './enemyData.js';
+import { ENEMIES, enemyPoolFor, DEFAULT_BLOOD, HEARING_REACH, VOICE_REACH }
+  from './enemyData.js';
+import { tileOpen, GRID_DIRS } from './gridmove.js';
 import { SoundField } from './soundfield.js';
 import { buildOffers } from './altars.js';
 import { Gore } from './gore.js';
@@ -29,6 +31,47 @@ const DOUSED_RADIUS = 2.4;
 // How much better the ears work in the dark. Deliberately slight: this is
 // compensation for going blind, not a second way of seeing.
 const DOUSED_HEARING = 1.3;
+
+// A raving captive. Three numbers, because the scream does three things and
+// they are not the same distance.
+//   DRAW       -- how loudly it calls whatever could walk to it. A balance
+//                 number: unchanged, and not an audio decision.
+//   DRAW_CULL  -- how far off the player the game bothers simulating that
+//                 call at all, also unchanged, so no creature is woken by a
+//                 scream that would not have woken it before.
+//   REACH      -- how far the player hears it, which is a good deal further
+//                 than either. A screaming captive is meant to be a landmark
+//                 you hear from the far end of a depth and decide what to do
+//                 about, rather than a surprise in the room you walked into.
+const SCREAM_DRAW = 1.6;
+const SCREAM_DRAW_CULL = 22;
+const SCREAM_REACH = 3;
+const SCREAM_CULL = 44;
+
+// The longest tail anything asks for. Derived rather than written down, so a
+// sound given a longer tail than the field was flooded to cannot quietly go
+// inaudible instead of loud -- which is the one way this could fail silently.
+const HEARING_TAIL_MAX = Math.max(SCREAM_REACH, VOICE_REACH);
+
+// A captive cut loose. They fold up first, then drag themselves somewhere
+// sheltered and stay there for the rest of the depth.
+const COLLAPSE_SECONDS = 0.9;
+const CRAWL_SPEED = 0.55;      // tiles a second, and it should look like it
+const CRAWL_REACH = 3;         // as far as somebody who cannot stand will get
+
+// How often one who asked to die turns on the person who refused. Rare enough
+// that freeing a captive is not a coin toss, common enough that it is a thing
+// that happens rather than a thing you read about. Rolled from the level's own
+// generator, so a seed always plays out the same way.
+const SPURNED_TURN_CHANCE = 0.05;
+// What it costs. Enough to be a real answer at any depth, never enough to be
+// the thing that killed you on its own -- resolveIncoming still applies armour,
+// shields and every relic in the way, exactly as any other blow does.
+const SPURNED_DAMAGE = 8;
+
+// How long a shoved stone takes to travel its tile. Slower than a footstep on
+// purpose: the weight of it is the whole character of the thing.
+const BLOCK_SLIDE_SECONDS = 0.34;
 
 // What each size of fire is called when the player is standing over a cold one.
 const FIRE_NAMES = {
@@ -87,6 +130,17 @@ export class World {
     }
     this.revealedProps = new Set();
     this.sealBlocks = new Set();
+
+    // Pushable stones. The index is keyed on the tile a stone is standing on
+    // and is rewritten the instant one is shoved, because movement asks it
+    // whether a tile is open in the same frame the shove happens.
+    this.blocks = (level.blocks || []).map((b) => ({
+      ...b, x: b.homeX, y: b.homeY, moved: false, sliding: false, slide: 1,
+    }));
+    this.blockIndex = new Map();
+    for (const b of this.blocks) this.blockIndex.set(this.grid.idx(b.x, b.y), b);
+    this.blockPockets = new Set(
+      (level.blockPockets || []).map((p) => this.grid.idx(p.x, p.y)));
     // Places the player has been told about but not yet reached. The chart
     // puts an arrow on its rim for each one; whatever adds a hint owns
     // clearing it, and reaching the spot resolves it automatically.
@@ -278,6 +332,7 @@ export class World {
     this.updatePickups();
     this.updateSecretAwareness();
     this.updateHints(dt);
+    this.updateBlocks(dt);
     this.updateCaptives(dt);
     this.updateInteractTarget();
     this.updateAmbience(dt);
@@ -298,6 +353,9 @@ export class World {
     this.occupied.clear();
     for (const e of this.enemies) {
       if (e.dead || !e.mover) continue;
+      // Something still under the floor holds no ground. It has to be possible
+      // to walk over the tile one is buried in -- that is how you find it.
+      if (e.entombed) continue;
       this.occupied.set(this.grid.idx(e.mover.tileX, e.mover.tileY), e.id);
       if (e.mover.moving) this.occupied.set(this.grid.idx(e.mover.toX, e.mover.toY), e.id);
     }
@@ -391,8 +449,12 @@ export class World {
     this.hearingTimer = 0.22;
     // Hearing reaches further than the torch, and further again in the dark.
     this.hearingRange = this.torch.baseRadius * HEARING_REACH * this.hearingScale;
+    // Flooded wider than that, because the longest-tailed sound in the game
+    // still has to find ground to travel over. `hearingRange` stays the
+    // reference every sound is measured against, so nothing that is not asking
+    // for a tail is heard a tile further than it was.
     this.hearing.build(this.player.x, this.player.y, this.hearingRange,
-      (x, y) => this.soundBlocked(x, y));
+      (x, y) => this.soundBlocked(x, y), HEARING_TAIL_MAX);
   }
 
   soundBlocked(x, y) {
@@ -405,7 +467,10 @@ export class World {
   // and dullness the journey left it with, and from the direction it arrived
   // rather than from wherever the thing making it happens to be standing.
   hearSfx(name, x, y, loudness = 1, opts = {}) {
-    const heard = this.hearing.hear(x, y, loudness);
+    // `tail` is a property of the sound, not of the mix, so it is pulled out
+    // here rather than travelling on to the mixer with the rest of the options.
+    const { tail = 1, ...rest } = opts;
+    const heard = this.hearing.hear(x, y, loudness, tail);
     if (!heard || heard.volume < 0.015) return null;
     // Placed at the mouth of whatever it came round, not through the wall.
     const apparent = Math.min(heard.distance, 9);
@@ -414,7 +479,7 @@ export class World {
       x: this.player.x + heard.dirX * apparent,
       y: this.player.y + heard.dirY * apparent,
       heard,
-      ...opts,
+      ...rest,
     });
     if (this.run.mods.sonar) {
       this.echoes.push({
@@ -422,7 +487,7 @@ export class World {
         y: this.player.y + heard.dirY * apparent,
         trueX: x, trueY: y,
         strength: heard.volume, corners: heard.corners,
-        life: 1.6, maxLife: 1.6, colour: opts.colour || '#8fd7ff',
+        life: 1.6, maxLife: 1.6, colour: rest.colour || '#8fd7ff',
       });
       if (this.echoes.length > 24) this.echoes.shift();
     }
@@ -1130,6 +1195,140 @@ export class World {
     }
   }
 
+  // --- pushable stones --------------------------------------------------------
+  //
+  // Solid to everything that walks, and the only solid thing in the labyrinth
+  // that moves. Walking into one is a shove rather than a step, so there is no
+  // verb to learn: the same press that walks you down a corridor puts your
+  // shoulder to the stone when a stone is what is there.
+  //
+  // The generator has already proved that no block stands between the player
+  // and anything the depth requires (see gen/validate.js), so nothing here can
+  // wedge a labyrinth shut. The one move that could is pushing a block into
+  // the pocket it is guarding, which would seal the reward away for good --
+  // that is refused below, and it is the only refusal.
+  blockAt(x, y) {
+    return this.blockIndex.get(this.grid.idx(x, y)) || null;
+  }
+
+  // Called by the mover once every ordinary way through has been ruled out.
+  // Returns the direction to walk if a shove happened, or null.
+  tryPush(tileX, tileY, want, heading) {
+    if (!this.blocks.length) return null;
+    const m = Math.hypot(want.x, want.y);
+    if (m < 0.001) return null;
+    const wx = want.x / m, wy = want.y / m;
+
+    let best = null, bestScore = 0.5;
+    for (const dir of GRID_DIRS) {
+      // Cardinals only. Shoving a stone diagonally is not a thing shoulders do,
+      // and it would need two corners to be clear to mean anything anyway.
+      if (dir.x !== 0 && dir.y !== 0) continue;
+      const dot = dir.x * wx + dir.y * wy;
+      if (dot < bestScore) continue;
+      const block = this.blockAt(tileX + dir.x, tileY + dir.y);
+      if (!block || block.sliding) continue;
+      if (!this._canShove(block, dir)) continue;
+      let score = dot;
+      if (heading && dir.x === heading.x && dir.y === heading.y) score += 0.05;
+      best = { dir, block, score };
+      bestScore = score;
+    }
+    if (!best) return null;
+    this._shove(best.block, best.dir);
+    return best.dir;
+  }
+
+  _canShove(block, dir) {
+    const tx = block.x + dir.x, ty = block.y + dir.y;
+    // Into its own pocket is the one direction that is never allowed: the
+    // stone would come to rest on top of what it was guarding, and there is no
+    // second shove that would get it out again.
+    if (this.blockPockets.has(this.grid.idx(tx, ty))) return false;
+    if (!tileOpen(this, tx, ty)) return false;
+    // Nothing standing there. A stone the size of a person does not push one.
+    if (this.occupied && this.occupied.has(this.grid.idx(tx, ty))) return false;
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      if (Math.floor(e.x) === tx && Math.floor(e.y) === ty) return false;
+    }
+    return true;
+  }
+
+  _shove(block, dir) {
+    const from = this.grid.idx(block.x, block.y);
+    block.fromX = block.x; block.fromY = block.y;
+    block.x += dir.x; block.y += dir.y;
+    block.slide = 0;
+    block.sliding = true;
+    // Occupancy changes on the instant, not at the end of the slide. The
+    // player is stepping onto the tile the stone is leaving in the same frame,
+    // and a stone that was still notionally there would refuse them the step
+    // it just granted.
+    this.blockIndex.delete(from);
+    this.blockIndex.set(this.grid.idx(block.x, block.y), block);
+    this.playSfx('stoneBreak', { x: block.x + 0.5, y: block.y + 0.5 });
+    this.shake(3);
+    // The whole depth hears a stone move. It is not a quiet thing to do, and
+    // that is part of the price of what is behind it.
+    this.makeNoise(block.x + 0.5, block.y + 0.5, 1.2, { playerHears: false });
+    if (!block.moved) this._revealBehindBlock(block);
+    this.emit('blockPushed', { block });
+  }
+
+  // The first shove is the discovery, and it is scored like one -- the same
+  // pool a cracked wall pays out, on the same counter, so "secrets found"
+  // means one thing rather than two.
+  _revealBehindBlock(block) {
+    block.moved = true;
+    this.secretsFound++;
+    const points = this.run.score.addSecret(180 + this.level.depth * 30, this.run.mods);
+    this.particles.text(block.alcove.x + 0.5, block.alcove.y + 0.5,
+      'SECRET  +' + Math.round(points), '#e8b45c', 15, 1.6);
+    this.emit('blockOpened', { block });
+  }
+
+  updateBlocks(dt) {
+    for (const block of this.blocks) {
+      if (!block.sliding) continue;
+      block.slide += dt / BLOCK_SLIDE_SECONDS;
+      if (block.slide < 1) continue;
+      block.slide = 1;
+      block.sliding = false;
+    }
+  }
+
+  // Where a stone is drawn this frame: part way between the tile it left and
+  // the tile it is going to, so the shove reads as weight rather than as a
+  // jump. Eased at the end, because stone stops dead and does not glide.
+  blockPosition(block) {
+    if (!block.sliding) return { x: block.x + 0.5, y: block.y + 0.5 };
+    const k = 1 - Math.pow(1 - block.slide, 2);
+    return {
+      x: block.fromX + (block.x - block.fromX) * k + 0.5,
+      y: block.fromY + (block.y - block.fromY) * k + 0.5,
+    };
+  }
+
+  // Something has come up out of the floor. The hole it left stays for the
+  // rest of the depth, drawn through the same table the environmental marks
+  // use -- so a real hole and the decoy ones scattered about are the same
+  // sprite, which is the entire point of the decoys.
+  onUnearthed(enemy) {
+    const gx = Math.floor(enemy.x), gy = Math.floor(enemy.y);
+    this.level.decals.push({
+      kind: 'hole', x: gx + 0.5, y: gy + 0.5, dx: 1, dy: 0,
+      seed: (enemy.id * 0.618) % 1, fresh: true,
+    });
+    burstStone(this.particles, gx + 0.5, gy + 0.5);
+    this.shake(5);
+    this.playSfx('stoneBreak', { x: enemy.x, y: enemy.y });
+    // Loud. Coming up through a floor is not something done quietly, and
+    // anything nearby is entitled to come and see what did it.
+    this.makeNoise(enemy.x, enemy.y, 1.1, { playerHears: false });
+    this.emit('unearthed', { enemy });
+  }
+
   breakSecret(secret) {
     secret.broken = true;
     this.grid.set(secret.x, secret.y, T.FLOOR);
@@ -1158,17 +1357,95 @@ export class World {
   // something, and the exception has to be real.
   updateCaptives(dt) {
     for (const prop of this.level.props) {
-      if (prop.type !== 'prisoner' || prop.mood !== 'raving' || prop.freed) continue;
+      if (prop.type !== 'prisoner') continue;
+      if (prop.mood === 'collapsing' || prop.mood === 'crawling') this._advanceFreed(prop, dt);
+      if (prop.mood !== 'raving' || prop.freed) continue;
       prop.screamTimer = (prop.screamTimer === undefined ? 3 + prop.seed * 6 : prop.screamTimer) - dt;
       if (prop.screamTimer > 0) continue;
       prop.screamTimer = 9 + Math.random() * 12;
-      if (Math.hypot(prop.x - this.player.x, prop.y - this.player.y) > 22) continue;
+      // Straight-line, and only to decide whether it is worth working out
+      // properly: sound travels the open ground, so the path it takes is never
+      // shorter than the distance across. Anything past this cannot be heard
+      // however the corridors run.
+      const away = Math.hypot(prop.x - this.player.x, prop.y - this.player.y);
+      if (away > SCREAM_CULL) continue;
       // A scream is a noise like any other, which means it brings company --
       // and that is the whole reason a raving captive is a problem and not
-      // just a sad thing to walk past.
-      this.makeNoise(prop.x, prop.y, 1.6, { sfx: 'scream' });
-      this.emit('scream', { prop });
+      // just a sad thing to walk past. How far it draws from is a balance
+      // number and is deliberately left where it was; how far the *player*
+      // hears it is not, because a scream that only reaches the next room is
+      // a warning that arrives alongside the thing it was warning about.
+      if (away <= SCREAM_DRAW_CULL) {
+        this.makeNoise(prop.x, prop.y, SCREAM_DRAW, { sfx: 'scream', playerHears: false });
+      }
+      const heard = this.hearSfx('scream', prop.x, prop.y, SCREAM_DRAW, { tail: SCREAM_REACH });
+      // Only count it as a scream if it actually arrived. A shut gate between
+      // the two of you used to still tighten the music.
+      if (heard) this.emit('scream', { prop, heard });
     }
+  }
+
+  // A freed captive does not simply stop existing. They have been chained to
+  // this wall long enough that standing is beyond them: they come off the wall,
+  // fold up, and drag themselves to whatever corner is nearest, and then they
+  // are part of the depth for as long as you are.
+  //
+  // Purely cosmetic in every sense that matters -- props are not obstacles, so
+  // nothing they do can block a route, wedge a creature or trouble the
+  // generator's guarantees. It is here because "you freed them and they
+  // vanished" is a worse answer to a moral choice than any of the real ones.
+  _advanceFreed(prop, dt) {
+    if (prop.mood === 'collapsing') {
+      prop.collapse = (prop.collapse || 0) + dt;
+      if (prop.collapse < COLLAPSE_SECONDS) return;
+      prop.mood = prop.crawlTo ? 'crawling' : 'settled';
+      return;
+    }
+    if (prop.mood !== 'crawling') return;
+    const dx = prop.crawlTo.x - prop.x;
+    const dy = prop.crawlTo.y - prop.y;
+    const left = Math.hypot(dx, dy);
+    const stepBy = CRAWL_SPEED * dt;
+    if (left <= stepBy || left < 0.001) {
+      prop.x = prop.crawlTo.x;
+      prop.y = prop.crawlTo.y;
+      prop.mood = 'settled';
+      // Facing the wall they ended up against, so the slump reads as a slump
+      // rather than as somebody standing in a corner.
+      return;
+    }
+    prop.x += (dx / left) * stepBy;
+    prop.y += (dy / left) * stepBy;
+  }
+
+  // Somewhere to end up: the most sheltered floor tile within a few paces.
+  // Corners score above flat wall, flat wall above open ground, and closer
+  // beats further at equal shelter -- which is roughly how somebody who cannot
+  // stand up chooses where to stop.
+  _crawlTargetFor(prop) {
+    const fromX = Math.floor(prop.x), fromY = Math.floor(prop.y);
+    let best = null;
+    let bestScore = -1;
+    for (let dy = -CRAWL_REACH; dy <= CRAWL_REACH; dy++) {
+      for (let dx = -CRAWL_REACH; dx <= CRAWL_REACH; dx++) {
+        const x = fromX + dx, y = fromY + dy;
+        if (!tileOpen(this, x, y)) continue;
+        const away = Math.hypot(dx, dy);
+        if (away > CRAWL_REACH) continue;
+        let walls = 0;
+        for (const [wx, wy] of N4) {
+          const t = this.grid.get(x + wx, y + wy);
+          if (t === T.WALL || t === T.SECRET || t === T.RUBBLE) walls++;
+        }
+        if (!walls) continue;
+        // Shelter first, then nearness. The 0.1 keeps the tie-break from ever
+        // outweighing a whole extra wall.
+        const score = walls - away * 0.1;
+        if (score > bestScore) { bestScore = score; best = { x: x + 0.5, y: y + 0.5 }; }
+      }
+    }
+    if (!best) return null;
+    return Math.hypot(best.x - prop.x, best.y - prop.y) < 0.35 ? null : best;
   }
 
   captiveLabel(prop) {
@@ -1176,13 +1453,24 @@ export class World {
       return prop.searched ? { label: 'Nothing else on them', enabled: false }
         : { label: 'Search the body', enabled: true };
     }
+    // Freed, and getting themselves to a corner. There is nothing left to do
+    // to them and the game should not pretend otherwise.
+    if (prop.mood === 'collapsing' || prop.mood === 'crawling') {
+      return { label: 'They are getting themselves up', enabled: false };
+    }
+    if (prop.mood === 'settled') {
+      return { label: 'They have said all they will', enabled: false };
+    }
     if (prop.freed) return { label: 'They have said all they will', enabled: false };
     if (prop.mood === 'raving') {
       return { label: 'It does not hear you', hint: 'Its screaming carries', enabled: false };
     }
-    if (prop.mood === 'begging') {
+    if (prop.pleadToDie) {
+      // The Action button frees them, which is not what they asked for. Ending
+      // it is the sword, and it always was -- so the label says which is which
+      // rather than leaving the player to find out by doing the wrong one.
       return prop.spoken
-        ? { label: 'End it', hint: 'They asked', enabled: true }
+        ? { label: 'Cut them loose', hint: 'It is not what they asked for', enabled: true }
         : { label: 'Listen', enabled: true };
     }
     return { label: prop.spoken ? 'Cut them down' : 'Speak to them', enabled: true };
@@ -1201,8 +1489,13 @@ export class World {
       this.emit('captive', { prop, action: 'searched' });
       return true;
     }
-    if (prop.mood === 'begging' && prop.spoken) return this.releaseCaptive(prop, true);
-    if (prop.mood === 'afraid' && prop.spoken) return this.releaseCaptive(prop, false);
+    // Every use of the Action button on a living captive frees them. Killing
+    // one has never been on this button and is not now: it is a sword swing,
+    // deliberately, because taking a life should not be something you can do
+    // with the same press that opens a chest.
+    if (prop.spoken && (prop.pleadToDie || prop.mood === 'afraid')) {
+      return this.releaseCaptive(prop, false);
+    }
 
     prop.spoken = true;
     this.playSfx('shrineBless', { x: prop.x, y: prop.y });
@@ -1222,14 +1515,22 @@ export class World {
     return true;
   }
 
-  // Cutting a captive loose. Merciful when they asked for it, which is the
-  // one case that pays instead of costing.
+  // Cutting a captive loose, and the two very different things that means.
+  //
+  //   mercy  -- they asked, and you did it with the sword. They die where they
+  //             are, and it costs nothing, because it was the thing they
+  //             wanted from you.
+  //   freed  -- you let them live. They come off the wall and crawl somewhere
+  //             sheltered, and they are still there when you come back past.
+  //
+  // A captive who asked to die and was freed instead has, rarely, a different
+  // answer to that.
   releaseCaptive(prop, mercy) {
     prop.freed = true;
-    prop.mood = 'dead';
     prop.searched = !prop.carries;
-    this.gore.pool(prop.x, prop.y, '#7a1f1c', 0.7);
     if (mercy) {
+      prop.mood = 'dead';
+      this.gore.pool(prop.x, prop.y, '#7a1f1c', 0.7);
       this.playSfx('shrineHeal', { x: prop.x, y: prop.y });
       const pts = this.run.score.addBonus(260 + this.level.depth * 30, this.run.mods);
       this.particles.text(prop.x, prop.y - 1, 'MERCY  +' + Math.round(pts), '#8fb7ff', 14, 2.2);
@@ -1237,12 +1538,51 @@ export class World {
       const hint = this.revealHint(prop.knows === 'nothing' ? 'exit' : prop.knows, 'captive');
       if (hint) this.particles.text(prop.x, prop.y - 1.7, 'THEY KNEW', hint.colour, 12, 2.0);
       if (prop.carries) { this.grantFrom(prop, prop.carries); prop.carries = null; }
-    } else {
-      this.playSfx('gateUnlock', { x: prop.x, y: prop.y });
-      const pts = this.run.score.addBonus(120, this.run.mods);
-      this.particles.text(prop.x, prop.y - 1, 'FREED  +' + Math.round(pts), '#6fce87', 13, 1.8);
+      this.run.recordMercy(1);
+      this.emit('captive', { prop, action: 'mercy' });
+      return true;
     }
-    this.emit('captive', { prop, action: mercy ? 'mercy' : 'freed' });
+
+    // Refusing somebody who asked to die is a decision, and occasionally it is
+    // answered. Rolled before anything else is shown, so what the player sees
+    // is one outcome rather than a correction to another.
+    if (prop.pleadToDie && this.rng.next() < SPURNED_TURN_CHANCE) {
+      return this._spurnedCaptive(prop);
+    }
+
+    prop.mood = 'collapsing';
+    prop.collapse = 0;
+    prop.crawlTo = this._crawlTargetFor(prop);
+    this.playSfx('gateUnlock', { x: prop.x, y: prop.y });
+    const pts = this.run.score.addBonus(120, this.run.mods);
+    this.particles.text(prop.x, prop.y - 1, 'FREED  +' + Math.round(pts), '#6fce87', 13, 1.8);
+    this.run.recordMercy(1);
+    this.emit('captive', { prop, action: 'freed' });
+    return true;
+  }
+
+  // The rare one. They wanted out and you handed them their chains instead --
+  // so they come at you with what is left of them. One blow, close, and then
+  // whatever it cost them to stand up is spent and they go down anyway.
+  //
+  // Deliberately not a spawned enemy: turning a prop into an actor mid-level
+  // means an entity the generator never validated, never counted against the
+  // depth's budget and never gave the bot a route around. A single strike is
+  // the whole of what this needs to mean.
+  _spurnedCaptive(prop) {
+    prop.mood = 'collapsing';
+    prop.collapse = 0;
+    prop.crawlTo = this._crawlTargetFor(prop);
+    prop.spurned = true;
+    this.gore.splat(prop.x, prop.y, '#7a1f1c', 0.8, this.player.faceX, this.player.faceY);
+    this.playSfx('curse', { x: prop.x, y: prop.y });
+    this.particles.text(prop.x, prop.y - 1, 'NOT THAT', '#e05a3c', 14, 2.2);
+    this.shake(5);
+    this.damagePlayer(SPURNED_DAMAGE + this.level.depth, null);
+    // Still freed, and it still counts as such. What they did with their
+    // freedom afterwards was theirs to decide.
+    this.run.recordMercy(1);
+    this.emit('captive', { prop, action: 'spurned' });
     return true;
   }
 
@@ -1250,10 +1590,13 @@ export class World {
   // takes it out of the tally, and it takes rather a lot.
   murderCaptive(prop) {
     if (prop.mood === 'dead' || prop.freed) return false;
-    const asked = prop.mood === 'begging' && prop.spoken;
+    // Whether they asked is a fact about them, not about whether you stopped
+    // to listen. A captive who is begging is visibly begging from across the
+    // room, and charging somebody for reading that correctly would make the
+    // penalty a tax on not having pressed a button first.
     this.gore.splat(prop.x, prop.y, '#7a1f1c', 1.4, this.player.faceX, this.player.faceY);
     this.shake(6);
-    if (asked) return this.releaseCaptive(prop, true);
+    if (prop.pleadToDie) return this.releaseCaptive(prop, true);
 
     prop.freed = true;
     prop.mood = 'dead';
@@ -1263,6 +1606,7 @@ export class World {
       prop.mood === 'raving' ? 'the one that was screaming' : 'someone who did not ask');
     this.particles.text(prop.x, prop.y - 1, 'MURDER  -' + Math.round(cost), '#e05a3c', 15, 2.4);
     this.playSfx('curse', { x: prop.x, y: prop.y });
+    this.run.recordMercy(-1);
     this.emit('captive', { prop, action: 'murdered', cost });
     return true;
   }

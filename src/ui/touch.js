@@ -3,12 +3,13 @@
 //
 // Two movement pads are offered, because they answer different questions.
 //
-//   diamond -- four buttons on a 45-degree rotated frame. The isometric view
-//              draws the dungeon's four axes as the four screen diagonals, so
-//              a rotated pad puts every button exactly where its corridor
-//              goes: the top-right button walks north, and north on screen is
-//              up and to the right. It maps one tap to one tile, which is
-//              what grid movement actually wants.
+//   diamond -- four buttons at the corners of a wide diamond. The isometric
+//              view draws the dungeon's four axes as screen diagonals leaning
+//              close to the horizontal, so a diamond wider than it is tall
+//              puts every button roughly where its corridor goes: the
+//              top-right button walks north, and north on screen is up and to
+//              the right. It maps one tap to one tile, which is what grid
+//              movement actually wants.
 //   stick   -- the older floating analogue pad, anchored wherever the thumb
 //              lands. Kept for players who prefer a continuous surface.
 

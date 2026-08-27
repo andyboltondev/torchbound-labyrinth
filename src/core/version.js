@@ -7,8 +7,8 @@
 export const VERSION = {
   number: '1.3.0',
   codename: 'Wayfinding',
-  build: '20260827-064317',
-  commit: '53275a2',
+  build: '20260827-203506',
+  commit: '2611e43',
   branch: 'release-notes-and-bug-reports',
   pr: null,
 };

@@ -4,10 +4,15 @@
 // shared "walk at the player" loop. Awareness is driven by the player's own
 // torchlight, which is what turns a bigger flame into a real trade-off.
 
-import { BEHAVIOUR, ENEMIES, ELITE_MOD, DEFAULT_FOV, REAR_SENSE, DEFAULT_VOICE } from './enemyData.js';
+import { BEHAVIOUR, ENEMIES, ELITE_MOD, DEFAULT_FOV, REAR_SENSE, DEFAULT_VOICE, VOICE_REACH }
+  from './enemyData.js';
 import { hasLineOfSight } from './physics.js';
 import { GridMover } from './gridmove.js';
 import { clamp, damp } from '../core/util.js';
+
+// How long a buried thing takes to get out of the floor: long enough to be a
+// warning, short enough that it is not a warning you can walk away from.
+const DIG_SECONDS = 0.55;
 
 const STATE = {
   DORMANT: 'dormant', IDLE: 'idle', ALERT: 'alert', CHASE: 'chase',
@@ -50,6 +55,13 @@ export class Enemy {
 
     this.state = spawn.dormant ? STATE.DORMANT : STATE.IDLE;
     this.dormant = !!spawn.dormant;
+    // Under the floor. An entombed creature is dormant like any ambusher and
+    // additionally is not there at all as far as the rest of the game is
+    // concerned: nothing draws it, nothing hears it, and nothing that looks
+    // around for something to fight can find it. It comes up when somebody
+    // stands on it, and from then on it is an ordinary creature in every way.
+    this.entombed = !!(spawn.dormant && this.def.entombed);
+    this.digging = 0;
     this.sealed = false;      // held in place until its encounter triggers
     this.faceX = 1; this.faceY = 0;
     this.speedNow = 0;
@@ -163,6 +175,9 @@ export class Enemy {
   // telling them nothing they do not know, and a hall of visible monsters
   // grumbling at each other is noise in both senses.
   updateVoice(dt, world, visible) {
+    // Buried things make no sound at all. A groan from under the floor would
+    // be the one tell the whole idea is built on not having.
+    if (this.entombed) return;
     this.voiceTimer -= dt;
     if (this.voiceTimer > 0) return;
     const voice = this.def.voice || DEFAULT_VOICE;
@@ -173,6 +188,7 @@ export class Enemy {
     this.voiceVariant = (this.voiceVariant + 1 + Math.floor(Math.random() * 2)) % 3;
     world.hearSfx('creatureVoice', this.x, this.y,
       voice.loudness * (this.elite ? 1.2 : 1) * (busy ? 1.15 : 1), {
+        tail: VOICE_REACH,
         timbre: voice.timbre,
         pitch: voice.pitch * (this.elite ? 0.86 : 1),
         variant: this.voiceVariant,
@@ -184,7 +200,21 @@ export class Enemy {
   alert(world, reason = 'sight') {
     if (this.state === STATE.DORMANT) {
       this.dormant = false;
-      world.onAmbushWake(this);
+      if (this.entombed) {
+        // Out of the ground, and the ground keeps the hole. From here it is a
+        // creature like any other -- being buried was a way of arriving, not a
+        // second set of rules to carry around for the rest of the depth.
+        //
+        // One or the other, never both: coming up through a floor and stepping
+        // out of a shadow are two ways of arriving, and firing both doubled the
+        // stone burst, played two sounds over each other and shook the screen
+        // twice as hard as anything else in the game.
+        this.entombed = false;
+        this.digging = DIG_SECONDS;
+        world.onUnearthed(this);
+      } else {
+        world.onAmbushWake(this);
+      }
     }
     if (this.state === STATE.IDLE || this.state === STATE.RETURN
         || this.state === STATE.DORMANT || this.state === STATE.SEEKING) {
@@ -198,6 +228,9 @@ export class Enemy {
   }
 
   takeDamage(amount, world, source) {
+    // Nothing can be hit through a floor. A bolt loosed down a passage
+    // passes over a buried thing without knowing it was there.
+    if (this.entombed) return;
     if (this.dead) return;
     this.hp -= amount;
     this.hurtFlash = 1;
@@ -226,9 +259,20 @@ export class Enemy {
     const dist = Math.hypot(p.x - this.x, p.y - this.y);
 
     if (this.state === STATE.DORMANT) {
-      if (!this.sealed && dist < 2.6 && hasLineOfSight(world, this.x, this.y, p.x, p.y)) {
-        this.alert(world, 'ambush');
-      }
+      // A buried thing feels the floor rather than watching the passage, so it
+      // wants no line of sight and a much shorter reach -- you have to be very
+      // nearly standing on one. Everything else waiting in the dark still has
+      // to see you coming.
+      const reach = this.entombed ? this.def.detect : 2.6;
+      const near = dist < reach
+        && (this.entombed || hasLineOfSight(world, this.x, this.y, p.x, p.y));
+      if (!this.sealed && near) this.alert(world, this.entombed ? 'unearthed' : 'ambush');
+    } else if (this.digging > 0) {
+      // Coming up out of the floor. It cannot swing and cannot be steered
+      // until it is out, which is the whole of the warning anybody gets.
+      this.digging = Math.max(0, this.digging - dt);
+      this._applyMovement(dt, world);
+      return;
     } else if (this.sealed) {
       // Held in place until the encounter it belongs to is triggered.
     } else {

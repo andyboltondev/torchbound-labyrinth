@@ -2,8 +2,7 @@
 // settings. Deliberately small -- the run itself keeps roguelite consequences.
 
 import { load, save } from '../core/storage.js';
-import { readHall, writeAll, submitEntry, importCsv, exportCsv, rank, HALL_SIZE }
-  from './hall.js';
+import { readHall, writeAll, submitEntry, rank, HALL_SIZE } from './hall.js';
 
 const SEED_BOARD = [
   { name: 'Ragnvald', score: 48200, depth: 17, bosses: 3, build: 'Berserker', diff: 'ashenvow' },
@@ -97,14 +96,6 @@ export class Profile {
     }
     return null;
   }
-
-  async importHall(text) {
-    const result = await importCsv(text);
-    if (result && result.rows) this.board = result.rows;
-    return result;
-  }
-
-  exportHall() { return exportCsv(this.board); }
 
   clearHall() { this.board = writeAll([]); return this.board; }
 

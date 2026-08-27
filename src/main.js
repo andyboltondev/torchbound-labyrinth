@@ -12,6 +12,7 @@ import { generateLevel } from './gen/dungeon.js';
 import { Run } from './game/run.js';
 import { World } from './game/world.js';
 import { profile } from './game/profile.js';
+import { startUpdateCheck, noteFirstVisit } from './core/appupdate.js';
 import { AudioEngine } from './audio/audio.js';
 import { Music } from './audio/music.js';
 import { Hud } from './ui/hud.js';
@@ -75,6 +76,11 @@ class Game {
       e.preventDefault();
       this.openMap();
     });
+    // The corner chart is a small target that has to be found before it can be
+    // tapped, and on a phone there is no `M` to fall back on. The button says
+    // the map is there; the chart itself stays tappable for anyone who has
+    // already learned it.
+    document.getElementById('btnMap').addEventListener('click', () => this.openMap());
     document.getElementById('btnPause').addEventListener('click', () => this.pause());
     document.getElementById('btnBestiary').addEventListener('click', () => {
       if (this.state === STATE.PLAYING) this.pause();
@@ -90,6 +96,16 @@ class Game {
     requestAnimationFrame(() => this.onResize());
     window.addEventListener('load', () => this.onResize());
     this.refreshTouchMode();
+    // Cache the game for offline play, and ask whether a newer build has
+    // shipped. Fire-and-forget on purpose: the menu is drawn on the next line
+    // whatever the network is doing, because a player with no signal is not
+    // waiting on us to finish a conversation they did not ask for. Anything
+    // found is downloaded quietly and takes effect on the next load.
+    startUpdateCheck();
+    // Ordered before the menu is built, because the menu asks whether this
+    // build is new to the device and a first visit has to have answered
+    // "no, it is simply the first" before it is asked.
+    noteFirstVisit();
     this.screens.show('home');
     this.loop.start();
     // The audio context can only start from a gesture, so arm it on the first.
@@ -472,9 +488,27 @@ class Game {
         if (data.action === 'murdered') this.hud.toast('That will be answered for', 'bad');
         else if (data.action === 'mercy') this.hud.toast('You gave them what they asked for', 'good');
         else if (data.action === 'freed') this.hud.toast('You cut them loose', 'good');
+        else if (data.action === 'spurned') this.hud.toast('They did not want their chains back', 'bad');
         break;
       case 'distraction':
         this.hud.toast(data.count === 1 ? 'Something goes to look' : data.count + ' go to look', 'good');
+        break;
+      case 'unearthed':
+        this.combatHeat = Math.min(1, this.combatHeat + 0.35);
+        this.renderer.addShake(5);
+        this.hud.toast('Something was under the floor', 'bad');
+        break;
+      case 'blockOpened':
+        this.hud.toast('The stone was hiding something', 'good');
+        break;
+      case 'blockPushed':
+        // The chart draws blocks as solid ground, so the two tiles either side
+        // of a shove have to be repainted or the stone leaves a ghost of
+        // itself behind on the map.
+        if (data.block) {
+          this.minimap.repaint(data.block.fromX, data.block.fromY);
+          this.minimap.repaint(data.block.x, data.block.y);
+        }
         break;
       case 'gateOpened':
         this.hud.toast('Gate opened', 'good');

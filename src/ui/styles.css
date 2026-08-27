@@ -182,12 +182,12 @@ input, textarea { -webkit-user-select: text; user-select: text; }
 .icon-btn:active { background: #1c2431; color: var(--gold); border-color: var(--gold-dim); }
 /* On a touch screen the target grows and takes a word with it -- there is no
    hover to reveal the title attribute and no keyboard shortcut to lean on.
-   Both buttons take one width, so the row reads as a pair rather than as two
+   All three take one width, so the row reads as a set rather than as three
    sizes of the same thing.
    On a pointer device the glyph plus its tooltip is enough. */
 @media (pointer: coarse) {
-  .hud-buttons { gap: 10px; }
-  .hud-buttons .icon-btn { width: 64px; height: 52px; padding: 0 3px; gap: 3px; }
+  .hud-buttons { gap: 8px; }
+  .hud-buttons .icon-btn { width: 58px; height: 52px; padding: 0 2px; gap: 3px; }
   .icon-btn .ico { width: 21px; height: 21px; }
   .icon-btn::after {
     content: attr(data-label);
@@ -280,43 +280,45 @@ input, textarea { -webkit-user-select: text; user-select: text; }
   transition: transform .06s linear;
 }
 /* --- diamond pad ---
-   The frame is rotated 45deg, so buttons placed at its top/right/bottom/left
-   land on the screen diagonals -- and the isometric camera draws the four
-   dungeon axes as exactly those diagonals. Each button is counter-rotated
-   back to an upright square for the thumb; only the arrow inside stays turned,
-   so it points down the corridor it actually walks. */
+   The four buttons sit at the corners of a diamond that is wider than it is
+   tall, leaning towards the flat 2:1 of a floor tile without going all the way
+   there (a thumb needs the north and south buttons kept apart). So each button
+   lies roughly along the screen direction its corridor runs: north up and to
+   the right, east down and to the right, and so on. The buttons stay upright
+   squares for the thumb; only the arrow inside each is turned, and it is turned
+   to the exact bearing the camera draws that axis at (--iso-tilt), which the
+   pad's corners only approximate. */
 .diamond {
-  position: absolute; width: 168px; height: 168px;
+  position: absolute; width: 168px; height: 126px;
   left: max(26px, calc(env(safe-area-inset-left) + 14px));
   bottom: max(30px, calc(env(safe-area-inset-bottom) + 18px));
-  transform: rotate(45deg);
-  /* The frame is only a rotation: taps in the gaps between the four buttons
-     must fall through rather than being swallowed by its bounding box, which
-     is 40% wider than the pad once rotated. */
+  /* Only the four buttons take taps: presses in the gaps between them must
+     fall through to whatever is behind the pad. */
   pointer-events: none; touch-action: none;
 }
 .dbtn, .diamond-hub {
-  position: absolute; width: 62px; height: 62px; padding: 0;
+  position: absolute; width: 58px; height: 58px; padding: 0;
   display: grid; place-content: center; justify-items: center; gap: 3px;
-  border-radius: 8px; transform: rotate(-45deg);
+  border-radius: 8px;
   background: rgba(20,26,36,.82); border: 1px solid rgba(143,160,184,.34);
   color: var(--parchment); font-family: var(--ui); cursor: pointer; pointer-events: auto;
   touch-action: none; transition: transform .07s, background .1s, border-color .1s;
 }
-.dbtn.north { top: 0; left: 53px; }
-.dbtn.east { top: 53px; right: 0; }
-.dbtn.south { bottom: 0; left: 53px; }
-.dbtn.west { top: 53px; left: 0; }
+.dbtn.north { top: 0; left: 110px; }
+.dbtn.east { top: 68px; left: 110px; }
+.dbtn.south { top: 68px; left: 0; }
+.dbtn.west { top: 0; left: 0; }
 /* A drawn arrow, not a glyph: it has to be rotated, and a glyph's ink is not
    centred in its own box, so a rotated one sits visibly off the middle of the
    button. Every one of these used to be the same upward glyph under the same
    rotation, which pointed all four of them north.
-   The button is counter-rotated upright for the thumb, so the angle written
-   here is the arrow's true angle on screen -- and the angle it is given is
-   the one the camera actually draws that axis at. That is not 45deg: the view
-   is 2:1 isometric, so a corridor running north leaves the player at 26.6deg
-   above the horizontal, not 45. The pad stays a square diamond because that
-   is what a thumb wants; only the arrows carry the real bearing. */
+   The button is not rotated, so the angle written here is the arrow's true
+   angle on screen -- and the angle it is given is the one the camera actually
+   draws that axis at. That is not 45deg: the view is 2:1 isometric, so a
+   corridor running north leaves the player at 26.6deg above the horizontal.
+   The pad's corners are a wide diamond that leans the same way but not as far,
+   because a thumb wants the buttons kept apart; the arrows carry the exact
+   bearing. */
 .dbtn-arrow {
   width: 21px; height: 21px; display: block; background: var(--gold);
   clip-path: polygon(50% 0, 100% 50%, 67% 50%, 67% 100%, 33% 100%, 33% 50%, 0 50%);
@@ -332,13 +334,13 @@ input, textarea { -webkit-user-select: text; user-select: text; }
   letter-spacing: .16em; text-indent: .08em; color: var(--stone-dim);
 }
 .dbtn:active, .dbtn.down {
-  transform: rotate(-45deg) scale(.93);
+  transform: scale(.93);
   background: rgba(60,44,20,.92); border-color: rgba(232,180,92,.7);
 }
 .dbtn.down em, .dbtn:active em { color: var(--gold); }
 .dbtn.down .dbtn-arrow, .dbtn:active .dbtn-arrow { background: #ffd694; }
 .diamond-hub {
-  top: 64px; left: 64px; width: 40px; height: 40px;
+  top: 44px; left: 65px; width: 38px; height: 38px;
   background: rgba(6,8,12,.42); border-color: rgba(143,160,184,.1);
   pointer-events: none; cursor: default;
 }
@@ -444,9 +446,38 @@ h2.screen-title {
 .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 22px; }
 .btn-row .btn { flex: 1 1 160px; }
 
-/* ------------------------------------------------------ home layout */
+/* ------------------------------------------------------ home layout
+   The home screen has one hard requirement: on a phone it fits in a single
+   viewport. Nothing on it is reached by scrolling, because the first thing a
+   player looks for is the button that starts the game. The rules below give
+   back height in the order it is worth least -- the flavour line first, then
+   the tail of the hall, then the stamp's detail line -- as the screen shrinks. */
 .home-split { display: grid; grid-template-columns: 1fr minmax(240px, 300px); gap: 22px; margin-top: 20px; align-items: start; }
 .home-split .menu { margin-top: 0; }
+.home-flavour { text-align: center; margin: 14px 0 0; }
+.home-stats { justify-content: center; margin-top: 18px; }
+.home-controls { text-align: center; margin-top: 14px; }
+/* One line, once, on the first load after the game updated itself. Quiet
+   enough that it is not an interruption, present enough that a change nobody
+   was told about does not read as a bug they have found. */
+.update-note {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 14px; padding: 9px 12px; border-radius: 5px;
+  background: rgba(232,180,92,.07); border: 1px solid rgba(232,180,92,.28);
+}
+.update-note-body { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.update-note-body b {
+  font-family: var(--display); font-size: 14px; font-weight: 500;
+  letter-spacing: .06em; color: var(--gold);
+}
+.update-note-body span { font-size: 11.5px; line-height: 1.45; color: var(--stone-dim); }
+.update-note .btn { flex: 0 0 auto; }
+.update-note-close { min-width: 40px; padding-left: 10px; padding-right: 10px; font-size: 16px; }
+
+/* The mercy column. Coloured only by which side of zero it fell, because the
+   size of the number is not the point -- the sign is. */
+table.board td.mercy.kind { color: var(--good); }
+table.board td.mercy.cruel { color: var(--blood); }
 
 .hall-preview {
   padding: 14px 15px 15px; border: 1px solid var(--panel-edge); border-radius: 5px;
@@ -498,6 +529,7 @@ h2.screen-title {
 .difficulty-tagline { font-family: var(--display); font-style: italic; font-size: 14px; color: var(--parchment); line-height: 1.45; }
 .difficulty-text { font-size: 12.5px; line-height: 1.55; color: var(--stone); }
 .difficulty-cost { font-size: 12px; line-height: 1.5; color: var(--blood); }
+.difficulty-boon { font-size: 12px; line-height: 1.5; color: var(--good); }
 .difficulty-marks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 4px; }
 .difficulty-marks i {
   font-style: normal; font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase;
@@ -593,6 +625,8 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
 .summary-row .label { flex: 0 0 auto; font-size: 14px; }
 .summary-row .detail { flex: 1 1 auto; font-size: 11px; color: var(--stone-dim); letter-spacing: .05em; }
 .summary-row .value { font-variant-numeric: tabular-nums; color: var(--gold); font-size: 15px; }
+/* A line that took something away is not gold. Blood Debt is the only one. */
+.summary-row .value.owed { color: var(--blood); }
 .summary-total {
   display: flex; justify-content: space-between; align-items: baseline;
   margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--gold-dim);
@@ -671,6 +705,30 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
 .hint { font-size: 12px; color: var(--stone-dim); line-height: 1.6; }
 
 /* ------------------------------------------------------------- seeds */
+/* Folded away under the modes. A seed is a thing you go looking for, not a
+   field you are asked to fill in on the way past, so it is quiet until opened
+   and reads as an offer rather than a blank. */
+.seed-box { margin-top: 16px; border-top: 1px solid var(--panel-edge); padding-top: 10px; }
+.seed-summary {
+  cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px;
+  padding: 4px 0; color: var(--stone-dim);
+}
+.seed-summary::-webkit-details-marker { display: none; }
+.seed-summary::before {
+  content: '\25B8'; font-size: 10px; color: var(--gold-dim);
+  transition: transform .14s ease-out;
+}
+.seed-box[open] > .seed-summary::before { transform: rotate(90deg); }
+.seed-summary:hover, .seed-summary:focus-visible { color: var(--gold-dim); outline: none; }
+.seed-summary-label { font-size: 12px; letter-spacing: .04em; }
+.seed-summary-hint {
+  font-size: 9px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--stone-dim); border: 1px solid var(--panel-edge);
+  border-radius: 999px; padding: 2px 8px;
+}
+.seed-box .seed-row { margin-top: 10px; }
+.seed-box .seed-note { margin-bottom: 2px; }
+
 .seed-row { display: flex; gap: 9px; align-items: center; margin: 4px 0 6px; flex-wrap: wrap; }
 .seed-label {
   font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--stone-dim);
@@ -697,6 +755,35 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
 
 /* --------------------------------------------------------- the guide */
 .guide-panel .screen-sub { margin-bottom: 14px; }
+.guide-heading {
+  font-family: var(--ui); font-size: 10px; letter-spacing: .18em; text-transform: uppercase;
+  color: var(--stone-dim); font-weight: 400; margin: 22px 0 8px;
+}
+/* What the game is, before which button does what. Numbered because a depth
+   really is three things in order, and a list says that faster than prose. */
+.guide-intro { margin: 4px 0 0; }
+.guide-lede {
+  font-family: var(--display); font-style: italic; font-size: 15px;
+  line-height: 1.65; color: var(--parchment); margin: 0;
+}
+.guide-steps {
+  list-style: none; counter-reset: step; margin: 14px 0 10px; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px 18px;
+}
+.guide-steps li {
+  counter-increment: step; position: relative; padding-left: 30px;
+  font-size: 12.5px; line-height: 1.5; color: var(--stone-dim);
+}
+.guide-steps li::before {
+  content: counter(step); position: absolute; left: 0; top: -1px;
+  width: 21px; height: 21px; border-radius: 50%; display: grid; place-items: center;
+  font-family: var(--display); font-size: 12px; color: var(--gold);
+  background: rgba(232,180,92,.1); border: 1px solid rgba(232,180,92,.32);
+}
+.guide-steps b {
+  display: block; font-weight: 500; font-size: 13px; letter-spacing: .04em;
+  color: var(--parchment); margin-bottom: 2px;
+}
 .guide-keys, .guide-touch { display: flex; flex-wrap: wrap; gap: 22px; align-items: flex-start; }
 .keycluster { flex: 0 0 auto; }
 .keycluster-title {
@@ -721,6 +808,10 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
 
 .guide-glass-half { flex: 0 0 auto; }
 .guide-pad { position: relative; width: 150px; height: 150px; }
+/* The touch pad's own buttons form a wide diamond, not a square, so the
+   diagram of it does too. Only the diamond variant is reshaped; the stick
+   variant keeps its round 150x150 box. */
+.guide-pad:not(.stick) { width: 176px; height: 116px; }
 .guide-dbtn {
   position: absolute; width: 52px; height: 52px; border-radius: 50%;
   display: grid; place-items: center; font-style: normal; font-size: 11px;
@@ -778,9 +869,29 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
 }
 .map-stage:active { cursor: grabbing; }
 .map-canvas { display: block; width: 100%; height: 100%; }
-.map-zoom { display: flex; gap: 8px; justify-content: center; margin-bottom: 12px; }
-.map-zoom .btn { min-width: 62px; }
-.map-legend { border-top: 1px solid var(--panel-edge); padding-top: 12px; }
+/* Standing on the chart, not under it: a row of controls below the map is a
+   strip of the map you do not get, and on a phone that strip is the difference
+   between reading the depth and squinting at it. */
+.map-zoom {
+  position: absolute; right: 10px; bottom: 10px; display: flex; gap: 6px;
+  padding: 5px; border-radius: 6px; background: rgba(8,10,15,.72);
+  border: 1px solid var(--panel-edge); backdrop-filter: blur(2px);
+}
+.map-zoom .btn { min-width: 46px; background: rgba(20,26,36,.75); }
+/* Foldable. Open where there is room, shut where there is not -- the legend
+   explains the chart, so it must never be why there is no chart to look at. */
+.map-legend { border-top: 1px solid var(--panel-edge); padding-top: 10px; }
+.map-legend > summary {
+  cursor: pointer; list-style: none; display: flex; align-items: center; gap: 7px;
+  margin-bottom: 0; padding: 2px 0;
+}
+.map-legend > summary::-webkit-details-marker { display: none; }
+.map-legend > summary::before {
+  content: '\25B8'; font-size: 10px; color: var(--gold-dim);
+  transition: transform .14s ease-out;
+}
+.map-legend[open] > summary::before { transform: rotate(90deg); }
+.map-legend > summary:focus-visible { outline: 1px solid var(--gold-dim); outline-offset: 3px; }
 .map-legend-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 6px 16px; margin-top: 8px;
@@ -861,20 +972,13 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
 }
 .release-list { margin: 0; padding-left: 18px; }
 .release-list li { font-size: 12.5px; color: var(--stone); line-height: 1.65; margin-bottom: 6px; }
-.controls-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 22px; margin-top: 10px; }
-.control-row {
-  font-size: 12.5px; color: var(--stone); display: flex; justify-content: space-between;
-  gap: 12px; align-items: baseline; padding-bottom: 5px;
-  border-bottom: 1px solid rgba(43,52,68,.45);
-}
-.control-label { display: flex; flex-direction: column; gap: 1px; }
-.control-note { font-size: 10.5px; color: var(--stone-dim); line-height: 1.35; }
-.control-keys { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex: 0 0 auto; }
-.control-key { color: var(--parchment); font-weight: 500; white-space: nowrap; }
-.control-touch {
-  font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
-  color: var(--gold-dim); font-weight: 400; white-space: nowrap;
-}
+/* The controls used to be rendered here twice as a plain two-column table --
+   once on the home screen, once in Settings. Both now use the opening guide's
+   drawn version (.guide-keys / .guide-touch / .guide-actions), which was
+   always the better one, so the table and its styles are gone. */
+.settings-controls { margin-top: 22px; }
+.settings-controls .guide-actions { margin-bottom: 4px; }
+
 .near-miss { text-align: center; padding: 20px 0; }
 .near-miss .place { font-family: var(--display); font-size: clamp(38px, 9vw, 68px); color: var(--stone); letter-spacing: .06em; }
 .near-miss .gap { font-size: 15px; color: var(--gold); margin-top: 6px; }
@@ -913,14 +1017,40 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
   .setting .seg { flex: 1 1 100%; }
 }
 
+/* The chart takes the whole display on a phone. A map read through a letterbox
+   with a panel border around it is not read at all -- and everything the panel
+   was spending height on here (its frame, its padding, a sentence explaining
+   dragging) is worth less than another inch of dungeon. */
+@media (max-width: 780px) {
+  .screen-map { padding: 0; }
+  .map-panel {
+    width: 100%; margin: 0; border-radius: 0; border-left: 0; border-right: 0;
+    min-height: 100%; padding: 10px 10px 8px;
+  }
+  .map-panel::before { display: none; }
+  .map-panel .screen-title { font-size: 17px; margin-bottom: 0; }
+  .map-panel .screen-sub { display: none; }
+  .map-stage { flex: 1 1 auto; height: auto; min-height: 42vh; margin: 8px 0 0; }
+  .map-legend { padding-top: 8px; margin-top: 8px; }
+  .map-panel .btn-row { margin-top: 10px; }
+}
+
 @media (max-width: 640px) {
   .panel { padding: 18px 16px; }
   .relic-grid { grid-template-columns: 1fr; gap: 10px; }
   .difficulty-grid { grid-template-columns: 1fr; gap: 10px; }
   .difficulty-card { padding: 15px 14px; gap: 7px; }
   .relic-card { padding: 14px; }
-  .home-split { grid-template-columns: 1fr; gap: 18px; }
+  .home-split { grid-template-columns: 1fr; gap: 14px; }
   .legend-row { grid-template-columns: 1fr; }
+  .guide-steps { grid-template-columns: 1fr; gap: 9px; }
+  /* One column means the hall sits under the menu rather than beside it, and
+     five names is suddenly five rows of scroll. Three still says who to beat. */
+  .hall-preview-list li:nth-child(n+4) { display: none; }
+  .home-flavour { margin-top: 10px; }
+  .home-stats { margin-top: 12px; gap: 14px; }
+  .home-stats b { font-size: 17px; }
+  .home-controls { margin-top: 10px; }
   .toast-stack { top: 15%; }
   .action-prompt { margin-bottom: 178px; }
   .beast-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
@@ -930,6 +1060,7 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
      board is for. */
   table.board td.mode, table.board th:nth-child(4) { display: none; }
   table.board td:nth-child(6), table.board th:nth-child(6) { display: none; }
+  table.board td.mercy, table.board th:nth-child(7) { display: none; }
   table.board th, table.board td { padding-left: 6px; padding-right: 6px; }
 }
 @media (max-width: 430px) {
@@ -937,19 +1068,43 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
   table.board td:nth-child(3), table.board th:nth-child(3) { display: none; }
   table.board { font-size: 13px; }
 }
+
+/* A short viewport: a phone with the browser's own chrome taking a third of
+   it, or a laptop window that is not full height. The home screen gives things
+   up in order of what they are worth -- the flavour line, then the subtitle and
+   the tail of the stats -- so that "Begin the descent" never needs scrolling to.
+   Everything given up here is still reachable somewhere else. */
+@media (max-height: 760px) {
+  .home-panel { padding-top: 18px; padding-bottom: 18px; }
+  .home-panel h1.title { font-size: clamp(26px, 6vw, 42px); }
+  .home-flavour { display: none; }
+  .home-split { margin-top: 14px; }
+  .home-panel .menu { gap: 8px; }
+  .home-stats { margin-top: 12px; }
+  .home-controls { margin-top: 10px; }
+  .home-panel .build-stamp { margin-top: 12px; }
+  .home-panel .build-stamp-btn small { display: none; }
+}
+@media (max-height: 640px) {
+  .home-panel .subtitle { display: none; }
+  .hall-preview-list li:nth-child(n+4) { display: none; }
+  /* Runs, deepest and best score are the three that make you press the button. */
+  .home-stats > div:nth-child(n+4) { display: none; }
+  .home-panel .build-stamp-links { margin-top: 6px; }
+}
 @media (max-height: 520px) {
   .panel { padding: 14px 16px; }
   h1.title { font-size: clamp(24px, 5vw, 38px); }
   .menu { margin-top: 16px; gap: 8px; }
   .dpad { width: 122px; height: 122px; }
   .dpad-stick { width: 54px; height: 54px; margin: -27px 0 0 -27px; }
-  .diamond { width: 140px; height: 140px; }
-  .dbtn, .diamond-hub { width: 52px; height: 52px; }
-  .dbtn.north { left: 44px; }
-  .dbtn.east { top: 44px; }
-  .dbtn.south { left: 44px; }
-  .dbtn.west { top: 44px; }
-  .diamond-hub { top: 54px; left: 54px; width: 32px; height: 32px; }
+  .diamond { width: 140px; height: 108px; }
+  .dbtn, .diamond-hub { width: 50px; height: 50px; }
+  .dbtn.north { top: 0; left: 90px; }
+  .dbtn.east { top: 58px; left: 90px; }
+  .dbtn.south { top: 58px; left: 0; }
+  .dbtn.west { top: 0; left: 0; }
+  .diamond-hub { top: 39px; left: 55px; width: 30px; height: 30px; }
   .dbtn-arrow { width: 18px; height: 18px; }
   .tbtn { width: 62px; height: 62px; }
   .buttons { grid-template-columns: repeat(2, 62px); }

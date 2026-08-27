@@ -34,6 +34,10 @@ export function tileOpen(world, x, y) {
     const gate = world.gateAt(x, y);
     if (!gate || !gate.open) return false;
   }
+  // A pushable stone is as solid as the wall it was cut from, to everything
+  // that walks -- the player included. Walking into one is not a step, it is
+  // a shove, and that is handled a level up in the chooser.
+  if (world.blockAt && world.blockAt(x, y)) return false;
   return !world.sealBlocks.has(world.grid.idx(x, y));
 }
 
@@ -256,6 +260,14 @@ export class GridMover {
     if (!dir && opts.doorAssist) {
       dir = doorwayStep(world, this.tileX, this.tileY, desired, this.heading, opts.isBlocked);
       if (dir) this.assisted = true;
+    }
+    // Still nothing. The stone in the way may be one that moves -- and if it
+    // does, shoving it is the same press as walking, so it happens here rather
+    // than on a verb of its own. Tried last, after every ordinary way through
+    // has been ruled out, so a block never steals a step that had somewhere
+    // else to go.
+    if (!dir && opts.tryPush) {
+      dir = opts.tryPush(this.tileX, this.tileY, desired, this.heading) || null;
     }
     if (dir && opts.ice) this.slideSteps = ICE_SLIDE_TILES;
     return dir;

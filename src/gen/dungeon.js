@@ -15,6 +15,7 @@ import { RNG } from '../core/rng.js';
 import { clamp } from '../core/util.js';
 import { T, keyColour } from './tiles.js';
 import { Grid, bfsField, N4, DisjointSet, rectCentre, rectContains } from './grid.js';
+import { placeDecals } from './decals.js';
 import { HAZARDS, BIOME_HAZARDS, BIOMES, pairAllowed, hazardBudget, biomeForDepth } from './biomes.js';
 import { enemyPoolFor, bossForDepth, BEHAVIOUR } from '../game/enemyData.js';
 import { validateLevel } from './validate.js';
@@ -681,10 +682,126 @@ function addProps(level, rng, depth, ctx) {
   if (depth >= 2 && rng.bool(depth >= 4 ? 0.62 : 0.4)) {
     place('altar', { used: false, seed: rng.next() }, false);
   }
+  addBlocks(level, rng, depth, busy, mark);
   addCaptives(level, rng, depth, busy, mark);
   addMaps(level, rng, depth, place);
   addFires(level, rng, depth, candidates, mark);
   addDecor(level, rng, candidates);
+}
+
+// Stones somebody put here on purpose.
+//
+// A block sits on ordinary floor with a one-tile alcove cut into the wall
+// beside it, and something worth having in the alcove. The block is solid, so
+// the alcove cannot be walked into while it is there; walk into the block
+// instead and it slides a tile, and the way is open.
+//
+// Two rules make this safe rather than a way to wedge a depth shut:
+//
+//   * A block is never on the route to anything the depth requires. It stands
+//     where the floor is wide enough that treating the tile as wall changes
+//     nothing about what is reachable -- checked here against the level as
+//     generated, and asserted again in validate.js, so a block can never be
+//     the reason a labyrinth cannot be finished.
+//   * A block is never pushed into its own alcove. That is enforced at the
+//     moment of the push (see World.tryPush), because it is the one move that
+//     would seal the reward away for good.
+//
+// They are optional content in the same sense vaults and cracked walls are:
+// the autopilot completes every depth without touching one.
+function addBlocks(level, rng, depth, busy, mark) {
+  const { grid } = level;
+  if (level.isBoss) return;
+
+  // What is reachable with every block standing. Compared against the same
+  // flood with none, so a block that would cost the player a single tile of
+  // the depth is rejected rather than shipped.
+  const openFlood = () => bfsField(grid, [level.entrance], (x, y, t) =>
+    t === T.FLOOR || t === T.STAIRS || t === T.ENTRANCE || t === T.GATE);
+  const before = openFlood();
+
+  const taken = new Set();
+  const candidates = [];
+  for (const { x, y } of level.floorCells) {
+    if (busy.has(grid.idx(x, y))) continue;
+    // Room for the player to stand on one side and the block to travel to the
+    // other, and enough open ground around it that it is not a bottleneck.
+    let open = 0;
+    for (const [dx, dy] of N4) if (grid.get(x + dx, y + dy) === T.FLOOR) open++;
+    if (open < 3) continue;
+    // Somewhere to cut the alcove: solid rock with solid rock on three sides
+    // of it, so what is carved is a dead end and never a shortcut.
+    for (const [dx, dy] of N4) {
+      const wx = x + dx, wy = y + dy;
+      if (grid.get(wx, wy) !== T.WALL) continue;
+      if (wx < 2 || wy < 2 || wx >= grid.w - 2 || wy >= grid.h - 2) continue;
+      let solid = true;
+      for (const [ox, oy] of N4) {
+        if (ox === -dx && oy === -dy) continue;      // back towards the block
+        if (grid.get(wx + ox, wy + oy) !== T.WALL) { solid = false; break; }
+      }
+      if (!solid) continue;
+      // At least one line to be shoved along: floor behind to stand on, floor
+      // ahead to travel into, neither of them the alcove.
+      const lanes = N4.filter(([px, py]) => (px !== dx || py !== dy)
+        && (px !== -dx || py !== -dy)
+        && grid.get(x + px, y + py) === T.FLOOR
+        && grid.get(x - px, y - py) === T.FLOOR);
+      if (!lanes.length) continue;
+      candidates.push({ x, y, alcove: { x: wx, y: wy } });
+      break;
+    }
+  }
+  rng.shuffle(candidates);
+
+  // Never a gallery of them: one is a curiosity, three is a chore.
+  const want = Math.min(candidates.length, rng.int(0, 1) + (depth >= 5 ? 1 : 0));
+  for (const spot of candidates) {
+    if (level.blocks.length >= want) break;
+    if (taken.has(grid.idx(spot.x, spot.y))) continue;
+
+    // Provisionally place it, then prove the depth is no smaller for it.
+    const wasWall = grid.get(spot.alcove.x, spot.alcove.y);
+    grid.set(spot.alcove.x, spot.alcove.y, T.FLOOR);
+    const solidHere = new Set([grid.idx(spot.x, spot.y)]);
+    for (const b of level.blocks) solidHere.add(grid.idx(b.x, b.y));
+    const after = bfsField(grid, [level.entrance], (x, y, t) => {
+      if (solidHere.has(grid.idx(x, y))) return false;
+      return t === T.FLOOR || t === T.STAIRS || t === T.ENTRANCE || t === T.GATE;
+    });
+    let costsGround = false;
+    for (let i = 0; i < before.length; i++) {
+      if (before[i] < 0 || after[i] >= 0) continue;
+      if (solidHere.has(i)) continue;
+      costsGround = true;
+      break;
+    }
+    if (costsGround) {
+      grid.set(spot.alcove.x, spot.alcove.y, wasWall);
+      continue;
+    }
+
+    level.floorCells.push({ x: spot.alcove.x, y: spot.alcove.y });
+    level.blocks.push({
+      id: 'block_' + level.blocks.length,
+      x: spot.x, y: spot.y,
+      homeX: spot.x, homeY: spot.y,
+      alcove: { x: spot.alcove.x, y: spot.alcove.y },
+      moved: false,
+      seed: rng.next(),
+    });
+    level.blockPockets.push({ x: spot.alcove.x, y: spot.alcove.y });
+    // What is behind it. The same pool a cracked wall pays out, because a
+    // stone that has to be shoved is the same size of secret as one that has
+    // to be broken, and inventing a new reward tier for it would say otherwise.
+    level.props.push({
+      type: rng.weighted(['treasure', 'potion', 'arrows'], (t) => (t === 'treasure' ? 2 : 1)),
+      x: spot.alcove.x + 0.5, y: spot.alcove.y + 0.5,
+      behindBlock: level.blocks[level.blocks.length - 1].id,
+    });
+    taken.add(grid.idx(spot.x, spot.y));
+    mark(spot.x, spot.y, 1);
+  }
 }
 
 // Somebody else got here first.
@@ -729,6 +846,12 @@ function addCaptives(level, rng, depth, busy, mark) {
       y: spot.y + 0.5 + spot.wall[1] * 0.28,
       wallX: spot.wall[0], wallY: spot.wall[1],
       mood, seed: rng.next(), spoken: false, searched: false, freed: false,
+      // Whether this one wants to die. Kept apart from the mood, which is
+      // what the player *sees*: a begging captive is visibly begging from
+      // across the room, but what they are begging for is the mechanical
+      // question, and it is settled here rather than at the moment of the
+      // swing so that the same seed always meets the same person.
+      pleadToDie: mood === 'begging',
       // What they know, if they know anything. Resolved when they are spoken
       // to, so it can point at what is still unfound at that moment.
       knows: rng.weighted(['exit', 'key', 'secret', 'treasure', 'nothing'],
@@ -1132,6 +1255,8 @@ function emptyLevel(depth, seed, w, h) {
     grid: new Grid(w, h, T.WALL),
     zones: [], zoneInfo: [], rooms: [], gates: [], keys: [], secrets: [],
     props: [], decor: [], sconces: [], spawns: [], encounters: [],
+    blocks: [], blockPockets: [],
+    decals: [],
     entrance: null, stairs: null, floorCells: [], freeRooms: [],
     isBoss: false, boss: null, hasCrossbowPickup: false,
     ladders: [], vaults: [], mazeHeight: h,
@@ -1418,6 +1543,11 @@ export function generateLevel(options = {}) {
       level.validation = report;
       level.attempts = attempt + 1;
       level.rejected = failures;
+      // Marks on the floor, laid on after the depth has been proved sound and
+      // never before it. They are decoration: nothing in validate.js knows they
+      // exist, and placing them here rather than during carving is what makes
+      // that guarantee structural rather than a promise.
+      level.decals = placeDecals(level, rng.fork('decals'));
       return level;
     }
     failures.push(report.errors.join(' | '));
@@ -1425,6 +1555,7 @@ export function generateLevel(options = {}) {
 
   const level = buildFallback(depth, new RNG(seed + '|fallback|' + depth), seed, ctx);
   level.validation = validateLevel(level);
+  level.decals = placeDecals(level, new RNG(seed + '|fallback-decals|' + depth));
   level.attempts = maxAttempts + 1;
   level.rejected = failures;
   level.usedFallback = true;

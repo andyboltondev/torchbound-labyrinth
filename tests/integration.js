@@ -6,6 +6,9 @@
 // rendering or audio is required.
 
 import { generateLevel } from '../src/gen/dungeon.js';
+import { validateLevel } from '../src/gen/validate.js';
+import { DECALS, decalBudget } from '../src/gen/decals.js';
+import { TIERS } from '../src/core/perf.js';
 import { Run } from '../src/game/run.js';
 import { World } from '../src/game/world.js';
 import { Enemy } from '../src/game/enemies.js';
@@ -19,8 +22,11 @@ import { VERSION } from '../src/core/version.js';
 import { bfsField, N4 } from '../src/gen/grid.js';
 import { RNG } from '../src/core/rng.js';
 import { SoundField } from '../src/game/soundfield.js';
+import { tileOpen, canStepTo } from '../src/game/gridmove.js';
+import { VOICE_REACH } from '../src/game/enemyData.js';
 import { HP_FLOOR, REWARDS, SACRIFICES, REWARD_BY_ID, SACRIFICE_BY_ID } from '../src/game/altars.js';
-import { toCsv, parseCsv, normalise, rank, merge, HALL_SIZE } from '../src/game/hall.js';
+import { toCsv, parseCsv, normalise, rank, merge, scramble, unscramble, HALL_SIZE }
+  from '../src/game/hall.js';
 import { hazardBudget, HAZARDS } from '../src/gen/biomes.js';
 import { DIFFICULTIES, DIFFICULTY_LIST } from '../src/game/difficulty.js';
 
@@ -504,6 +510,82 @@ test('sound will not go through a wall, and pays for every corner it turns', () 
   assert(bent.echo > far.echo, 'a bend did not muddy the sound');
 });
 
+test('a longer tail reaches further without getting louder up close', () => {
+  // The whole point of the tail argument. Scaling loudness would have done
+  // the reaching, but the falloff runs to zero at the edge, so pushing the
+  // edge out lifts every distance with it -- including the ones under your
+  // nose. A groan two tiles away must sound exactly as it always did.
+  const level = generateLevel({ depth: 3, seed: 'tail-1', context: {} });
+  const start = level.floorCells.find((c) => {
+    for (let d = 0; d <= 12; d++) if (level.grid.get(c.x + d, c.y) !== T.FLOOR) return false;
+    return true;
+  });
+  assert(start, 'no straight run of floor to measure along');
+
+  const field = new SoundField(level.grid);
+  field.build(start.x + 0.5, start.y + 0.5, 12, () => false);
+
+  const near = (tail) => field.hear(start.x + 1.5, start.y + 0.5, 1, tail);
+  const plain = near(1);
+  const stretched = near(2.5);
+  assert(plain && stretched, 'a tile away was inaudible');
+  assertNear(stretched.volume, plain.volume, 0.02,
+    `a stretched tail changed the near field: ${plain.volume} -> ${stretched.volume}`);
+
+  // ...and the far end genuinely extends. Eleven tiles out is silent on the
+  // plain curve and a whisper on the stretched one.
+  const outer = (tail) => field.hear(start.x + 11.5, start.y + 0.5, 1, tail);
+  const plainFar = outer(1);
+  const stretchedFar = outer(2.5);
+  assert(stretchedFar && stretchedFar.volume > 0, 'the stretched tail did not reach');
+  assert(!plainFar || stretchedFar.volume > plainFar.volume * 2,
+    'the stretched tail was no louder at the edge than the plain one');
+
+  // Distance and corner count describe the journey, not the curve, so neither
+  // may move when only the tail does -- occlusion and echo hang off them.
+  assertNear(stretchedFar.distance, plainFar ? plainFar.distance : stretchedFar.distance,
+    0.001, 'the tail changed how far the sound had travelled');
+});
+
+test('a captive is heard from further off than a creature', () => {
+  // Two knobs, deliberately different sizes: a screaming captive is a landmark
+  // you hear from the far end of a depth, a groan is a warning about the next
+  // room. If they ever converge the scream stops being worth crossing to.
+  //
+  // Measured as where each curve drops under the 0.015 cutoff world.hearSfx
+  // uses, solved from the curve rather than asserted from the constants --
+  // the shape is what decides it, and the shape is the thing that changed.
+  const audibleTo = (loudness, tail, range = 14) => {
+    const reach = range * loudness * tail;
+    return reach * (1 - Math.pow(0.015, 1 / (2 * tail)));
+  };
+  const plain = audibleTo(1, 1);
+  const voice = audibleTo(1, VOICE_REACH);
+  const scream = audibleTo(1.6, 3);        // world.js: SCREAM_DRAW, SCREAM_REACH
+
+  assert(VOICE_REACH > 1, 'creature voices carry no further than the plain curve');
+  assert(voice > plain * 1.15,
+    `a voice reaches ${voice.toFixed(1)} tiles against a plain ${plain.toFixed(1)}`);
+  assert(scream > voice * 1.8,
+    `a scream (${scream.toFixed(1)}) is not clearly further than a voice (${voice.toFixed(1)})`);
+  // The straight-line cull in updateCaptives has to sit outside the reach, or
+  // it silently becomes the thing deciding what is audible.
+  assert(scream < 44, `a scream reaches ${scream.toFixed(1)}, past its own 44-tile cull`);
+});
+
+test('the hearing field is flooded wide enough for the longest tail', () => {
+  // The one way the tail could fail silently: a sound given a long tail but no
+  // ground to travel over comes out *inaudible* rather than faint, because the
+  // flood never stamped the tile it was made on.
+  const { world } = makeWorld(4, 'sound-tail');
+  step(world, 20);
+  assert(world.hearing.span >= world.hearing.range * 3 - 0.001,
+    `the field floods to ${world.hearing.span} against a reference of ${world.hearing.range}`);
+  // ...and the reference itself is untouched, so ordinary sounds are unmoved.
+  assertNear(world.hearing.range, world.hearingRange, 0.001,
+    'the flood moved the distance sounds are measured against');
+});
+
 test('hearing reaches further than the torch, and further again in the dark', () => {
   const { world } = makeWorld(4, 'sound-2');
   step(world, 20);
@@ -893,8 +975,8 @@ test('the hall keeps fifty names, in order, and never the same run twice', () =>
     assert(ranked[i - 1].score >= ranked[i].score, 'the hall is out of order at ' + i);
   }
 
-  // Merging a table into itself must be a no-op, or importing your own
-  // export doubles every name you have.
+  // Merging a table into itself must be a no-op: every write re-reads the
+  // stored board and merges into it, so a second tab must not double it.
   const twice = merge(ranked, ranked);
   assert(twice.length === ranked.length, `merging with itself grew the hall to ${twice.length}`);
 
@@ -1264,6 +1346,15 @@ test('every relic gives something up, in numbers and not only in prose', () => {
     // A cost line that says there is no cost is not a cost line.
     assert(!/^none\b/i.test(relic.cost.trim()),
       `${relic.id} claims to be free: "${relic.cost}"`);
+
+    // Short enough to be read in the two seconds anybody spends on a relic
+    // card while the clock is running. Several of these used to run to three
+    // lines apiece, which puts a paragraph between the player and a choice --
+    // and a paragraph nobody reads is worse than a sentence that is blunt.
+    assert(relic.text.length <= 78,
+      `${relic.id} description is ${relic.text.length} characters: "${relic.text}"`);
+    assert(relic.cost.length <= 78,
+      `${relic.id} cost line is ${relic.cost.length} characters: "${relic.cost}"`);
 
     // And the prose has to be backed by the numbers. Applied at one stack and
     // at its limit, every relic must move at least one modifier in the
@@ -1758,6 +1849,401 @@ test('the Ashen Hourglass roughly doubles the time bonus', () => {
   assertNear(boostedTime / plainTime, 2, 0.15, 'Ashen Hourglass time multiplier');
 });
 
+test('the cheapest tier gained no new work', () => {
+  // The fidelity pass added exactly one thing that draws per frame -- the
+  // marks on the floor -- and it is off on Low. Everything else it changed is
+  // either baked once per biome (masonry bevel and grain) or the same number
+  // of draw calls with different arithmetic in them (face lighting, actor
+  // shadows). This is the assertion that keeps that true: if a later change
+  // gives Low something new to do, it has to come and argue with this test.
+  const low = TIERS.find((t) => t.id === 'low');
+  const medium = TIERS.find((t) => t.id === 'medium');
+  const high = TIERS.find((t) => t.id === 'high');
+  assert(low && medium && high, 'the three tiers are not all present');
+
+  // The renderer's gate for the decal pass, stated here so the two cannot
+  // drift apart silently.
+  assert(!(low.ambience > 0.2), `Low would draw floor marks at ambience ${low.ambience}`);
+  assert(medium.ambience > 0.2 && high.ambience > 0.2,
+    'the floor marks are switched off above the cheapest tier');
+
+  // And the ladder still goes up: every tier is at least as capable as the one
+  // below it, which is what makes stepping down a safe thing for Perf to do.
+  assert(low.scale <= medium.scale && medium.scale <= high.scale, 'tier scale is out of order');
+  assert(!low.bloom && high.bloom, 'bloom is no longer the top tier only');
+});
+
+// --- the buried ------------------------------------------------------------
+
+function findBuried(prefix) {
+  for (let i = 0; i < 60; i++) {
+    const made = makeWorld(6, prefix + '-' + i);
+    const buried = made.world.enemies.find((e) => e.entombed);
+    if (buried) return { ...made, buried };
+  }
+  return null;
+}
+
+test('a buried thing has no tell at all until it is stood on', () => {
+  const found = findBuried('buried');
+  assert(found, 'sixty depths produced nothing buried');
+  const { world, buried } = found;
+
+  assert(buried.dormant && buried.entombed, 'a buried thing is not dormant');
+  // Nothing to hear.
+  const before = buried.voiceTimer;
+  buried.updateVoice(10, world, false);
+  assert(buried.voiceTimer === before, 'a buried thing spoke');
+  // Nothing to hit. A bolt down the passage goes over it.
+  const hp = buried.hp;
+  buried.takeDamage(999, world, 'bolt');
+  assert(buried.hp === hp && !buried.dead, 'a buried thing was killed through the floor');
+  // Nothing standing in the way, either: you have to be able to walk onto it.
+  world._refreshOccupancy();
+  assert(!world.occupied.has(world.grid.idx(buried.mover.tileX, buried.mover.tileY)),
+    'a buried thing was holding its tile against the player');
+});
+
+test('walking onto one brings it up, and the floor keeps the hole', () => {
+  const found = findBuried('unearth');
+  assert(found, 'nothing buried to stand on');
+  const { world, buried } = found;
+  const holesBefore = world.level.decals.filter((d) => d.kind === 'hole').length;
+
+  place(world, buried.mover.tileX, buried.mover.tileY);
+  step(world, 30);
+
+  assert(!buried.entombed, 'standing on one left it buried');
+  const holesAfter = world.level.decals.filter((d) => d.kind === 'hole').length;
+  assert(holesAfter === holesBefore + 1, 'coming up left no hole');
+
+  // ...and from here it is an ordinary creature: hittable, and countable.
+  step(world, 60);
+  const hp = buried.hp;
+  buried.takeDamage(5, world, 'sword');
+  assert(buried.hp < hp, 'an unearthed thing still could not be hit');
+});
+
+test('a false hole is the same mark, and never anything more', () => {
+  // The decoys come through the decal table, which is what keeps them honest:
+  // one sprite, one code path, and no property a player could read off the
+  // screen to tell a real hole from an empty one.
+  const decoy = DECALS.find((d) => d.id === 'hole');
+  assert(decoy, 'the hole is not in the decal table');
+
+  let decoys = 0;
+  let buried = 0;
+  for (let i = 0; i < 40; i++) {
+    const level = generateLevel({ depth: 6, seed: 'decoy-' + i, context: {} });
+    decoys += level.decals.filter((d) => d.kind === 'hole').length;
+    buried += level.spawns.filter((sp) => sp.defId === 'gravebound').length;
+    for (const d of level.decals) {
+      if (d.kind !== 'hole') continue;
+      // Never sitting on top of something genuinely down there, which would
+      // turn the decoy into a marker for the real thing.
+      for (const sp of level.spawns) {
+        assert(Math.hypot(sp.x - d.x, sp.y - d.y) >= 5,
+          'a false hole was placed on top of a spawn');
+      }
+    }
+  }
+  assert(buried > 0, 'forty depths spawned nothing buried at all');
+  assert(decoys > 0, 'forty depths produced no false holes');
+  assert(decoys < buried, `${decoys} false holes against ${buried} real ones is not rarer`);
+});
+
+// --- marks on the floor -----------------------------------------------------
+
+test('decals are decoration and the validator has never heard of them', () => {
+  // The load-bearing assertion of the whole decal system. If a mark could ever
+  // change what the validator says about a depth, it would have stopped being
+  // a hint and become a key -- and the guarantee that hints are optional would
+  // be a comment rather than a fact.
+  for (let depth = 1; depth <= 12; depth += 3) {
+    const level = generateLevel({ depth, seed: 'decal-' + depth, context: {} });
+    assert(Array.isArray(level.decals), `depth ${depth} generated no decal list`);
+    const before = validateLevel(level);
+    const stripped = { ...level, decals: [] };
+    const after = validateLevel(stripped);
+    assert(before.ok === after.ok, 'removing the marks changed whether the depth is valid');
+    assert(before.errors.length === after.errors.length,
+      'removing the marks changed what the validator complained about');
+    assert(before.orphans === after.orphans, 'the marks changed the orphan sweep');
+  }
+});
+
+test('marks are sparse, seeded and lie on real floor', () => {
+  const a = generateLevel({ depth: 8, seed: 'decal-same', context: {} });
+  const b = generateLevel({ depth: 8, seed: 'decal-same', context: {} });
+  const shape = (level) => level.decals
+    .map((d) => [d.kind, d.x, d.y, d.dx, d.dy].join(':')).join('|');
+  assert(shape(a) === shape(b), 'the same seed laid different marks');
+
+  assert(a.decals.length <= decalBudget(8),
+    `${a.decals.length} marks on a depth budgeted ${decalBudget(8)}`);
+  // Sparse means sparse: a mark on any real fraction of the floor is wallpaper.
+  assert(a.decals.length < a.floorCells.length * 0.05,
+    `${a.decals.length} marks over ${a.floorCells.length} floor cells is not sparse`);
+
+  for (const d of a.decals) {
+    assert(a.grid.get(Math.floor(d.x), Math.floor(d.y)) === T.FLOOR,
+      `a ${d.kind} mark is inside a wall`);
+    assert(d.dx !== 0 || d.dy !== 0, `a ${d.kind} mark points nowhere`);
+    assert(DECALS.some((entry) => entry.id === d.kind),
+      `a mark of kind "${d.kind}" is not in the table`);
+  }
+});
+
+test('a new kind of mark is a table entry and nothing else', () => {
+  // The extension point, asserted rather than promised: the next stage adds a
+  // decoy hole through this table, and it must not need the placement pass,
+  // the generator or the renderer's list-building to be touched to do it.
+  for (const entry of DECALS) {
+    assert(typeof entry.id === 'string' && entry.id.length > 1, 'a decal entry has no id');
+    assert(typeof entry.rule === 'function', `decal "${entry.id}" has no placement rule`);
+  }
+  const level = generateLevel({ depth: 6, seed: 'decal-table', context: {} });
+  const rng = new RNG('decal-table-probe');
+  for (const entry of DECALS) {
+    const placed = entry.rule(level, rng, 3) || [];
+    assert(Array.isArray(placed), `decal "${entry.id}" did not return a list`);
+    assert(placed.length <= 3, `decal "${entry.id}" ignored the budget it was given`);
+    for (const p of placed) {
+      assert(p.kind === entry.id, `decal "${entry.id}" placed a mark of kind "${p.kind}"`);
+    }
+  }
+});
+
+// --- pushable stones --------------------------------------------------------
+
+function findBlockLevel(prefix, depth = 6) {
+  for (let i = 0; i < 60; i++) {
+    const made = makeWorld(depth, prefix + '-' + i);
+    if (made.world.blocks.length) return made;
+  }
+  return null;
+}
+
+test('a pushable stone is never on the way to anything the depth requires', () => {
+  // The whole safety argument, stated as the validator states it: model every
+  // block as solid rock and the depth must lose no ground at all beyond the
+  // stones themselves and the pockets they guard. That covers keys, gates,
+  // vault ladders and the exit without having to reason about each.
+  let seen = 0;
+  for (let depth = 2; depth <= 12; depth += 2) {
+    for (let i = 0; i < 12; i++) {
+      const level = generateLevel({ depth, seed: 'blocks-' + depth + '-' + i, context: {} });
+      const report = validateLevel(level);
+      assert(report.ok, `depth ${depth} seed ${i}: ${report.errors.join('; ')}`);
+      seen += level.blocks.length;
+      for (const b of level.blocks) {
+        assert(level.grid.get(b.x, b.y) === T.FLOOR, 'a stone is standing in a wall');
+        assert(level.grid.get(b.alcove.x, b.alcove.y) === T.FLOOR,
+          'a stone is guarding solid rock');
+        const idx = level.grid.idx(b.x, b.y);
+        assert(idx !== level.grid.idx(level.stairs.x, level.stairs.y),
+          'a stone is sitting on the stair');
+      }
+    }
+  }
+  assert(seen > 0, 'sixty depths produced no pushable stones at all');
+});
+
+test('a stone shoves one tile, and never into what it is guarding', () => {
+  const found = findBlockLevel('shove');
+  assert(found, 'no depth with a stone on it');
+  const { world } = found;
+  const block = world.blocks[0];
+
+  // Into the pocket is the one move that would seal the reward away, and it is
+  // refused however hard it is pressed.
+  const toPocket = { x: block.alcove.x - block.x, y: block.alcove.y - block.y };
+  assert(!world._canShove(block, toPocket), 'a stone can be pushed into its own pocket');
+
+  // Some legal direction exists, or the stone is furniture rather than a puzzle.
+  const lanes = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }]
+    .filter((d) => world._canShove(block, d));
+  assert(lanes.length > 0, 'a stone that cannot be shoved anywhere at all');
+
+  const from = { x: block.x, y: block.y };
+  world._shove(block, lanes[0]);
+  assert(block.x === from.x + lanes[0].x && block.y === from.y + lanes[0].y,
+    'a shove moved the stone somewhere other than one tile on');
+  // Occupancy moves on the instant, because the player steps into the vacated
+  // tile in the same frame.
+  assert(!world.blockAt(from.x, from.y), 'the stone is still occupying the tile it left');
+  assert(world.blockAt(block.x, block.y) === block, 'the stone is not where it went');
+  assert(tileOpen(world, from.x, from.y), 'the tile a stone left is still closed');
+});
+
+test('shoving a stone counts once, on the same tally as a cracked wall', () => {
+  const found = findBlockLevel('count');
+  assert(found, 'no depth with a stone on it');
+  const { world, run } = found;
+  const block = world.blocks[0];
+  const lane = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }]
+    .find((d) => world._canShove(block, d));
+  assert(lane, 'nowhere to shove it');
+
+  const before = run.score.level.secretsFound;
+  world._shove(block, lane);
+  assert(run.score.level.secretsFound === before + 1, 'a shove scored no secret');
+  assert(block.moved, 'a shoved stone was not marked as opened');
+
+  // ...and a second shove of the same stone is movement, not another discovery.
+  const again = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }]
+    .find((d) => world._canShove(block, d));
+  if (again) {
+    world._shove(block, again);
+    assert(run.score.level.secretsFound === before + 1, 'the same stone paid out twice');
+  }
+});
+
+test('a stone is solid to everything that walks', () => {
+  const found = findBlockLevel('solid');
+  assert(found, 'no depth with a stone on it');
+  const { world } = found;
+  const block = world.blocks[0];
+  assert(!tileOpen(world, block.x, block.y), 'a stone is walkable');
+  // ...including to whatever else is down here. Enemies path with the same
+  // test the player does, so nothing can walk through one or get wedged in it.
+  for (const dir of [{ x: 1, y: 0 }, { x: 0, y: 1 }]) {
+    assert(!canStepTo(world, block.x - dir.x, block.y - dir.y, dir),
+      'something could step onto a stone');
+  }
+});
+
+// --- captives ---------------------------------------------------------------
+
+// A depth with somebody on it. Captives are placed against walls with at least
+// two exits, so most seeds have one; the search widens rather than assuming.
+function findCaptive(seedPrefix, want) {
+  for (let i = 0; i < 40; i++) {
+    const made = makeWorld(4, seedPrefix + '-' + i);
+    const prop = made.level.props.find(
+      (p) => p.type === 'prisoner' && p.mood !== 'dead' && (!want || want(p)));
+    if (prop) return { ...made, prop };
+  }
+  return null;
+}
+
+test('who asked to die is settled at spawn, not at the moment of the swing', () => {
+  // The flag has to be part of the level, or the same seed stops producing the
+  // same person -- and the whole moral weight of this system rests on the
+  // player being able to say "I met someone" rather than "the game rolled".
+  const a = generateLevel({ depth: 4, seed: 'captive-seed', context: {} });
+  const b = generateLevel({ depth: 4, seed: 'captive-seed', context: {} });
+  const pleas = (level) => level.props
+    .filter((p) => p.type === 'prisoner')
+    .map((p) => (p.pleadToDie ? '1' : '0')).join('');
+  assert(pleas(a) === pleas(b), `the same seed produced ${pleas(a)} and ${pleas(b)}`);
+  for (const prop of a.props.filter((p) => p.type === 'prisoner')) {
+    assert(typeof prop.pleadToDie === 'boolean', 'a captive has no plea either way');
+    if (prop.pleadToDie) assert(prop.mood === 'begging', 'a plea nobody could see');
+  }
+});
+
+test('killing one who asked costs nothing, and one who did not costs a great deal', () => {
+  const asked = findCaptive('plead-yes', (p) => p.pleadToDie);
+  const silent = findCaptive('plead-no', (p) => !p.pleadToDie && p.mood !== 'raving');
+  assert(asked && silent, 'could not find both kinds of captive in forty seeds');
+
+  // Measured on the depth's running subtotal, which is where a bonus or a
+  // penalty actually lands -- the run total is only banked on the stair.
+  const before = asked.run.score.levelSubtotal;
+  asked.world.murderCaptive(asked.prop);
+  assert(asked.run.score.levelSubtotal >= before,
+    `ending one who asked cost ${before - asked.run.score.levelSubtotal}`);
+  assert(asked.run.score.level.penalties === 0, 'granting a plea was recorded as a penalty');
+  assert(asked.run.mercy === 1, `mercy read ${asked.run.mercy} after granting a plea`);
+
+  const was = silent.run.score.levelSubtotal;
+  silent.world.murderCaptive(silent.prop);
+  assert(silent.run.score.levelSubtotal < was, 'killing one who never asked cost nothing');
+  assert(silent.run.score.level.penalties === 1, 'a murder was not recorded as a penalty');
+  assert(silent.run.mercy === -1, `mercy read ${silent.run.mercy} after a murder`);
+});
+
+test('a captive is never killed by the button that frees them', () => {
+  // The Action button opens chests and lights fires. It has never taken a life
+  // and it must not start: a killing should cost a deliberate, separate verb.
+  for (const want of [(p) => p.pleadToDie, (p) => !p.pleadToDie && p.mood !== 'raving']) {
+    const found = findCaptive('button', want);
+    assert(found, 'no captive to try the button on');
+    const { world, run, prop } = found;
+    world.useCaptive(prop);            // listen / speak
+    world.useCaptive(prop);            // and again, which frees them
+    assert(prop.mood !== 'dead', 'the Action button killed a captive');
+    assert(run.mercy > 0, `the button left mercy at ${run.mercy}`);
+  }
+});
+
+test('a freed captive collapses, crawls somewhere sheltered and stays there', () => {
+  const found = findCaptive('crawl', (p) => !p.pleadToDie && p.mood !== 'raving');
+  assert(found, 'no captive to free');
+  const { world, prop } = found;
+  const from = { x: prop.x, y: prop.y };
+
+  world.useCaptive(prop);
+  world.useCaptive(prop);
+  assert(prop.mood === 'collapsing', `freeing left them ${prop.mood}`);
+
+  step(world, 60 * 12);
+  assert(prop.mood === 'settled', `after twelve seconds they were still ${prop.mood}`);
+  assert(prop.freed, 'a settled captive is not marked freed');
+
+  // Wherever they got to, it is real ground with a wall against it -- and they
+  // are not standing where the chain was unless there was nowhere better.
+  assert(tileOpen(world, Math.floor(prop.x), Math.floor(prop.y)),
+    'a captive crawled into a wall');
+  if (prop.crawlTo) {
+    assert(Math.hypot(prop.x - from.x, prop.y - from.y) > 0.3,
+      'a captive with somewhere to go did not move');
+  }
+});
+
+test('a freed captive obstructs nothing', () => {
+  // Props are not obstacles, and this is the assertion that keeps it that way:
+  // the crawl moves a prop around at runtime, long after the generator proved
+  // the depth solvable, so nothing may start depending on where props sit.
+  const found = findCaptive('block', (p) => !p.pleadToDie && p.mood !== 'raving');
+  assert(found, 'no captive to free');
+  const { world, prop } = found;
+  world.useCaptive(prop);
+  world.useCaptive(prop);
+  step(world, 60 * 12);
+  const tx = Math.floor(prop.x), ty = Math.floor(prop.y);
+  assert(tileOpen(world, tx, ty), 'the tile a captive settled on stopped being walkable');
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const t = world.grid.get(tx + dx, ty + dy);
+    if (t === T.FLOOR) {
+      assert(canStepTo(world, tx, ty, { x: dx, y: dy }),
+        'a settled captive blocked a step off their own tile');
+    }
+  }
+});
+
+test('the rare turn is rare, seeded, and never the thing that kills you', () => {
+  // Rolled from the level's own generator: the same seed has to play out the
+  // same way, or "it turned on me" becomes something nobody can share.
+  const runOnce = (seed) => {
+    const found = findCaptive(seed, (p) => p.pleadToDie);
+    if (!found) return null;
+    const { world, prop, run } = found;
+    const hp = run.hp;
+    world.useCaptive(prop);
+    world.useCaptive(prop);
+    return { spurned: !!prop.spurned, lost: hp - run.hp, mercy: run.mercy };
+  };
+  const first = runOnce('turn');
+  const again = runOnce('turn');
+  assert(first && again, 'no pleading captive to refuse');
+  assert(first.spurned === again.spurned, 'the same seed turned differently');
+  assert(first.mercy === 1, 'refusing a plea did not count as freeing them');
+  // Whichever way it fell, it is survivable: a captive is never a death.
+  assert(first.lost < 40, `the turn took ${first.lost} health`);
+});
+
 // --- difficulty -------------------------------------------------------------
 
 test('a difficulty actually reaches the things it claims to change', () => {
@@ -1815,6 +2301,53 @@ test('difficulty multipliers survive a relic recompute without stacking', () => 
   assertNear(once, DIFFICULTIES.ashenvow.mods.enemyHp, 0.0001, 'difficulty multiplier was lost');
 });
 
+test('the stored hall survives a round trip and refuses a doctored one', () => {
+  // The scramble is a speed bump, not a lock -- but a speed bump that loses
+  // the table would be worse than none at all, so the round trip has to be
+  // exact for the awkward cases: commas, quotes, and characters outside
+  // Latin-1, which is where a naive Base64 of a string falls over.
+  const rows = [
+    normalise({ name: 'Ragnvald, the Deep', score: 4200, depth: 9, diff: 'ashenvow',
+      seed: 'a"b,c', mercy: 3 }),
+    normalise({ name: 'Sigrún Þorsdóttir', score: 3100, depth: 7, diff: 'torchbound',
+      mercy: -2 }),
+  ];
+  const csv = toCsv(rows);
+  const stored = scramble(csv);
+  assert(stored.indexOf('Ragnvald') < 0, 'the stored table is still readable as text');
+  assert(unscramble(stored) === csv, 'the table did not survive being put away and fetched back');
+
+  const back = parseCsv(unscramble(stored));
+  assert(back.length === 2, `read ${back.length} rows back from two`);
+  assert(back[1].name === 'Sigrún Þorsdóttir', 'a non-Latin-1 name came back wrong');
+  assert(back[0].mercy === 3 && back[1].mercy === -2,
+    `mercy came back as ${back[0].mercy}/${back[1].mercy}`);
+
+  // Anything edited by hand is discarded rather than half-believed. Flipping
+  // one character of the payload has to be caught by the checksum.
+  const at = Math.floor(stored.length * 0.6);
+  const doctored = stored.slice(0, at)
+    + (stored[at] === 'A' ? 'B' : 'A') + stored.slice(at + 1);
+  assert(unscramble(doctored) === null, 'a doctored table was accepted');
+  assert(unscramble('tb1:not base64 at all') === null, 'rubbish was accepted');
+  assert(unscramble('') === null && unscramble(null) === null, 'an empty table was accepted');
+
+  // A table written before any of this existed is plain CSV with no marker,
+  // and must still be readable -- nobody loses the names they already had.
+  assert(unscramble(csv) === null, 'plain CSV claimed to be scrambled');
+  assert(parseCsv(csv).length === 2, 'the pre-scramble format stopped parsing');
+});
+
+test('a mercy tally is carried through the stored table', () => {
+  // The column is new and nothing writes it yet. What matters today is that a
+  // row without one reads as zero rather than as NaN or an empty string, so
+  // the board built before the prisoner work does not need migrating later.
+  const old = 'name,score,depth,diff\nEydis,7450,5,torchbound';
+  const [row] = parseCsv(old);
+  assert(row.mercy === 0, `a row with no mercy column read as ${row.mercy}`);
+  assert(normalise({ name: 'x', score: 1 }).mercy === 0, 'a fresh entry had no mercy field');
+});
+
 test('only a losable descent is offered to the Hall of Fame', () => {
   for (const diff of DIFFICULTY_LIST) {
     // A mode that hands the stair back on death cannot be ranked against one
@@ -1823,6 +2356,32 @@ test('only a losable descent is offered to the Hall of Fame', () => {
       `${diff.name} offers a retry and still claims a place on the board`);
   }
   assert(DIFFICULTY_LIST.some((d) => d.ranked), 'no difficulty can reach the Hall of Fame');
+});
+
+test('a difficulty card line only appears when it has something to say', () => {
+  for (const diff of DIFFICULTY_LIST) {
+    // The cost line is drawn in the warning colour, so a mode that charges
+    // nothing must leave it null rather than filling it with "none" -- and a
+    // reward belongs in `boon`, which is drawn as a gain, not in `cost`.
+    if (diff.cost != null) {
+      assert(typeof diff.cost === 'string' && diff.cost.trim().length > 3,
+        `${diff.name} has an empty cost line`);
+      assert(!/^none\b/i.test(diff.cost.trim()),
+        `${diff.name} states a cost of "none": "${diff.cost}"`);
+    }
+    if (diff.boon != null) {
+      assert(typeof diff.boon === 'string' && diff.boon.trim().length > 3,
+        `${diff.name} has an empty boon line`);
+    }
+    // Every mode with a score premium has to say so where the player can see it.
+    const paysMore = (diff.mods.scoreMult || 1) > 1;
+    assert(!paysMore || (diff.boon && /\bfifth\b|\b20|\bmore\b/i.test(diff.boon)),
+      `${diff.name} pays a score premium its card never mentions`);
+  }
+  // The baseline carries neither line: it is the thing the others are measured
+  // against, not a deal with terms.
+  assert(!DIFFICULTIES.torchbound.cost && !DIFFICULTIES.torchbound.boon,
+    'the baseline difficulty should carry no cost or boon line');
 });
 
 // --- autopilot -------------------------------------------------------------

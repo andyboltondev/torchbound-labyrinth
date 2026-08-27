@@ -13,6 +13,16 @@
 // A mode that cannot lose must not be able to win the hall, which is why
 // Hearthlight is unranked. Ashenvow pays a score premium because otherwise
 // the harder mode would be strictly worse for a name on the board.
+//
+// Two card lines describe the deal, and each is only shown when it has
+// something to say:
+//   cost -- a real price the mode charges that its description does not
+//           already spell out. Null when the mode charges nothing extra.
+//   boon -- a reward the mode grants, shown in a different colour so it does
+//           not read as another warning. Null when there is none.
+// Torchbound is the baseline and carries neither. Ashenvow's costs are all in
+// its description already, so it lists only the boon; Hearthlight's cost -- an
+// unranked run -- is nowhere else, so it lists only that.
 
 export const DIFFICULTIES = {
   hearthlight: {
@@ -21,6 +31,7 @@ export const DIFFICULTIES = {
     text: 'The dead swing softer and carry less iron under the skin. Fall, and '
       + 'the stair will take you down again, as many times as it takes.',
     cost: 'A descent that cannot be lost is not written into the Hall of Fame.',
+    boon: null,
     retry: true, ranked: false,
     mods: { enemyHp: 0.78, enemyDamage: 0.7 },
   },
@@ -29,7 +40,8 @@ export const DIFFICULTIES = {
     tagline: 'One flame. One way down.',
     text: 'The labyrinth exactly as it was carved: nothing softened, nothing '
       + 'sharpened. What the dark takes, it keeps.',
-    cost: 'None. This is the measure everything else is set against.',
+    cost: null,
+    boon: null,
     retry: false, ranked: true,
     mods: {},
   },
@@ -38,8 +50,8 @@ export const DIFFICULTIES = {
     tagline: 'You gave your fire away before you started.',
     text: 'A shorter torch, and everything below notices you sooner. The dead '
       + 'hit harder and take longer to put down.',
-    cost: 'None you did not choose. Deeds are worth a fifth more, if you live '
-      + 'to bank them.',
+    cost: null,
+    boon: 'Every deed you live to bank is worth a fifth more.',
     retry: false, ranked: true,
     mods: {
       enemyHp: 1.16, enemyDamage: 1.2, enemyAggro: 1.15,

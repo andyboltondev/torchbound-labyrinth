@@ -20,21 +20,31 @@ export function setShadowLight(x, y, soft = true) {
 
 // A blob shadow that leans away from the torch and lengthens with distance
 // from it, which is most of what sells a hand-held light source.
+//
+// The lean and the stretch both run further than they used to. A torch a room
+// away should throw a long thin shadow, not a slightly oval one -- that is the
+// difference between a light being carried and a light being everywhere. The
+// falloff is unchanged in shape, only in how far it goes before it flattens
+// out, so nothing standing at your feet moves. Every number here is a draw
+// this pass was already making; none of it costs another one.
 export function groundShadow(ctx, sx, sy, rx, ry, alpha = 0.42) {
   const dx = sx - shadowLight.x;
   const dy = (sy - shadowLight.y) * 1.6;      // the view is squashed vertically
   const d = Math.hypot(dx, dy) || 1;
-  const reach = Math.min(1, d / 300);
-  const ox = (dx / d) * rx * 0.5 * reach;
-  const oy = (dy / d) * ry * 0.5 * reach;
-  const stretch = 1 + reach * 0.55;
-  const a = alpha * (1 - reach * 0.4);
+  const reach = Math.min(1, d / 340);
+  const ox = (dx / d) * rx * 0.85 * reach;
+  const oy = (dy / d) * ry * 0.85 * reach;
+  // Lengthened along the light and pinched across it, which is what a long
+  // shadow actually does and what a plain scale-up does not.
+  const stretch = 1 + reach * 1.05;
+  const pinch = 1 - reach * 0.18;
+  const a = alpha * (1 - reach * 0.42);
   const angle = Math.atan2(dy / 1.6, dx);
 
   ctx.save();
   ctx.translate(sx + ox, sy + oy);
   ctx.rotate(angle);
-  ctx.scale(stretch, ry / rx);
+  ctx.scale(stretch, (ry / rx) * pinch);
   if (shadowLight.soft) {
     const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
     g.addColorStop(0, rgba('#000000', a));

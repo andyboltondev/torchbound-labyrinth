@@ -244,23 +244,41 @@ export function drawProp(ctx, prop, t) {
 // something that has stopped being a someone.
 function drawPrisoner(ctx, sx, sy, t, prop) {
   const r = prop.seed;
-  const dead = prop.mood === 'dead' || prop.freed;
+  // Three lives after the chain comes off, and they look like three things.
+  // Collapsing is folding up where they stand; crawling is dragging themselves
+  // low along the floor; settled is slumped against whatever they reached.
+  const collapsing = prop.mood === 'collapsing';
+  const crawling = prop.mood === 'crawling';
+  const settled = prop.mood === 'settled';
+  const loose = collapsing || crawling || settled;
+  const dead = prop.mood === 'dead' || (prop.freed && !loose);
   const raving = prop.mood === 'raving';
   const begging = prop.mood === 'begging';
-  const breathe = dead ? 0 : Math.sin(t * (raving ? 5.2 : 1.5) + r * 9) * (raving ? 2.2 : 0.9);
-  const slump = dead ? 12 : begging ? 5 : 2;
+  // Still alive, so still breathing -- harder than before, in the crawl.
+  const breathe = dead ? 0
+    : Math.sin(t * (raving ? 5.2 : crawling ? 3.4 : 1.5) + r * 9)
+      * (raving ? 2.2 : crawling ? 1.6 : 0.9);
+  const folding = collapsing ? Math.min(1, (prop.collapse || 0) / 0.9) : 0;
+  const slump = dead ? 12
+    : settled ? 15
+      : crawling ? 17
+        : collapsing ? 2 + folding * 13
+          : begging ? 5 : 2;
 
   pedestalShadow(ctx, sx, sy, 11);
 
   // The chains, from the wall behind down to the wrists. Drawn first so the
-  // body hangs in front of them.
-  ctx.strokeStyle = rgba('#6b6459', 0.85);
-  ctx.lineWidth = 1.7;
-  for (const side of [-1, 1]) {
-    ctx.beginPath();
-    ctx.moveTo(sx + side * 9, sy - 40);
-    ctx.quadraticCurveTo(sx + side * 11, sy - 30 + breathe * 0.4, sx + side * 7, sy - 24 + slump);
-    ctx.stroke();
+  // body hangs in front of them. Once they are off the wall there is nothing
+  // holding them up any more, so there is nothing to draw.
+  if (!loose) {
+    ctx.strokeStyle = rgba('#6b6459', 0.85);
+    ctx.lineWidth = 1.7;
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(sx + side * 9, sy - 40);
+      ctx.quadraticCurveTo(sx + side * 11, sy - 30 + breathe * 0.4, sx + side * 7, sy - 24 + slump);
+      ctx.stroke();
+    }
   }
 
   const skin = dead ? '#8c8378' : raving ? '#c9a184' : '#b5967c';
@@ -288,14 +306,22 @@ function drawPrisoner(ctx, sx, sy, t, prop) {
   ctx.closePath();
   ctx.fill();
 
-  // Arms, up to the wrists the chains hold.
+  // Arms. Up to the wrists the chains hold, while there are chains -- and out
+  // in front along the floor once there are not, because that is what pulling
+  // yourself along with them looks like from above.
   ctx.strokeStyle = rgba(skin, 0.95);
   ctx.lineWidth = 3.4;
   for (const side of [-1, 1]) {
-    const reachOut = raving ? 3.5 : begging ? 2 : 0;
+    const reachOut = raving ? 3.5 : begging ? 2 : crawling ? 5 : 0;
     ctx.beginPath();
     ctx.moveTo(sx + side * 4, headY + 6);
-    ctx.lineTo(sx + side * (7 + reachOut), sy - 24 + slump);
+    if (crawling) {
+      // Reaching ahead and a little down: the hands are on the ground.
+      const paw = Math.sin(t * 3.4 + side * 1.6 + r * 5) * 2.4;
+      ctx.lineTo(sx + side * (7 + reachOut), sy - 12 + paw);
+    } else {
+      ctx.lineTo(sx + side * (7 + reachOut), sy - 24 + slump);
+    }
     ctx.stroke();
   }
 
@@ -672,6 +698,181 @@ function drawLadder(ctx, sx, sy, t, prop) {
 }
 
 // --- scenery --------------------------------------------------------------
+
+// --- marks on the floor -----------------------------------------------------
+//
+// Ground-level, low-contrast and drawn flat: these sit under everything, so
+// they are never the thing that hides a key or a creature. They carry no
+// gameplay at all -- see gen/decals.js -- and the only thing the renderer has
+// to get right about them is that they read as evidence rather than as decor.
+export function drawDecal(ctx, decal, t) {
+  const sx = screenX(decal.x, decal.y);
+  const sy = screenY(decal.x, decal.y);
+  // The mark lies along the isometric projection of the direction it means,
+  // so a trail heading north runs up and to the right like the corridor does.
+  const ax = (decal.dx - decal.dy) * HALF_W;
+  const ay = (decal.dx + decal.dy) * HALF_H;
+  const m = Math.hypot(ax, ay) || 1;
+  const ux = ax / m, uy = ay / m;      // along
+  const px = -uy, py = ux;             // across
+
+  switch (decal.kind) {
+    case 'claw': return drawClaw(ctx, sx, sy, ux, uy, px, py, decal);
+    case 'tracks': return drawTracks(ctx, sx, sy, ux, uy, px, py, decal);
+    case 'dust': return drawDust(ctx, sx, sy, ux, uy, px, py, decal);
+    case 'hole': return drawHole(ctx, sx, sy, decal);
+    default: return undefined;
+  }
+}
+
+// Three gouges, dragged the way the thing that made them was going.
+function drawClaw(ctx, sx, sy, ux, uy, px, py, decal) {
+  ctx.strokeStyle = rgba('#1b1510', 0.5);
+  ctx.lineWidth = 1.6;
+  ctx.lineCap = 'round';
+  const len = 11 + decal.seed * 4;
+  for (let i = -1; i <= 1; i++) {
+    const off = i * 3.4;
+    const skew = i * 1.2;
+    ctx.beginPath();
+    ctx.moveTo(sx + px * off - ux * len * 0.5, sy + py * off - uy * len * 0.5);
+    ctx.lineTo(sx + px * (off + skew) + ux * len * 0.5, sy + py * (off + skew) + uy * len * 0.5);
+    ctx.stroke();
+  }
+}
+
+// A pair of prints, offset left and right of the line of travel. Each tile of
+// a trail draws one pair, alternating, so a run of them reads as a walk.
+function drawTracks(ctx, sx, sy, ux, uy, px, py, decal) {
+  ctx.fillStyle = rgba('#221a12', 0.44);
+  const side = decal.step % 2 === 0 ? 1 : -1;
+  for (const lead of [0, 1]) {
+    const along = (lead ? 4 : -4);
+    const across = side * (lead ? 3 : -3);
+    ctx.save();
+    ctx.translate(sx + ux * along + px * across, sy + uy * along + py * across);
+    ctx.rotate(Math.atan2(uy, ux));
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 3.4, 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+// A hole in the floor, and no way at a glance to know whether something came
+// out of it. One of these is where a Gravebound was; the rest are where one
+// was not, and the game will not say which is which. A fresh one still has the
+// spoil heaped round its lip.
+function drawHole(ctx, sx, sy, decal) {
+  const r = 9 + decal.seed * 2.5;
+  // Spoil first, so the hole is cut out of it.
+  ctx.fillStyle = rgba('#3a3229', decal.fresh ? 0.55 : 0.34);
+  ctx.beginPath();
+  ctx.ellipse(sx, sy + 1, r * 1.45, r * 0.78, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // The hole itself: not black, which would read as a pit to fall into, but
+  // dark enough that nothing in it can be made out.
+  ctx.fillStyle = rgba('#0b0e14', 0.86);
+  ctx.beginPath();
+  ctx.ellipse(sx, sy, r, r * 0.52, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // A broken lip on the near side, which is the tell that it was made from
+  // underneath rather than dug.
+  ctx.strokeStyle = rgba('#6d6355', 0.5);
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  ctx.ellipse(sx, sy, r, r * 0.52, 0, Math.PI * 0.15, Math.PI * 0.85);
+  ctx.stroke();
+}
+
+// Floor swept clean in one direction: something heavy went that way.
+function drawDust(ctx, sx, sy, ux, uy, px, py, decal) {
+  const len = 13 + decal.seed * 5;
+  const grad = ctx.createLinearGradient(
+    sx - ux * len * 0.5, sy - uy * len * 0.5, sx + ux * len * 0.5, sy + uy * len * 0.5);
+  grad.addColorStop(0, rgba('#2c2419', 0));
+  grad.addColorStop(0.5, rgba('#2c2419', 0.42));
+  grad.addColorStop(1, rgba('#2c2419', 0));
+  ctx.fillStyle = grad;
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.rotate(Math.atan2(uy, ux));
+  ctx.beginPath();
+  ctx.ellipse(0, 0, len * 0.5, 4.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+// A stone that moves.
+//
+// It has to read as *not* being part of the wall, at the edge of torchlight,
+// without a marker floating over it -- so it is cut squarer than the masonry
+// around it, its faces catch the light a shade warmer, and the ground under it
+// carries the scuff marks of having been shoved before. Nothing glows. The
+// tell is that somebody clearly put it there.
+export function drawPushBlock(ctx, block, at, t) {
+  const sx = screenX(at.x, at.y);
+  const sy = screenY(at.x, at.y);
+  const h = 26;                       // waist height: a thing you shoulder
+  const w = HALF_W * 0.78;
+  const d = HALF_H * 0.78;
+  const jitter = block.sliding ? Math.sin(block.slide * Math.PI * 6) * 0.7 : 0;
+
+  // Drag scuffs. Drawn under the stone and offset back along the way it came,
+  // so a stone that has been moved says so and one that has not looks settled.
+  const scuff = block.moved ? 0.5 : 0.28;
+  ctx.fillStyle = rgba('#141a22', scuff);
+  ctx.beginPath();
+  ctx.ellipse(sx, sy + 2, w * 1.15, d * 1.15, 0, 0, TAU);
+  ctx.fill();
+
+  // Top face.
+  ctx.fillStyle = '#6d6355';
+  ctx.beginPath();
+  ctx.moveTo(sx, sy - h - d + jitter);
+  ctx.lineTo(sx + w, sy - h + jitter);
+  ctx.lineTo(sx, sy - h + d + jitter);
+  ctx.lineTo(sx - w, sy - h + jitter);
+  ctx.closePath();
+  ctx.fill();
+
+  // The two visible sides, the left one darker so the block has a light on it.
+  ctx.fillStyle = '#4b433a';
+  ctx.beginPath();
+  ctx.moveTo(sx - w, sy - h + jitter);
+  ctx.lineTo(sx, sy - h + d + jitter);
+  ctx.lineTo(sx, sy + d + jitter);
+  ctx.lineTo(sx - w, sy + jitter);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#59503f';
+  ctx.beginPath();
+  ctx.moveTo(sx + w, sy - h + jitter);
+  ctx.lineTo(sx, sy - h + d + jitter);
+  ctx.lineTo(sx, sy + d + jitter);
+  ctx.lineTo(sx + w, sy + jitter);
+  ctx.closePath();
+  ctx.fill();
+
+  // A chiselled edge along the top, and a worn band round the middle where
+  // hands and shoulders have been. Both are what separate a cut stone from
+  // the rubble the walls are made of.
+  ctx.strokeStyle = rgba('#8d8064', 0.55);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(sx - w, sy - h + jitter);
+  ctx.lineTo(sx, sy - h - d + jitter);
+  ctx.lineTo(sx + w, sy - h + jitter);
+  ctx.stroke();
+
+  ctx.strokeStyle = rgba('#2a2620', 0.4);
+  ctx.beginPath();
+  ctx.moveTo(sx - w, sy - h * 0.45 + jitter);
+  ctx.lineTo(sx, sy - h * 0.45 + d + jitter);
+  ctx.lineTo(sx + w, sy - h * 0.45 + jitter);
+  ctx.stroke();
+}
 
 export function drawDecor(ctx, d, t) {
   const sx = screenX(d.x, d.y);

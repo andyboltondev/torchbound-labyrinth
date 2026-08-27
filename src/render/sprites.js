@@ -51,6 +51,12 @@ function pointInDiamond(rnd, cx, cy, inset = 0.86) {
 
 // Fine grain, applied inside whatever path is currently clipped. This is what
 // keeps surfaces from reading as flat vector shapes.
+//
+// The counts here are bake-time only -- every tile is drawn once per biome
+// into a canvas and blitted from then on -- so more grain costs a few
+// milliseconds at the start of a depth and exactly nothing per frame. It is
+// the one place in the renderer where detail is close to free, which is why
+// this is where the fidelity is spent rather than on another live pass.
 function grain(ctx, w, h, rnd, amount = 0.05, count = 90) {
   for (let i = 0; i < count; i++) {
     const x = rnd() * w, y = rnd() * h;
@@ -64,15 +70,26 @@ function grain(ctx, w, h, rnd, amount = 0.05, count = 90) {
 
 // One stone: body, a lit bevel along the top and left, a shadowed one along
 // the bottom and right, and a chipped corner or two.
+//
+// The bevel is two-step now rather than one -- a bright edge with a softer
+// shoulder inside it, and a dark edge with the same. One flat band of light on
+// a flat band of colour reads as a drawn rectangle; two makes it read as a
+// face with a thickness to it. It costs two more fillRect per stone at bake
+// time and nothing at all per frame: the tile is baked once per biome and
+// drawn thousands of times, so detail bought here is the cheapest in the game.
 function stone(ctx, x, y, w, h, colour, rnd, bevel = 1.4) {
   ctx.fillStyle = colour;
   ctx.fillRect(x, y, w, h);
   ctx.fillStyle = 'rgba(255,250,238,0.14)';
   ctx.fillRect(x, y, w, bevel);
   ctx.fillRect(x, y, bevel, h);
+  ctx.fillStyle = 'rgba(255,250,238,0.06)';
+  ctx.fillRect(x + bevel, y + bevel, w - bevel * 2, bevel * 0.7);
   ctx.fillStyle = 'rgba(0,0,0,0.26)';
   ctx.fillRect(x, y + h - bevel, w, bevel);
   ctx.fillRect(x + w - bevel, y, bevel, h);
+  ctx.fillStyle = 'rgba(0,0,0,0.12)';
+  ctx.fillRect(x + bevel, y + h - bevel * 1.7, w - bevel * 2, bevel * 0.7);
   if (rnd() > 0.62) {
     // Knocked-off corner: small, but it stops the blocks looking stamped.
     const cw = 2 + rnd() * 3;
@@ -131,7 +148,7 @@ function drawFloor(ctx, biome, variant) {
   }
   ctx.restore();
 
-  grain(ctx, TILE_W, FLOOR_H, rnd, 0.055, 110);
+  grain(ctx, TILE_W, FLOOR_H, rnd, 0.06, 150);
 
   // Wear: a crack or two wandering across the joints.
   if (rnd() > 0.4) {
@@ -266,7 +283,7 @@ function drawWall(ctx, biome, variant, cracked) {
     down.addColorStop(1, rgba('#000000', 0.46));
     ctx.fillStyle = down;
     ctx.fillRect(0, 0, TILE_W, BASE_Y);
-    grain(ctx, TILE_W, BASE_Y, rnd, 0.045, 70);
+    grain(ctx, TILE_W, BASE_Y, rnd, 0.05, 100);
     drawBiomeWallDetail(ctx, biome, rnd, side.key, side.base);
     ctx.restore();
   }
@@ -288,7 +305,7 @@ function drawWall(ctx, biome, variant, cracked) {
     }
   }
   ctx.restore();
-  grain(ctx, TILE_W, TILE_H, rnd, 0.06, 60);
+  grain(ctx, TILE_W, TILE_H, rnd, 0.065, 85);
   ctx.restore();
 
   // Silhouette: a firm dark seam under the cap plus a catch-light along the

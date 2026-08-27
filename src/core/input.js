@@ -38,7 +38,7 @@ export const CONTROLS = [
   { id: 'action', label: 'Act', keys: 'E / Enter', touch: 'ACT', group: 'fight',
     note: 'gates, stairs, chests, shrines, fires, captives, altars' },
   { id: 'torch', label: 'Douse or relight your torch', keys: 'T / Q', touch: 'TORCH', group: 'fight' },
-  { id: 'map', label: 'Open the map', keys: 'M', touch: 'tap the minimap', group: 'screens' },
+  { id: 'map', label: 'Open the map', keys: 'M', touch: 'map button', group: 'screens' },
   { id: 'bestiary', label: 'Bestiary', keys: 'B', touch: 'bestiary button', group: 'screens' },
   { id: 'pause', label: 'Pause', keys: 'Esc / P', touch: 'pause button', group: 'screens' },
 ];
