@@ -57,6 +57,54 @@ the code it came from. The Pages workflow re-stamps at deploy, so the live
 game reports when it actually shipped; a second workflow checks on every pull
 request that the version in the stamp still matches `version.json`.
 
+## Offline play and updates
+
+The game keeps a copy of itself on the device. `sw.js` is a service worker that
+precaches every file on the first visit; after that it starts with no network
+at all. There is no build step, so the file list is not written by hand in the
+worker -- `tools/stamp_version.py` walks the tree at stamp time and writes
+`build.json`:
+
+```json
+{ "version": "1.3.0", "build": "20260827-145548", "assets": ["./index.html", ...] }
+```
+
+A hand-kept precache list in a project with no bundler goes stale one module at
+a time and takes offline play down without ever saying so, which is why
+`--check` now fails if `build.json` disagrees with what is actually in `src/`.
+The Pages workflow re-stamps at deploy, so the shipped manifest always matches
+the shipped tree.
+
+The cache is **named after the build**, so a new build is a new cache and there
+is never a half-updated mixture of old and new modules importing each other --
+the failure that turns a caching bug into a blank screen. Old caches are
+deleted on activate. `build.json` is the one file never served from cache: it
+is how the page finds out there is something newer.
+
+On load, `src/core/appupdate.js` asks `build.json` whether a newer build has
+shipped and, if so, tells the worker to fetch it. **Nothing is shown and
+nothing waits.** The check races a 2-second timer and loses, so a player on a
+bad connection is never held at a blank screen over a version they did not ask
+about; the download finishes in the background and the new build is what loads
+next time. Replacing modules under a page that has already imported them is not
+something to attempt mid-session.
+
+The first load after an update says so once, on the home screen, with a link to
+**What changed** -- then never again for that build. A game that changes under
+somebody without ever mentioning it is a game where every change reads as a bug
+they have found. A first-ever visit is not an update and is recorded silently.
+
+### During development
+
+The worker is **off on localhost**, because `tools/serve.py` sends `no-store`
+on everything precisely so an edit shows up on reload, and a worker serving the
+previous copy out of its own cache would quietly undo that. Load
+<http://localhost:8123/index.html?sw=1> to turn it on when the caching is what
+you are working on; loading without it again unregisters the worker and deletes
+its caches, so it cannot be left on by accident.
+
+`tests.html` never registers anything -- it does not load `src/main.js`.
+
 ## Controls
 
 | Action | Keyboard | Touch |
@@ -66,13 +114,20 @@ request that the version in the stamp still matches `version.json`.
 | Fire crossbow | `F` / `K` | FIRE (appears once you own one) |
 | Action (doors, gates, stairs, chests, shrines, fires, captives, altars) | `E` / `Enter` | ACT |
 | Douse or relight your torch | `T` / `Q` | TORCH |
-| Open the map | `M` | tap the minimap |
+| Open the map | `M` | Map button, or tap the minimap |
 | Bestiary | `B` | bestiary button |
 | Pause | `Esc` / `P` | pause button |
 
 This table is generated from `CONTROLS` in `src/core/input.js`, which is also
-what the home screen, the settings panel and the opening guide render from --
-three hand-written copies had drifted, and none of them mentioned the torch.
+what the settings panel and the opening guide render from -- three hand-written
+copies had drifted, and none of them mentioned the torch.
+
+Settings and the guide draw the same illustration: the movement keys as key
+caps with their compass bearings (or the touch pad, whichever you are actually
+playing with), then every other control as a cap beside what it does. The home
+screen carries a single line naming the three you press constantly and pointing
+at Settings for the rest -- the full table used to live there and was most of
+the reason the home screen did not fit on a phone.
 
 Stairs never trigger by walking onto them -- they always require an explicit
 Action press, so you cannot fall into the next depth by accident.
@@ -84,14 +139,15 @@ has to continue past the gap, so a lone pillar is still an obstacle to walk
 round; *Settings > Blocked direction > Stop* opts out of it along with the
 rest of the movement assist.
 
-On a touch screen the default movement pad is a **diamond**: four buttons on a
-frame rotated 45 degrees, so each one sits on the side of the pad the corridor
-it walks runs off towards -- the top-right button is north, and north is drawn
-up and to the right. Each button's arrow is turned to the bearing the camera
-actually draws that axis at, which is 26.6 degrees off the horizontal rather
-than 45 (see below); the pad stays a square diamond because that is the shape a
-thumb wants. The diamond is immune to the *Direction keys* setting, because its
-buttons are already on the dungeon axes.
+On a touch screen the default movement pad is a **diamond**: four buttons at the
+corners of a shape wider than it is tall, in the same 2:1 proportion as a floor
+tile, so each one sits along the direction the corridor it walks runs off
+towards -- the top-right button is north, and north is drawn up and to the
+right. Each button's arrow is turned to the bearing the camera actually draws
+that axis at, which is 26.6 degrees off the horizontal rather than 45 (see
+below); the pad's corners lean the same way but not quite that far, because a
+thumb wants the buttons kept apart. The diamond is immune to the *Direction
+keys* setting, because its buttons are already on the dungeon axes.
 
 The older **floating stick** is still available under *Settings > Touch pad*:
 the whole lower left of the glass becomes the movement surface and the pad
@@ -145,16 +201,34 @@ level, drag to pan, scroll or pinch to zoom, with a legend of everything found
 on this depth and how many of each. It is the same chart the corner widget
 draws, at a different size -- there is no second map.
 
-The first depth of a descent opens with an illustrated guide: WASD and the
-arrow keys drawn as key caps with their compass bearings, or the touch pad and
-its four buttons with a diamond/stick choice on the spot. It has a "do not
-show this again" box, and Settings can bring it back.
+Zoom sits on the chart rather than under it, and the legend folds. Below 780px
+the map screen drops its panel entirely and takes the whole display: on a phone
+every row of furniture under the map is a strip of dungeon you do not get to
+see, and the legend -- which exists to explain the chart -- must never be the
+reason there is no room for one. It starts folded there and open on a desktop.
 
-Every descent has a **seed**, shown on the difficulty screen before you start
-and on the pause and run-end screens with a Copy button. Typing or pasting one
-in gives that labyrinth: the same seed and the same mode generate the same
-level. Later depths also read what the player is carrying, so two descents
-match all the way down only if they make the same choices.
+The first depth of a descent opens with an illustrated guide. It leads with
+what the game *is* and what a single depth wants -- find the keys, open the
+gates, take the stairs down, in the same three steps the HUD's objective line
+walks through -- and then draws the controls: WASD and the arrow keys as key
+caps with their compass bearings, or the touch pad and its four buttons with a
+diamond/stick choice on the spot. It has a "do not show this again" box, and
+Settings can bring it back.
+
+The home screen is held to one viewport. Nothing on it is reached by scrolling,
+because the first thing anyone looks for there is the button that starts the
+game, so as the screen shrinks it gives things up in order of what they are
+worth: the flavour line, then the tail of the hall preview, then the subtitle
+and the last of the run statistics. Everything it gives up is reachable
+somewhere else.
+
+Every descent has a **seed**, folded away below the three modes on the
+difficulty screen and shown on the pause and run-end screens with a Copy
+button. Typing or pasting one in gives that labyrinth: the same seed and the
+same mode generate the same level. Left shut -- which is how almost everyone
+leaves it -- the labyrinth picks its own. Later depths also read what the
+player is carrying, so two descents match all the way down only if they make
+the same choices.
 
 ## Difficulty
 
@@ -535,6 +609,28 @@ left/right is `dx - dy`), attenuated and dulled with distance, muffled further
 when something is in the way, and pushed further into the reverb the further
 off they are -- a door heard across a hall is nearly all room.
 
+Some sounds carry further than others, and *how much* further is a separate
+knob from how loud they are. `SoundField.hear` takes a `tail`: the falloff runs
+to zero at the edge of earshot, so simply lengthening the reach would lift
+every distance with it and a groan two tiles away would come out louder than it
+used to. The curve steepens in proportion instead -- `(1 - d/reach)^(2·tail)`,
+whose slope at zero is `-2/range` whatever the tail is -- so the near field is
+untouched to within a rounding error and the whole of the extra range is spent
+on the quiet end. A sound that used to stop dead at the edge now trails off
+past it.
+
+Two things use it. Creature voices get `VOICE_REACH` (1.5), because a groan is
+the labyrinth telling you what is in the next room and it was only reaching
+about as far as the torch lit. A raving captive's scream gets 3, so it is a
+landmark you hear from the far end of a depth and decide what to do about. How
+far a scream *draws creatures* from is deliberately unchanged: that is a
+balance number, not an audio one, and it is a separate call.
+
+The player's hearing field is flooded to `range × 3` -- the longest tail
+anything asks for, derived from the constants rather than written down twice --
+because a tile the flood never reached is silent whatever curve is applied to
+it. The reference distance ordinary sounds are measured against does not move.
+
 ### The score
 
 `audio/music.js` runs a small set of layers continuously and crossfades them;
@@ -569,23 +665,174 @@ Room reverb can be turned off in Settings for a dry mix.
 
 ---
 
+## Captives
+
+The one part of the labyrinth that can be wronged. Everything else down there
+is trying to kill you; these are people, which is why the choice has to cost
+something and why the exception has to be real.
+
+A captive is chained to a wall in one of four states you can tell apart from
+across the room: **afraid**, **begging**, **raving**, or already dead. Whether a
+begging one is actually pleading to die (`pleadToDie`) is settled at generation
+from the level seed, not at the moment of the swing -- so the same seed always
+meets the same person.
+
+| What you do | To one who asked | To one who did not |
+| --- | --- | --- |
+| **Action** (`E` / ACT) | Cuts them loose. Not what they asked for. | Cuts them loose. |
+| **Sword** | Mercy. Costs nothing, and they tell you what they knew. | A blood debt, itemised on the summary. |
+
+Killing has never been on the Action button and is not now: taking a life
+should not be something you can do with the same press that opens a chest.
+Whether they asked is a fact about them rather than about whether you stopped
+to listen -- charging somebody for reading a visibly begging captive correctly
+would make the penalty a tax on not having pressed a button first.
+
+**Freed captives stay.** They come off the wall, fold up, and crawl to the most
+sheltered floor tile within a few paces -- corners score above flat wall, flat
+wall above open ground -- and they are still there when you come back past.
+Props are not obstacles, so nothing they do can block a route or wedge a
+creature; there is a test that keeps it that way, because the crawl moves a
+prop around long after the generator proved the depth solvable.
+
+One in twenty who asked to die and were freed instead has a different answer to
+that. It is one blow, it is survivable at any depth, and it is rolled from the
+level's own generator so a seed always plays out the same way. It is
+deliberately *not* a spawned enemy: turning a prop into an actor mid-level
+would mean an entity the generator never validated, never counted against the
+depth's budget, and never gave the autopilot a route around.
+
+The run carries a **mercy** tally -- `freed − unjustified kills`, allowed to end
+below zero -- and it is written onto the Hall of Fame entry beside the score. It
+is the only number on that board that is not a measure of how good you were.
+
+## Pushable stones
+
+Some depths have a cut stone standing on the floor with a one-tile alcove
+behind it and something worth having inside. The stone is solid to everything
+that walks; walking into it is a shove rather than a step, on the same press
+that walks you down a corridor, so there is no verb to learn.
+
+Two rules make this safe rather than a way to wedge a depth shut:
+
+* **A stone is never on the route to anything the depth requires.** Checked at
+  generation against the level as carved, and asserted again in `validate.js`
+  as containment: model every block as solid rock and the depth must lose no
+  ground beyond the stones themselves and the pockets they guard. Stated that
+  way it also covers key ordering, gate bottlenecks and vault ladders without
+  having to reason about each separately.
+* **A stone is never pushed into its own alcove.** That is the one move that
+  would seal the reward away for good, and it is refused at the moment of the
+  push.
+
+The orphan sweep runs with blocks *passable*, because a pocket behind a stone
+that moves is not stranded floor -- exactly the same two-model treatment
+cracked walls already get. Shoving one for the first time scores on the same
+"secrets found" tally a cracked wall pays into, so the number means one thing.
+The autopilot completes every depth without touching one.
+
+## Marks on the floor
+
+`src/gen/decals.js` lays claw gouges near the lairs of dormant things,
+footprint trails walking towards a gate or the stair, and dragged dirt beside
+chests and cracked walls. They are laid on *after* the depth has been proved
+sound, and `validate.js` does not know they exist -- a hint that could be
+required would have stopped being a hint and become a key. There is a test that
+strips every mark off a level and asserts the validator says exactly the same
+thing about it.
+
+The budget is a hard ceiling of ten, spread across the kinds. Past about that
+many the marks stop reading as traces and start reading as wallpaper, and the
+hint they carry is lost in the noise of the ones that carry none. They are
+drawn only on tiles the player has actually lit or remembers, under everything
+else on the tile, and not at all on the cheapest quality tier.
+
+Adding a kind of mark is one entry in the table -- a rule and a sprite -- and
+no change to anything that calls it. The false holes below are exactly that.
+
+## The Gravebound
+
+Buried standing, facing the passage, so it would be first up when the hall was
+needed again. It is dormant like any ambusher and additionally is not there at
+all: nothing draws it, nothing hears it, nothing can hit it through the floor,
+and it does not hold its tile against you -- walking over it is how you find
+one. It feels the floor rather than watching the passage, so it wants no line
+of sight, has a very short reach, and dousing your torch is no defence against
+the one thing underneath you.
+
+It comes up over about half a second, cannot swing until it is out, and from
+then on is an ordinary creature in every respect: being buried was a way of
+arriving, not a second set of rules. It arrives through the normal spawn pool,
+so it counts against the depth's enemy budget like everything else. The floor
+keeps the hole.
+
+**And some holes have nothing under them.** They come through the decal table
+-- the same sprite, the same code path, no property a player could read off the
+screen -- placed rarely and never near a spawn. Once you have met one
+Gravebound, every hole in the floor is a question, and most of the answers are
+nothing at all.
+
+## The fidelity pass
+
+Everything the renderer gained is either baked once per biome or the same
+number of draw calls with different arithmetic in them. There is no new live
+pass except the floor marks, and those are off on Low.
+
+* **Masonry** has a two-step bevel rather than one -- a bright edge with a
+  softer shoulder inside it, and the same on the dark side. One flat band of
+  light on a flat band of colour reads as a drawn rectangle; two reads as a
+  face with a thickness. Grain counts are up about a third. Both are bake-time
+  only: a tile is drawn once into a canvas and blitted from then on, which
+  makes this the cheapest detail in the game.
+* **Directional light** squares the dot product before using it. Raw, it falls
+  off as the cosine, which is nearly flat for the first forty degrees either
+  side of square-on -- so most of a corner came out at almost the same
+  brightness and stopped reading as a corner. Squaring leaves the face turned
+  towards the flame where it was and darkens the one turning away.
+* **Actor shadows** lean further and stretch longer with distance from the
+  torch, and pinch across the light as they lengthen, which is what a long
+  shadow actually does and what a plain scale-up does not. Nothing at your feet
+  moves; only the far end of the curve changed.
+
+A test asserts the Low tier gained no new work, so a later change that gives it
+something to do has to come and argue with it first.
+
 ## The Hall of Fame
 
-Fifty names, kept locally, as a flat CSV table -- the format a person can
-open, read, sort and paste somewhere else with no tooling. Each row carries
-the name, score, depth, great foes, kills, secrets, mode, the relic path the
-run took, the date, the seed and the build it was played on.
+Fifty names, kept locally. Each row carries the name, score, depth, great foes,
+kills, secrets, mercy, mode, the relic path the run took, the date, the seed
+and the build it was played on. The internal shape is still a flat CSV table --
+compact, and extensible one column at a time, which is how `mercy` was added
+without migrating anything -- but it is no longer a format anybody is handed.
+
+The table is stored through a **reversible scramble**: a salted xorshift
+keystream over the UTF-8 bytes, with an FNV-1a checksum travelling alongside,
+Base64'd and tagged `tb1:`. Anything that does not decode and check out is
+discarded rather than half-believed, so a hand-edited board costs the editor
+their own names and nothing else. A table written before the scramble existed
+has no tag and is still read as-is, then put away in the new form on the next
+write.
+
+**This is not encryption and cannot be.** The key ships in the bundle, four
+lines below the comment saying so. It is a speed bump: the board is no longer a
+text field in the developer tools waiting to be typed a better score into by
+anyone who opens them out of curiosity. Anybody determined enough to read this
+paragraph can still beat it, and that is fine -- it is their hall.
+
+Export and Import used to sit on the hall screen and were removed for the same
+reason: the fastest route to the top of the board was a text editor and a
+re-import. **Clear the hall** is the only thing that can still be done to it
+from outside a run.
 
 Writing is safe against a second tab: every write re-reads the stored table
 and merges into it rather than overwriting, under an advisory timestamped lock
-so a tab that dies mid-write cannot wedge the hall shut. Export and Import sit
-on the hall screen; import merges and fingerprints each run, so reading your
-own export back adds nothing the second time.
+so a tab that dies mid-write cannot wedge the hall shut. Each run is
+fingerprinted on name, score, depth, mode, date and seed, so a merge can never
+land the same run twice.
 
 There is no global board. GitHub Pages serves static files, so a player's
 browser has nothing to write to and a file kept out of the repository cannot
-be read by the deployed game either; the export is the honest version of
-sharing a score until there is somewhere to put it.
+be read by the deployed game either. The hall is yours, on your machine.
 
 ## Tests
 

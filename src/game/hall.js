@@ -1,9 +1,12 @@
 // The Hall of Fame.
 //
-// Fifty names, kept locally, in a flat comma-separated table. CSV rather than
-// JSON on purpose: it is the format a person can open, read, sort and paste
-// somewhere else without any tooling, which is the whole point of a hall of
-// fame that lives on your own machine.
+// Fifty names, kept locally, in a flat comma-separated table. CSV remains the
+// internal shape because it is compact, append-extensible a column at a time,
+// and this file already contains a complete reader for it -- but it is no
+// longer a format anybody is handed. The table used to be exportable and
+// importable as a file; it is not, and it is now written through a scramble
+// (see below) so that the board is a record of what was played rather than a
+// text field waiting to be typed a better score into.
 //
 // Two things make writing it safe. Every write re-reads the stored table
 // first and merges into it, so a second tab that carved a name while this one
@@ -25,9 +28,13 @@ const MAX_WAIT = 1500;
 // compatible change: older rows simply read as empty for it, which is why
 // parsing prefers the header when the file carries one.
 const COLUMNS = ['name', 'score', 'depth', 'bosses', 'kills', 'secrets',
-  'diff', 'build', 'date', 'seed', 'version'];
+  'diff', 'build', 'date', 'seed', 'version', 'mercy'];
 
 const NUMERIC = new Set(['score', 'depth', 'bosses', 'kills', 'secrets']);
+
+// Counts that are allowed to come out below zero. Mercy is the running total
+// of who you let live against who you did not, so it has a wrong side.
+const SIGNED = new Set(['mercy']);
 
 function escapeCell(value) {
   const s = value === undefined || value === null ? '' : String(value);
@@ -86,7 +93,9 @@ export function parseCsv(text) {
     names.forEach((name, i) => {
       if (!COLUMNS.includes(name)) return;
       const raw = (r[i] || '').trim();
-      entry[name] = NUMERIC.has(name) ? Math.max(0, Math.round(Number(raw) || 0)) : raw;
+      entry[name] = NUMERIC.has(name) ? Math.max(0, Math.round(Number(raw) || 0))
+        : SIGNED.has(name) ? Math.round(Number(raw) || 0)
+          : raw;
     });
     if (!entry.name || !entry.score) continue;
     out.push(normalise(entry));
@@ -95,7 +104,7 @@ export function parseCsv(text) {
 }
 
 // Everything that reaches the board goes through here, whether it came from a
-// finished run or from a file somebody handed over.
+// finished run or from a stored table read back off this machine.
 export function normalise(entry) {
   return {
     name: String(entry.name || 'Nameless').slice(0, 18),
@@ -109,12 +118,15 @@ export function normalise(entry) {
     date: String(entry.date || '').slice(0, 24),
     seed: String(entry.seed || '').slice(0, 32),
     version: String(entry.version || '').slice(0, 40),
+    // Signed on purpose: freeing captives counts up, killing the ones
+    // who never asked counts down, and a run can end on either side.
+    mercy: Math.round(Number(entry.mercy) || 0),
   };
 }
 
 // Two entries are the same run if everything that identifies one matches.
-// Used when merging a file in, so importing the same export twice does not
-// double every name in the hall.
+// Used when merging, so a table re-read while another tab was writing to it
+// cannot end up holding the same run twice.
 function fingerprint(e) {
   return [e.name, e.score, e.depth, e.diff, e.date, e.seed].join('\u0001');
 }
@@ -139,15 +151,124 @@ export function merge(existing, incoming) {
   return rank(out);
 }
 
+// --- keeping the table off the surface --------------------------------------
+//
+// The hall is stored through a reversible scramble rather than as readable
+// text. This is not encryption and cannot be: the key is four lines below this
+// comment and ships to every player who loads the page. It is a speed bump.
+// What it buys is that the board is no longer a text field in the developer
+// tools waiting to be typed a better score into by anybody who opens it out of
+// idle curiosity, and that a table which has been edited is *noticed* rather
+// than believed -- a checksum travels with it, and anything that does not add
+// up is discarded instead of trusted.
+//
+// The salt is ordinary Math.random rather than the game's seeded generator on
+// purpose. Nothing here is gameplay: a run must be reproducible, a write to
+// local storage must not be.
+
+const STORE_MARK = 'tb1:';
+const STORE_KEY = 'torchbound-hall-of-fame';
+
+// FNV-1a, 32-bit. Small, fast, and more than enough to notice a hand edit.
+function checksum(bytes) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < bytes.length; i++) {
+    h = Math.imul(h ^ bytes[i], 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
+
+// A keystream from the constant key and this write's salt. xorshift32, which
+// is not a cipher either -- it only has to avoid repeating itself over the few
+// kilobytes a fifty-row table comes to.
+function keystream(salt, length) {
+  let s = salt >>> 0;
+  for (let i = 0; i < STORE_KEY.length; i++) {
+    s = Math.imul(s ^ STORE_KEY.charCodeAt(i), 0x01000193) >>> 0;
+  }
+  if (!s) s = 0x9e3779b9;         // xorshift is stuck at zero forever
+  const out = new Uint8Array(length);
+  for (let i = 0; i < length; i++) {
+    s ^= s << 13; s >>>= 0;
+    s ^= s >>> 17;
+    s ^= s << 5; s >>>= 0;
+    out[i] = s & 0xff;
+  }
+  return out;
+}
+
+function toBase64(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s);
+}
+
+function fromBase64(text) {
+  const s = atob(text);
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff;
+  return out;
+}
+
+function writeU32(bytes, at, value) {
+  bytes[at] = (value >>> 24) & 0xff;
+  bytes[at + 1] = (value >>> 16) & 0xff;
+  bytes[at + 2] = (value >>> 8) & 0xff;
+  bytes[at + 3] = value & 0xff;
+}
+
+function readU32(bytes, at) {
+  return ((bytes[at] << 24) | (bytes[at + 1] << 16)
+    | (bytes[at + 2] << 8) | bytes[at + 3]) >>> 0;
+}
+
+// salt (4 bytes) | table xor keystream | checksum of the table (4 bytes)
+export function scramble(text) {
+  const plain = new TextEncoder().encode(text);
+  const salt = Math.floor(Math.random() * 0x100000000) >>> 0;
+  const key = keystream(salt, plain.length);
+  const out = new Uint8Array(plain.length + 8);
+  writeU32(out, 0, salt);
+  for (let i = 0; i < plain.length; i++) out[4 + i] = plain[i] ^ key[i];
+  writeU32(out, plain.length + 4, checksum(plain));
+  return STORE_MARK + toBase64(out);
+}
+
+// Returns the table, or null for anything that is not intact -- a truncated
+// value, a hand-edited one, a half-finished write. Null is the same answer as
+// "nothing stored yet", which the caller already knows how to survive.
+export function unscramble(value) {
+  if (typeof value !== 'string' || value.slice(0, STORE_MARK.length) !== STORE_MARK) return null;
+  try {
+    const raw = fromBase64(value.slice(STORE_MARK.length));
+    if (raw.length < 8) return null;
+    const body = raw.length - 8;
+    const key = keystream(readU32(raw, 0), body);
+    const plain = new Uint8Array(body);
+    for (let i = 0; i < body; i++) plain[i] = raw[4 + i] ^ key[i];
+    if (checksum(plain) !== readU32(raw, body + 4)) return null;
+    return new TextDecoder().decode(plain);
+  } catch (e) {
+    return null;
+  }
+}
+
 // --- the stored table -------------------------------------------------------
 
 export function readHall() {
-  const csv = load(KEY, null);
-  if (typeof csv === 'string') return rank(parseCsv(csv));
-  return null;
+  const stored = load(KEY, null);
+  if (typeof stored !== 'string') return null;
+  const csv = unscramble(stored);
+  if (csv !== null) return rank(parseCsv(csv));
+  // Marked as ours and did not survive the checksum: somebody has been at it.
+  // Refuse it rather than reading whatever they left behind.
+  if (stored.slice(0, STORE_MARK.length) === STORE_MARK) return null;
+  // Not marked at all, so it is a table written before any of this existed.
+  // Read it as it stands; the next write puts it away in the new form.
+  return rank(parseCsv(stored));
 }
 
-function writeHall(rows) { save(KEY, toCsv(rows)); }
+function writeHall(rows) { save(KEY, scramble(toCsv(rows))); }
 
 // The lock is advisory and best-effort: storage is not transactional, so this
 // narrows the window rather than closing it. Combined with the read-and-merge
@@ -193,19 +314,6 @@ export function submitEntry(entry, seedRows) {
     return { rows: merged, rank: at >= 0 ? at + 1 : null, entry: row };
   });
 }
-
-export function importCsv(text) {
-  const incoming = parseCsv(text);
-  if (!incoming.length) return Promise.resolve({ added: 0, read: 0, rows: readHall() || [] });
-  return withLock(() => {
-    const current = readHall() || [];
-    const merged = merge(current, incoming);
-    writeHall(merged);
-    return { added: merged.length - current.length, read: incoming.length, rows: merged };
-  });
-}
-
-export function exportCsv(rows) { return toCsv(rank(rows)); }
 
 // Replaces the whole table. Only used when seeding a fresh install, and when
 // the player asks for the hall to be cleared.

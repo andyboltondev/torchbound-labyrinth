@@ -11,6 +11,7 @@ import { RELIC_BY_ID } from '../game/relics.js';
 import { formatScore, depthLabel } from '../core/util.js';
 import { drawEnemy, drawBoss } from '../render/actors.js';
 import { BUILD_STRING, BUILD_DETAIL, VERSION } from '../core/version.js';
+import { updatedSinceLastVisit, markBuildSeen } from '../core/appupdate.js';
 import { RELEASES, REPO } from '../game/releases.js';
 
 // What each size of bargain is called. The player never sees the word "tier".
@@ -82,7 +83,10 @@ export class Screens {
     this.hide();
     const builder = this['screen_' + name];
     if (!builder) return;
-    const screen = el('div', 'screen active');
+    // The screen carries its own name as a class, so a screen that wants a
+    // different shape on a phone -- the chart, which is worth the whole
+    // display -- can ask for one without a second wrapper element.
+    const screen = el('div', 'screen active screen-' + name);
     const panel = builder.call(this, data);
     // Every screen is a modal over live game state, and assistive technology
     // has no other way to know that. The title doubles as the accessible name.
@@ -103,7 +107,16 @@ export class Screens {
     // that reads game state on the way past sees the new one.
     if (this.host.onScreen) this.host.onScreen(name, data);
     // Focus the primary control so keyboard and gamepad users are not lost.
-    const focus = panel.querySelector('.btn.primary, input, .btn');
+    // Anything folded away inside a shut <details> is not on the screen and
+    // cannot take focus, so it cannot be the thing focus lands on either --
+    // otherwise the descent screen aims at a seed box nobody opened and the
+    // focus ring goes nowhere at all.
+    let focus = null;
+    for (const node of panel.querySelectorAll('.btn.primary, input, .btn')) {
+      if (node.closest('details:not([open])')) continue;
+      focus = node;
+      break;
+    }
     if (focus) setTimeout(() => focus.focus({ preventScroll: true }), 40);
     return panel;
   }
@@ -152,32 +165,26 @@ export class Screens {
     return wrap;
   }
 
-  // The one rendering of the controls, built from the binding table in
-  // input.js and used by the home screen, the settings panel and the opening
-  // guide. Three places used to list them by hand and all three had drifted:
-  // none of them mentioned the torch or the map.
-  _controlsGrid(opts = {}) {
-    const wrap = el('div', 'controls-block');
-    const touch = opts.touch !== undefined ? opts.touch : this.host.touchEnabled;
-    const grid = el('div', 'controls-grid');
-    for (const control of CONTROLS) {
-      const d = el('div', 'control-row');
-      const label = el('span', 'control-label');
-      label.appendChild(document.createTextNode(control.label));
-      if (control.note && opts.notes !== false) {
-        label.appendChild(el('small', 'control-note', control.note));
-      }
-      d.appendChild(label);
-      const keys = el('b', 'control-keys');
-      keys.appendChild(el('span', 'control-key', control.keys));
-      if (touch && control.touch) {
-        keys.appendChild(el('span', 'control-touch', control.touch));
-      }
-      d.appendChild(keys);
-      grid.appendChild(d);
+  // The shortest honest statement of the controls, for the home screen: the
+  // three things a player does constantly, and where the rest of them live.
+  // The full table is drawn out in Settings and in the opening guide, so
+  // repeating eleven rows here only cost the home screen a scrollbar.
+  //
+  // The two named keys are read from the binding table so they cannot drift
+  // from it. The movement half is written out in prose because "WASD or the
+  // arrow keys" is not a shape the table stores -- it holds four separate
+  // rows, and joining them reads as gibberish.
+  _controlsLine() {
+    if (this.host.touchEnabled) {
+      return 'The pad walks and the buttons fight. Every control is drawn out '
+        + 'in Settings.';
     }
-    wrap.appendChild(grid);
-    return wrap;
+    const keys = (id) => {
+      const found = CONTROLS.find((c) => c.id === id);
+      return found ? found.keys : '';
+    };
+    return 'WASD or the arrow keys walk. ' + keys('slash') + ' slashes, '
+      + keys('action') + ' acts. The rest is in Settings.';
   }
 
   // The seed, wherever the player might want to write it down or hand it on.
@@ -237,15 +244,17 @@ export class Screens {
   }
 
   // ------------------------------------------------------------- home
+  // Everything here earns its height: on a phone this screen has to fit in one
+  // viewport, because a menu you have to scroll to find the start button in is
+  // a menu that has already failed. The full control table used to live here
+  // and was most of the overflow; it is a line now, and drawn out in Settings.
   screen_home() {
-    const panel = el('div', 'panel');
+    const panel = el('div', 'panel home-panel');
     panel.appendChild(el('h1', 'title', 'Torchbound'));
     panel.appendChild(el('h1', 'title', 'Labyrinth'));
     panel.appendChild(el('p', 'subtitle', 'A descent into the Norse under-halls'));
 
-    const flavour = el('p', 'flavour');
-    flavour.style.textAlign = 'center';
-    flavour.style.margin = '16px 0 0';
+    const flavour = el('p', 'flavour home-flavour');
     flavour.textContent = FLAVOUR[Math.floor(Math.random() * FLAVOUR.length)];
     panel.appendChild(flavour);
 
@@ -260,9 +269,7 @@ export class Screens {
     columns.appendChild(this._hallPreview());
     panel.appendChild(columns);
 
-    const stats = el('div', 'kv');
-    stats.style.justifyContent = 'center';
-    stats.style.marginTop = '20px';
+    const stats = el('div', 'kv home-stats');
     const add = (label, value) => {
       const d = el('div');
       d.appendChild(el('b', null, value));
@@ -275,15 +282,41 @@ export class Screens {
     add('creatures known', profile.bestiary.size + ' / ' + ENEMY_LIST.length);
     panel.appendChild(stats);
 
-    const controls = el('div');
-    controls.style.marginTop = '18px';
-    controls.appendChild(el('p', 'hint', 'The keys walk the dungeon’s compass, so Up '
-      + 'is north and the corridors run with your keys. On a touch screen the '
-      + 'controls appear on the glass instead.'));
-    controls.appendChild(this._controlsGrid({ notes: false }));
-    panel.appendChild(controls);
+    panel.appendChild(el('p', 'hint home-controls', this._controlsLine()));
+    const updated = this._updatedNotice();
+    if (updated) panel.appendChild(updated);
     panel.appendChild(this._buildStamp('home'));
     return panel;
+  }
+
+  // Shown once, on the first load after the game has quietly updated itself,
+  // and never again for that build. The update needed no permission and got
+  // no progress bar -- but a game that changes under somebody without ever
+  // saying so is a game where every change reads as a bug they have found.
+  //
+  // Dismissing it and reading it both count as having been told.
+  _updatedNotice() {
+    if (!updatedSinceLastVisit()) return null;
+    const wrap = el('div', 'update-note');
+    const body = el('div', 'update-note-body');
+    body.appendChild(el('b', null, 'Updated to ' + VERSION.number));
+    body.appendChild(el('span', null, VERSION.codename
+      ? '“' + VERSION.codename + '” — the labyrinth is not the one you left.'
+      : 'The labyrinth is not quite the one you left.'));
+    wrap.appendChild(body);
+
+    const seen = () => { markBuildSeen(); };
+    wrap.appendChild(button('What changed', 'btn ghost small', this.click(() => {
+      seen();
+      this.show('releases', { from: 'home' });
+    })));
+    const close = button('×', 'btn ghost small update-note-close', this.click(() => {
+      seen();
+      wrap.remove();
+    }));
+    close.setAttribute('aria-label', 'Dismiss');
+    wrap.appendChild(close);
+    return wrap;
   }
 
   // The five loudest names, inline. A leaderboard the player never opens is a
@@ -326,6 +359,17 @@ export class Screens {
 
     // The seed. Left blank the labyrinth picks its own; typed or pasted in,
     // two people get the same one.
+    //
+    // Folded away, and below the modes rather than above them. Almost nobody
+    // arrives here wanting to type a seed -- they want to pick a mode and go --
+    // and an input box between the question and the answer read as a thing
+    // that had to be filled in first. Closed, it is empty, and empty is random.
+    const seedBox = el('details', 'seed-box');
+    const seedSummary = el('summary', 'seed-summary');
+    seedSummary.appendChild(el('span', 'seed-summary-label', 'Descend into a particular labyrinth'));
+    seedSummary.appendChild(el('span', 'seed-summary-hint', 'optional'));
+    seedBox.appendChild(seedSummary);
+
     const seedRow = el('div', 'seed-row');
     seedRow.appendChild(el('label', 'seed-label', 'Seed'));
     const seedInput = el('input', 'seed-input');
@@ -339,8 +383,8 @@ export class Screens {
     seedRow.appendChild(button('Roll', 'btn ghost small', this.click(() => {
       seedInput.value = makeSeed();
     })));
-    panel.appendChild(seedRow);
-    panel.appendChild(el('p', 'hint seed-note',
+    seedBox.appendChild(seedRow);
+    seedBox.appendChild(el('p', 'hint seed-note',
       'The same seed and the same mode give the same labyrinth. Later depths '
       + 'also take account of what you are carrying, so two descents match all '
       + 'the way down only if they make the same choices.'));
@@ -356,7 +400,8 @@ export class Screens {
       card.appendChild(el('span', 'difficulty-name', diff.name));
       card.appendChild(el('span', 'difficulty-tagline', diff.tagline));
       card.appendChild(el('span', 'difficulty-text', diff.text));
-      card.appendChild(el('span', 'difficulty-cost', diff.cost));
+      if (diff.cost) card.appendChild(el('span', 'difficulty-cost', diff.cost));
+      if (diff.boon) card.appendChild(el('span', 'difficulty-boon', diff.boon));
       const marks = el('span', 'difficulty-marks');
       marks.appendChild(el('i', diff.ranked ? 'yes' : 'no',
         diff.ranked ? 'Hall of Fame' : 'Unranked'));
@@ -371,6 +416,7 @@ export class Screens {
       grid.appendChild(card);
     }
     panel.appendChild(grid);
+    panel.appendChild(seedBox);
 
     const row = el('div', 'btn-row');
     row.appendChild(button('Back', 'btn ghost', this.click(() => this.show('home'))));
@@ -387,7 +433,7 @@ export class Screens {
     panel.appendChild(el('h2', 'screen-title', 'Hall of Fame'));
     panel.appendChild(el('p', 'screen-sub',
       'The fifty deepest names still spoken in the mead hall. Kept on this '
-      + 'machine, in a file you can carry.'));
+      + 'machine, and earned rather than written.'));
 
     const filter = data.filter || 'all';
     const modes = el('div', 'seg hall-filter');
@@ -407,7 +453,7 @@ export class Screens {
     const board = rank(profile.board).filter((e) => filter === 'all' || e.diff === filter);
     const table = el('table', 'board');
     const head = el('tr');
-    for (const h of ['', 'Name', 'Path', 'Mode', 'Depth', 'Foes', 'When', 'Score']) {
+    for (const h of ['', 'Name', 'Path', 'Mode', 'Depth', 'Foes', 'Mercy', 'When', 'Score']) {
       head.appendChild(el('th', null, h));
     }
     table.appendChild(head);
@@ -425,6 +471,16 @@ export class Screens {
       tr.appendChild(el('td', 'mode ' + diff.id, diff.name));
       tr.appendChild(el('td', 'num', 'D' + entry.depth));
       tr.appendChild(el('td', 'num', String(entry.bosses || 0)));
+      // Signed, and shown as such: +3 and -3 are opposite runs, and a bare 3
+      // would read as a score. A run that met nobody shows a dash rather than
+      // a zero, which would look like a judgement it has not earned.
+      const mercy = entry.mercy || 0;
+      const mercyCell = el('td', 'num mercy' + (mercy > 0 ? ' kind' : mercy < 0 ? ' cruel' : ''),
+        mercy === 0 ? '\u2014' : (mercy > 0 ? '+' : '') + mercy);
+      mercyCell.title = mercy === 0 ? 'Left every captive as they were found'
+        : mercy > 0 ? mercy + ' captive' + (mercy === 1 ? '' : 's') + ' the better for it'
+          : Math.abs(mercy) + ' killed who never asked';
+      tr.appendChild(mercyCell);
       const when = el('td', 'num when', entry.date || '\u2014');
       if (entry.version) when.title = 'Build ' + entry.version;
       tr.appendChild(when);
@@ -434,7 +490,7 @@ export class Screens {
     if (!board.length) {
       const tr = el('tr');
       const td = el('td', 'empty', 'No names carved here yet.');
-      td.colSpan = 8;
+      td.colSpan = 9;
       tr.appendChild(td);
       table.appendChild(tr);
     }
@@ -454,40 +510,12 @@ export class Screens {
     return panel;
   }
 
-  // Taking the table off this machine, and putting one back. Import merges
-  // rather than replaces, and the same export read twice adds nothing the
-  // second time, so there is no way to lose names by pressing the wrong one.
+  // Striking the board is the only thing that can be done to it from outside a
+  // run now. The hall used to be exportable and importable as a CSV file,
+  // which meant the quickest way to the top of it was a text editor -- so a
+  // board nobody could carry off is also a board nobody can hand themselves.
   _hallFileRow(data) {
     const row = el('div', 'btn-row hall-files');
-    row.appendChild(button('Export CSV', 'btn ghost small', this.click(() => {
-      const blob = new Blob([profile.exportHall()], { type: 'text/csv;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'torchbound-hall-of-fame.csv';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
-    })));
-
-    const picker = el('input');
-    picker.type = 'file';
-    picker.accept = '.csv,text/csv,text/plain';
-    picker.hidden = true;
-    picker.addEventListener('change', () => {
-      const file = picker.files && picker.files[0];
-      if (!file) return;
-      file.text().then((text) => profile.importHall(text)).then((result) => {
-        const note = result.read
-          ? `Read ${result.read} name${result.read === 1 ? '' : 's'}; `
-            + `${result.added} new to this hall.`
-          : 'That file held no names this hall could read.';
-        this.show('hall', { ...data, note, highlight: undefined });
-      });
-    });
-    row.appendChild(picker);
-    row.appendChild(button('Import CSV', 'btn ghost small', this.click(() => picker.click())));
     row.appendChild(button('Clear the hall', 'btn ghost small danger', this.click(() => {
       this.show('confirmClearHall', data);
     })));
@@ -733,10 +761,15 @@ export class Screens {
     seg.appendChild(group);
     panel.appendChild(seg);
 
-    const controls = el('div');
-    controls.style.marginTop = '22px';
+    // Drawn, not listed. Settings used to repeat the same two-column table the
+    // home screen had, while the opening guide -- the one place a player is
+    // actually learning -- had key caps and a picture of the pad. There is no
+    // reason the reference copy should be the worse one, so both are the guide's.
+    const controls = el('div', 'settings-controls');
     controls.appendChild(el('h2', 'screen-title', 'Controls'));
-    controls.appendChild(this._controlsGrid());
+    const touch = this.host.touchEnabled;
+    controls.appendChild(touch ? this._guideTouch() : this._guideKeys());
+    controls.appendChild(this._guideActions(touch));
     const guideRow = el('div', 'btn-row');
     guideRow.style.justifyContent = 'flex-start';
     guideRow.appendChild(button(
@@ -871,29 +904,23 @@ export class Screens {
   // Shown once, before the first depth. Illustrated rather than listed,
   // because a wall of key names is the thing a new player skips. Which half
   // it shows follows how they are actually going to play: keys, or glass.
+  //
+  // What the game *is* comes before how it is played. A player who knows every
+  // key and does not know that the stair is the point has been taught nothing.
   screen_guide(data = {}) {
     const touch = data.touch !== undefined ? data.touch : this.host.touchEnabled;
     const panel = el('div', 'panel wide guide-panel');
     panel.appendChild(el('h2', 'screen-title', 'Before you go down'));
+    panel.appendChild(this._guideIntro());
+
+    panel.appendChild(el('h3', 'guide-heading', 'How you move'));
     panel.appendChild(el('p', 'screen-sub', touch
       ? 'Everything happens on the glass. The pad walks the dungeon\u2019s compass.'
       : 'WASD and the arrow keys both work, always, and they walk the '
         + 'dungeon\u2019s compass \u2014 Up is north.'));
 
     panel.appendChild(touch ? this._guideTouch() : this._guideKeys());
-
-    const grid = el('div', 'guide-actions');
-    for (const control of CONTROLS) {
-      if (control.group === 'move') continue;
-      const row = el('div', 'guide-action');
-      row.appendChild(el('span', 'guide-cap', touch && control.touch ? control.touch : control.keys));
-      const body = el('span', 'guide-action-body');
-      body.appendChild(el('b', null, control.label));
-      if (control.note) body.appendChild(el('small', null, control.note));
-      row.appendChild(body);
-      grid.appendChild(row);
-    }
-    panel.appendChild(grid);
+    panel.appendChild(this._guideActions(touch));
 
     if (touch) {
       panel.appendChild(this._guidePadChoice(data));
@@ -928,6 +955,61 @@ export class Screens {
       })));
     panel.appendChild(row);
     return panel;
+  }
+
+  // What the game is, and what a single depth wants from you. Three steps,
+  // because there are exactly three: the same three the objective line in the
+  // HUD walks through (see world.currentObjective), so what the guide promises
+  // is what the game will actually ask for, in the same order.
+  _guideIntro() {
+    const wrap = el('div', 'guide-intro');
+    wrap.appendChild(el('p', 'guide-lede',
+      'A hall was buried here with everything still in it, and not all of it '
+      + 'agreed to stay buried. You go down carrying the only light there is. '
+      + 'Every depth goes deeper, and nothing you leave behind comes back up '
+      + 'with you.'));
+
+    const steps = el('ol', 'guide-steps');
+    const step = (title, text) => {
+      const li = el('li');
+      li.appendChild(el('b', null, title));
+      li.appendChild(el('span', null, text));
+      steps.appendChild(li);
+    };
+    step('Find the keys',
+      'Each sealed gate on the depth has one somewhere, and it is never shut '
+      + 'behind the gate it opens. Something may be carrying it.');
+    step('Open the gates',
+      'They are the only way through. A gate you could walk around would not '
+      + 'have been worth carving.');
+    step('Take the stairs down',
+      'Clearing the depth pays, and clearing it before the sand runs out pays '
+      + 'more. Every few depths something large is standing between you and '
+      + 'the stair.');
+    wrap.appendChild(steps);
+
+    wrap.appendChild(el('p', 'hint',
+      'Your torch is the whole of your sight, and it burns down. Douse it and '
+      + 'you see almost nothing — but neither does anything else.'));
+    return wrap;
+  }
+
+  // The non-movement controls: a cap, then what it does. Shared by the guide
+  // and by Settings, so there is still exactly one rendering of the binding
+  // table and no way for a second copy to drift out of step with it.
+  _guideActions(touch) {
+    const grid = el('div', 'guide-actions');
+    for (const control of CONTROLS) {
+      if (control.group === 'move') continue;
+      const row = el('div', 'guide-action');
+      row.appendChild(el('span', 'guide-cap', touch && control.touch ? control.touch : control.keys));
+      const body = el('span', 'guide-action-body');
+      body.appendChild(el('b', null, control.label));
+      if (control.note) body.appendChild(el('small', null, control.note));
+      row.appendChild(body);
+      grid.appendChild(row);
+    }
+    return grid;
   }
 
   _guidePadChoice(data) {
@@ -1106,13 +1188,19 @@ export class Screens {
       }
     });
 
+    // The zoom controls float on the chart rather than sitting in a row below
+    // it. On a phone every row under the map is a row the map does not get,
+    // and these three buttons were costing it more height than they are worth.
     const zoomRow = el('div', 'map-zoom');
     zoomRow.appendChild(button('\u2212', 'btn ghost small', this.click(() => setZoom(view.zoom / 1.4))));
     zoomRow.appendChild(button('Fit', 'btn ghost small', this.click(() => {
       view.zoom = 1; view.panX = 0; view.panY = 0; redraw();
     })));
     zoomRow.appendChild(button('+', 'btn ghost small', this.click(() => setZoom(view.zoom * 1.4))));
-    panel.appendChild(zoomRow);
+    // The stage claims any pointer that touches it for panning, so a press on
+    // a button standing on top of it has to say it was spoken for first.
+    zoomRow.addEventListener('pointerdown', (e) => e.stopPropagation());
+    stage.appendChild(zoomRow);
 
     panel.appendChild(this._mapLegend(world, minimap));
 
@@ -1130,9 +1218,14 @@ export class Screens {
 
   // Only what has been found. A legend that lists what you have not
   // discovered yet is a spoiler with a key beside it.
+  //
+  // Foldable, and folded to begin with on a small screen: the legend explains
+  // the chart, so it must never be the reason there is no room to see it.
   _mapLegend(world, minimap) {
-    const wrap = el('div', 'map-legend');
-    wrap.appendChild(el('div', 'legend-title', 'What you have found'));
+    const wrap = el('details', 'map-legend');
+    wrap.open = !window.matchMedia('(max-width: 780px)').matches;
+    const head = el('summary', 'legend-title', 'What you have found');
+    wrap.appendChild(head);
     const rows = (world && minimap) ? minimap.legend(world) : [];
     if (!rows.length) {
       wrap.appendChild(el('p', 'hint', 'Nothing yet. The chart fills in as you walk.'));
@@ -1263,7 +1356,12 @@ export class Screens {
       row.style.animationDelay = (i * 70) + 'ms';
       row.appendChild(el('span', 'label', r.label));
       row.appendChild(el('span', 'detail', r.detail || ''));
-      row.appendChild(el('span', 'value', '+' + formatScore(r.value)));
+      // The sign belongs to the number, not to the row. Blood Debt is the one
+      // line here that comes out negative, and it used to be printed as
+      // "+-680" because every row was given a plus regardless.
+      const value = el('span', 'value' + (r.value < 0 ? ' owed' : ''),
+        (r.value < 0 ? '' : '+') + formatScore(r.value));
+      row.appendChild(value);
       rows.appendChild(row);
     });
     panel.appendChild(rows);
@@ -1420,6 +1518,7 @@ export class Screens {
         profile.submit({
           name, score, depth: run.depth, bosses: run.bossesDefeated,
           kills: run.score.runBest.kills, secrets: run.score.runBest.secrets,
+          mercy: run.mercy,
           build: run.build, diff: run.difficulty.id, seed: run.seed,
         }).then((placed) => {
           if (this.host.audio) this.host.audio.play('fanfare');

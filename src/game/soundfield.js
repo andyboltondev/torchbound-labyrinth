@@ -41,18 +41,27 @@ export class SoundField {
     this.stamp = new Uint32Array(n);
     this.gen = 0;
     this.range = 0;
+    this.span = 0;
     this.originX = 0;
     this.originY = 0;
     this._heap = [];
   }
 
-  // Dijkstra outward from (x, y) until `range` tiles of attenuation are used
-  // up. `blocked(gx, gy)` lets the caller close doors the grid thinks are open.
-  build(x, y, range, blocked) {
+  // Dijkstra outward from (x, y) until the attenuation budget is used up.
+  // `blocked(gx, gy)` lets the caller close doors the grid thinks are open.
+  //
+  // `range` is the reference distance every `hear` is measured against.
+  // `tailMax` floods *further* than that without moving the reference: a sound
+  // asking for a long tail needs ground to be heard across, and a tile the
+  // flood never reached is silent whatever curve is applied to it. Nothing
+  // with an ordinary tail is affected, because `hear` still cuts each sound at
+  // its own reach -- this only decides how much of the map was worked out.
+  build(x, y, range, blocked, tailMax = 1) {
     const grid = this.grid;
     const gx = Math.floor(x), gy = Math.floor(y);
     this.gen++;
     this.range = range;
+    this.span = range * tailMax;
     this.originX = x;
     this.originY = y;
     if (!grid.inBounds(gx, gy)) return;
@@ -85,7 +94,7 @@ export class SoundField {
         }
         const turn = dir < 0 ? 0 : turnCost(dir, d);
         const next = cost + (dx !== 0 && dy !== 0 ? DIAGONAL : 1) + turn;
-        if (next > range) continue;
+        if (next > this.span) continue;
         const ni = grid.idx(nx, ny);
         if (this.stamp[ni] === this.gen && this.cost[ni] <= next + 1e-6) continue;
         this.stamp[ni] = this.gen;
@@ -109,14 +118,24 @@ export class SoundField {
   // `loudness` scales the range the source carries, so a hound is heard
   // further than a beetle from the same spot.
   //
+  // `tail` lengthens the quiet end without touching the near field. Scaling
+  // loudness alone would not do: the curve runs to zero at the edge, so
+  // pushing the edge out lifts every distance including the ones under your
+  // nose, and a groan two tiles away would come out louder than it used to.
+  // Steepening the curve in proportion to the reach keeps the slope at the
+  // listener's feet exactly where it was -- d/dd at zero is -2/range either
+  // way -- and spends the whole of the extra range on the far end. A sound
+  // heard close by is heard at the volume it always was; one that used to
+  // stop at the edge of earshot now trails off past it instead.
+  //
   // Returns null when nothing reaches at all -- solid rock in the way, or
   // simply too far round too many corners.
-  hear(x, y, loudness = 1) {
+  hear(x, y, loudness = 1, tail = 1) {
     const gx = Math.floor(x), gy = Math.floor(y);
     if (!this.grid.inBounds(gx, gy)) return null;
     const i = this.grid.idx(gx, gy);
     if (this.stamp[i] !== this.gen) return null;
-    const reach = this.range * loudness;
+    const reach = this.range * loudness * tail;
     const d = this.cost[i];
     if (d > reach) return null;
     // Fades off rather than cutting: the last tile of earshot should be a
@@ -126,7 +145,7 @@ export class SoundField {
     const step = dir >= 0 ? N8[dir] : [0, 0];
     const m = Math.hypot(step[0], step[1]) || 1;
     return {
-      volume: k * k,
+      volume: tail === 1 ? k * k : Math.pow(k, 2 * tail),
       distance: d,
       // Where it seems to come from: the direction it arrived from, at the
       // distance it actually travelled rather than the distance across.
@@ -141,8 +160,8 @@ export class SoundField {
 
   // Everything in earshot, for the systems that need to react rather than
   // just listen: creatures deciding whether they heard the arrow.
-  reaches(x, y, loudness = 1) {
-    const h = this.hear(x, y, loudness);
+  reaches(x, y, loudness = 1, tail = 1) {
+    const h = this.hear(x, y, loudness, tail);
     return h ? h.volume : 0;
   }
 }

@@ -35,12 +35,21 @@ export class Run {
     this.score = new ScoreTracker();
     this.seenHazards = new Set();
     this.bossesDefeated = 0;
+    // The running answer to the only question in the labyrinth that is not
+    // about survival: who you let live, against who you did not. One up for a
+    // captive freed or given what they asked for, one down for one killed who
+    // never asked -- so `freed - unjustified kills`, and it is allowed to end
+    // the run below zero. Carried onto the Hall of Fame entry, where it is the
+    // one number on the board that is not a measure of how good you were.
+    this.mercy = 0;
     this.blessings = 0;
     this.buildAffinity = {};
     this.newDiscoveries = [];
     this.startedAt = Date.now();
     this.relicHistory = [];
   }
+
+  recordMercy(delta) { this.mercy += delta; return this.mercy; }
 
   get maxArrows() { return BASE_ARROWS + this.mods.crossbowCapacity; }
   get build() { return describeBuild(this.relics); }

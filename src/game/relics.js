@@ -62,22 +62,19 @@ export const RELICS = [
   {
     id: 'bloodless_bargain', name: 'Bloodless Bargain', tag: T.ALTAR, rarity: 2, max: 1,
     text: 'Altars ask a good deal less of you.',
-    cost: 'A cheap offering is remembered. You recover far less on the stair, '
-      + 'so what the altar spared you is taken back on the way down.',
+    cost: 'The stone remembers a cheap offering. You mend far less on the stair.',
     mod: (m) => { m.sacrificeScale *= 0.6; m.levelHeal *= 0.5; },
   },
   {
     id: 'gilded_debt', name: 'Gilded Debt', tag: T.ALTAR, rarity: 3, max: 1,
-    text: 'What an altar gives you, it gives generously: healing runs deeper, '
-      + 'a chart comes with its keys, and the way down comes with the treasure.',
-    cost: 'And it charges accordingly.',
+    text: 'What an altar gives, it gives with both hands.',
+    cost: 'And takes with both hands.',
     mod: (m) => { m.rewardScale *= 1.5; m.sacrificeScale *= 1.3; },
   },
   {
     id: 'deep_ear', name: 'Ear of the Deep', tag: T.SOUND, rarity: 2, max: 2,
     text: 'You hear the labyrinth much further off, and round more corners.',
-    cost: 'Listening that hard means standing still enough to be found. '
-      + 'Your own footfalls carry as far as what you are listening to.',
+    cost: 'Ears that open wide let your own steps out.',
     mod: (m, n) => { m.hearing *= 1 + 0.45 * n; m.playerNoise *= 1 + 0.3 * n; },
   },
   {
@@ -88,9 +85,8 @@ export const RELICS = [
   },
   {
     id: 'whisper_stone', name: 'Whisper-Stone', tag: T.SOUND, rarity: 3, max: 1,
-    text: 'What you hear, you also see: a pulse on the map where the sound '
-      + 'came from, and how far round the corners it had to come.',
-    cost: 'The stone hums. Everything down here can hear it too.',
+    text: 'Every sound leaves a mark on your chart.',
+    cost: 'It hums. Everything down here hears that too.',
     mod: (m) => { m.sonar = true; m.playerNoise *= 1.35; },
   },
   {
@@ -107,8 +103,8 @@ export const RELICS = [
   },
   {
     id: 'sanguine_edge', name: 'Sanguine Edge', tag: T.SWORD, rarity: 2, max: 1,
-    text: 'Sword kills have a 30% chance to return blood to you.',
-    cost: 'Every other source of healing works far less well.',
+    text: 'Three kills in ten give their blood back.',
+    cost: 'Nothing else will mend you properly again.',
     mod: (m) => { m.lifesteal = 0.3; m.lifestealAmount = 9; m.healing *= 0.55; },
   },
   {
@@ -126,7 +122,7 @@ export const RELICS = [
   {
     id: 'wolfs_hunger', name: "Wolf's Hunger", tag: T.SWORD, rarity: 2, max: 1,
     text: 'Below a third of your health, your blows land with real fury.',
-    cost: 'You fight past your own guard. Everything lands harder on you, '
+    cost: 'You fight past your own guard. Everything lands harder, '
       + 'whatever your health -- including on the way down to the third that '
       + 'pays out.',
     mod: (m) => { m.desperation = 0.75; m.damageTaken *= 1.12; },
@@ -151,9 +147,8 @@ export const RELICS = [
   },
   {
     id: 'aegis_drowned', name: 'Aegis of the Drowned', tag: T.SHIELD, rarity: 3, max: 1,
-    text: 'A drowned shield turns blows aside: 1% ricochets back, 5% blocked outright, 20% blunted.',
-    cost: 'It came up full of water and it never dried. You walk and swing '
-      + 'slower carrying it.',
+    text: 'A drowned shield. One blow in twenty stopped dead, one in five blunted.',
+    cost: 'It came up full of water and never dried. You are slow with it.',
     mod: (m) => { m.shield = true; m.moveSpeed *= 0.93; m.attackSpeed *= 0.9; },
   },
   {
@@ -178,8 +173,7 @@ export const RELICS = [
   {
     id: 'draught_hall', name: 'Draught of the Hall', tag: T.BODY, rarity: 1, max: 1,
     text: 'Mends you now, and makes every later remedy work better.',
-    cost: 'It is strong drink. Your hand is less steady on the brand, and the '
-      + 'flame gutters for it.',
+    cost: 'Strong drink. Your hand shakes, and the flame with it.',
     requires: (run) => run.hp < run.maxHp,
     mod: (m) => { m.healing *= 1.7; m.levelHeal *= 1.3; m.torchInstability *= 1.4; },
     onTake: (run) => run.heal(30, true),
@@ -200,15 +194,13 @@ export const RELICS = [
   {
     id: 'bone_reader', name: 'Bone Reader', tag: T.EXPLORE, rarity: 1, max: 2,
     text: 'You notice cracked stone from much further away.',
-    cost: 'Your ear is on the wall rather than on the passage. You hear much '
-      + 'less of what is coming.',
+    cost: 'An ear on the wall is an ear off the passage.',
     mod: (m, n) => { m.secretSense *= 1 + 0.9 * n; m.hearing *= Math.pow(0.78, n); },
   },
   {
     id: 'quiver_hunt', name: 'Quiver of the Hunt', tag: T.BOW, rarity: 1, max: 3,
     text: 'You can carry three more bolts, and you find three now.',
-    cost: 'A full quiver is a heavy one, and it rattles. You are slower, and '
-      + 'easier to hear behind you.',
+    cost: 'A full quiver is heavy, and it rattles behind you.',
     requires: (run) => run.hasCrossbow,
     mod: (m, n) => {
       m.crossbowCapacity += 3 * n;
@@ -220,7 +212,7 @@ export const RELICS = [
   {
     id: 'extended_limbs', name: 'Extended Limbs', tag: T.BOW, rarity: 2, max: 2,
     text: 'Longer limbs, longer reach.',
-    cost: 'A heavier draw. You are markedly slower to get the next bolt away.',
+    cost: 'A heavier draw. The next bolt is a long time coming.',
     requires: (run) => run.hasCrossbow,
     mod: (m, n) => { m.crossbowRangeBonus += 3 * n; m.boltRate *= Math.pow(0.85, n); },
   },
@@ -233,9 +225,8 @@ export const RELICS = [
   },
   {
     id: 'reclaimer', name: 'Reclaimer', tag: T.BOW, rarity: 3, max: 1,
-    text: 'A bolt that kills has a 35% chance of returning to your quiver.',
-    cost: 'A bolt pulled back out of something never flies quite the same '
-      + 'again. All of yours hit softer.',
+    text: 'One killing bolt in three comes back to the quiver.',
+    cost: 'A bolt drawn back out never flies true again. None of yours do.',
     requires: (run) => run.hasCrossbow,
     mod: (m) => { m.reclaim = 0.35; m.crossbowDamage *= 0.85; },
   },
