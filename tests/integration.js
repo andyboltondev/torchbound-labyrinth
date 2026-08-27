@@ -9,13 +9,13 @@ import { generateLevel } from '../src/gen/dungeon.js';
 import { Run } from '../src/game/run.js';
 import { World } from '../src/game/world.js';
 import { Enemy } from '../src/game/enemies.js';
-import { RELICS, RELIC_BY_ID, computeMods, offerRelics } from '../src/game/relics.js';
+import { RELICS, RELIC_BY_ID, computeMods, offerRelics, baseMods, MOD_BETTER } from '../src/game/relics.js';
 import { T } from '../src/gen/tiles.js';
 import { inputDirToGrid, screenDirToGrid, screenX, screenY } from '../src/render/iso.js';
 import { bfsField, N4 } from '../src/gen/grid.js';
 import { RNG } from '../src/core/rng.js';
 import { SoundField } from '../src/game/soundfield.js';
-import { HP_FLOOR, REWARD_BY_ID, SACRIFICE_BY_ID } from '../src/game/altars.js';
+import { HP_FLOOR, REWARDS, SACRIFICES, REWARD_BY_ID, SACRIFICE_BY_ID } from '../src/game/altars.js';
 import { toCsv, parseCsv, normalise, rank, merge, HALL_SIZE } from '../src/game/hall.js';
 import { hazardBudget, HAZARDS } from '../src/gen/biomes.js';
 import { DIFFICULTIES, DIFFICULTY_LIST } from '../src/game/difficulty.js';
@@ -725,6 +725,117 @@ test('an altar takes exactly what it said and gives exactly what it promised', (
   assert(!world.takeOffer(prop, offer), 'a spent altar answered a second time');
 });
 
+test('every altar reward actually gives something', () => {
+  for (const reward of REWARDS) {
+    // The key reward needs a level that actually has a sealed gate on it, so
+    // walk seeds until one turns up rather than hoping the first one does.
+    let built = null;
+    for (let s = 0; s < 12 && !built; s++) {
+      const candidate = makeWorld(12, `reward-${reward.id}-${s}`, (r) => { r.hasCrossbow = true; });
+      if (reward.id !== 'key' || candidate.level.gates.length > 0) built = candidate;
+    }
+    assert(built, `no level with a gate on it was found for ${reward.id}`);
+    const { world, run, level } = built;
+    const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+    clearArena(world, cx, cy, 3);
+    place(world, cx, cy);
+    step(world, 20);
+    // Put the run in a state where this reward is worth having.
+    run.hp = Math.round(run.maxHp * 0.4);
+    run.arrows = 0;
+    assert(reward.usable(run, world), `${reward.id} is never usable, even when it should be`);
+
+    const before = {
+      hp: run.hp, arrows: run.arrows, hints: world.hints.length,
+      seen: world.vis.discoveredCount,
+    };
+    const prop = altarAt(world, cx, cy, 'reward_' + reward.id);
+    world.takeOffer(prop, {
+      tier: reward.tier, reward, sacrifice: SACRIFICE_BY_ID.hpFixed,
+      amount: 1, costText: '1 vitality',
+    });
+    const gained = run.hp > before.hp - 1                 // the price was 1
+      || run.arrows > before.arrows
+      || world.hints.length > before.hints
+      || world.vis.discoveredCount > before.seen;
+    assert(gained, `${reward.id} paid out nothing at all`);
+  }
+});
+
+test('every altar sacrifice actually takes something', () => {
+  for (const sacrifice of SACRIFICES) {
+    const { world, run, level } = makeWorld(7, 'sac-' + sacrifice.id, (r) => { r.hasCrossbow = true; });
+    const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+    clearArena(world, cx, cy, 4);
+    place(world, cx, cy);
+    step(world, 30);
+    run.hp = run.maxHp;
+    run.score.level.combat = 4000;
+    assert(sacrifice.affordable(run, world, 1),
+      `${sacrifice.id} is never affordable, even from full health and a full board`);
+
+    const before = {
+      hp: run.hp, score: run.score.levelSubtotal, enemies: world.enemies.length,
+      seen: world.vis.discoveredCount, hints: world.hints.length,
+    };
+    const prop = altarAt(world, cx, cy, 'sac_' + sacrifice.id);
+    world.takeOffer(prop, {
+      tier: sacrifice.tier, reward: REWARD_BY_ID.mend, sacrifice,
+      amount: sacrifice.amount(run, 1), costText: sacrifice.text(run, 1),
+    });
+    const paid = run.hp < before.hp
+      || run.score.levelSubtotal < before.score
+      || world.enemies.length > before.enemies
+      || world.vis.discoveredCount < before.seen;
+    assert(paid, `${sacrifice.id} cost the player nothing`);
+  }
+});
+
+test('an altar always pairs a reward with a price of its own size', () => {
+  for (const hp of [30, 60, 140]) {
+    for (const levelScore of [0, 900, 5000]) {
+      const { world, run } = makeWorld(9, `pair-${hp}-${levelScore}`, (r) => { r.hasCrossbow = true; });
+      run.hp = hp;
+      run.arrows = 0;
+      run.score.level.combat = levelScore;
+      step(world, 20);
+      const prop = altarAt(world, Math.floor(world.player.x), Math.floor(world.player.y));
+      const offers = world.altarOffers(prop);
+      const seenTiers = new Set();
+      for (const offer of offers) {
+        assert(offer.reward.tier === offer.sacrifice.tier,
+          `a tier ${offer.reward.tier} reward was sold for a tier ${offer.sacrifice.tier} price`);
+        assert(!seenTiers.has(offer.tier),
+          `two offers of tier ${offer.tier} on the same slab`);
+        seenTiers.add(offer.tier);
+      }
+    }
+  }
+});
+
+test('a bigger answer costs more of the same thing', () => {
+  const { world, run } = makeWorld(7, 'sac-scale');
+  run.hp = 140;
+  run.score.level.combat = 6000;
+  const cost = (id) => SACRIFICE_BY_ID[id].amount(run, 1);
+  // Health, tier by tier: a measure of blood, then a third of you, then all
+  // but the last of you.
+  assert(cost('hpFixed') < cost('hpPercent'),
+    `tier 1 health (${cost('hpFixed')}) is not cheaper than tier 2 (${cost('hpPercent')})`);
+  assert(cost('hpPercent') < cost('hpDrop'),
+    `tier 2 health (${cost('hpPercent')}) is not cheaper than tier 3 (${cost('hpDrop')})`);
+  // Score: a fixed toll, then the whole depth.
+  assert(cost('scoreFixed') < cost('scoreLevel'),
+    `tier 1 score (${cost('scoreFixed')}) is not cheaper than tier 2 (${cost('scoreLevel')})`);
+  // ...and the relic that softens them softens all of them.
+  for (const id of ['hpFixed', 'hpPercent', 'scoreFixed']) {
+    assert(SACRIFICE_BY_ID[id].amount(run, 0.6) < SACRIFICE_BY_ID[id].amount(run, 1),
+      `${id} ignores the Bloodless Bargain`);
+  }
+  assert(SACRIFICE_BY_ID.hpDrop.amount(run, 0.6) < SACRIFICE_BY_ID.hpDrop.amount(run, 1),
+    'hpDrop ignores the Bloodless Bargain');
+});
+
 test('forgetting wipes the chart, and charting fills it without marking anything', () => {
   const { world, level } = makeWorld(6, 'altar-chart');
   step(world, 30);
@@ -1026,11 +1137,60 @@ test('relic modifiers are recomputed, never applied twice', () => {
   assertNear(again.torchRadius, doubled.torchRadius, 0.0001, 'recompute drifted');
 });
 
-test('every relic states a real trade-off or explicitly states it has none', () => {
+test('every relic gives something up, in numbers and not only in prose', () => {
   for (const relic of RELICS) {
     assert(relic.text && relic.text.length > 8, `${relic.id} has no description`);
-    assert(relic.cost && relic.cost.length > 3, `${relic.id} has no stated cost`);
     assert(relic.max >= 1, `${relic.id} has no stack limit`);
+    assert(relic.cost && relic.cost.length > 3, `${relic.id} has no stated cost`);
+    // A cost line that says there is no cost is not a cost line.
+    assert(!/^none\b/i.test(relic.cost.trim()),
+      `${relic.id} claims to be free: "${relic.cost}"`);
+
+    // And the prose has to be backed by the numbers. Applied at one stack and
+    // at its limit, every relic must move at least one modifier in the
+    // player's favour and at least one against them.
+    for (const stacks of [1, relic.max]) {
+      const base = baseMods();
+      const mods = baseMods();
+      relic.mod(mods, stacks);
+      let better = [];
+      let worse = [];
+      for (const key of Object.keys(base)) {
+        const dir = MOD_BETTER[key];
+        assert(dir !== undefined, `no direction is recorded for the modifier "${key}"`);
+        const from = Number(base[key]);
+        const to = Number(mods[key]);
+        if (to === from) continue;
+        if ((to > from) === (dir > 0)) better.push(key);
+        else worse.push(key);
+      }
+      assert(better.length > 0,
+        `${relic.id} at ${stacks} does nothing for the player`);
+      assert(worse.length > 0,
+        `${relic.id} at ${stacks} costs the player nothing: it only improves ${better.join(', ')}`);
+    }
+  }
+});
+
+test('a relic stacked to its limit costs more than one taken once', () => {
+  for (const relic of RELICS) {
+    if (relic.max < 2) continue;
+    const one = baseMods();
+    const many = baseMods();
+    relic.mod(one, 1);
+    relic.mod(many, relic.max);
+    const base = baseMods();
+    let deepened = false;
+    for (const key of Object.keys(base)) {
+      if (MOD_BETTER[key] > 0 ? many[key] < one[key] : many[key] > one[key]) {
+        // Only counts if this modifier is a cost for this relic in the first
+        // place -- i.e. it already moved against the player at one stack.
+        const isCost = MOD_BETTER[key] > 0 ? one[key] < base[key] : one[key] > base[key];
+        if (isCost) { deepened = true; break; }
+      }
+    }
+    assert(deepened,
+      `${relic.id} stacks to ${relic.max} without the cost growing with it`);
   }
 });
 

@@ -36,7 +36,9 @@ export const REWARDS = [
   {
     id: 'key', tier: 2, name: 'The next key',
     text: 'Where the key to the next sealed gate is lying.',
-    usable: (run, world) => !!world.hintTarget('key'),
+    // Not worth paying for twice: an altar will not sell an answer the
+    // player has already been given by a map or a captive.
+    usable: (run, world) => !!world.hintTarget('key') && !world.alreadyHinted('key'),
   },
   {
     id: 'heal', tier: 2, name: 'Made whole',
@@ -52,7 +54,7 @@ export const REWARDS = [
   {
     id: 'exit', tier: 3, name: 'The way down',
     text: 'Where the stairs are, marked and pointed at until you reach them.',
-    usable: (run, world) => !world.hints.some((h) => !h.resolved && h.kind === 'exit'),
+    usable: (run, world) => !!world.hintTarget('exit') && !world.alreadyHinted('exit'),
   },
   {
     id: 'restored', tier: 3, name: 'Restored',

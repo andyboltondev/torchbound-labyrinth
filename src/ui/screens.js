@@ -767,7 +767,7 @@ export class Screens {
       card.appendChild(el('span', 'relic-tag', relic.tag));
       card.appendChild(el('span', 'relic-name', relic.name));
       card.appendChild(el('span', 'relic-text', relic.text));
-      if (relic.cost && relic.cost !== 'None.') card.appendChild(el('span', 'relic-cost', relic.cost));
+      card.appendChild(el('span', 'relic-cost', relic.cost));
       card.addEventListener('click', () => {
         if (this.host.audio) this.host.audio.play('relicTake');
         this.host.chooseRelic(relic);

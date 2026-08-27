@@ -1043,6 +1043,14 @@ export class World {
     return null;
   }
 
+  // Is there already an unresolved hint pointing at whatever this kind would
+  // name? Used to keep an altar from selling an answer the player has.
+  alreadyHinted(kind) {
+    const t = this.hintTarget(kind);
+    if (!t) return false;
+    return this.hints.some((h) => !h.resolved && Math.hypot(h.x - t.x, h.y - t.y) < 0.6);
+  }
+
   // Adds the hint and marks the spot on the chart. Returns what it revealed,
   // or null when there was nothing left of that kind to point at.
   revealHint(kind, source) {
@@ -1333,9 +1341,19 @@ export class World {
       const n = id === 'ambush'
         ? 3 + this.rng.int(0, 2) + Math.floor(depth / 3)
         : 1 + this.rng.int(0, 1) + Math.floor(depth / 6);
-      this.spawnAmbushAround(this.player.x, this.player.y, n);
-      this.particles.text(this.player.x, this.player.y - 1.4, 'THEY HEARD', '#e05a3c', 15, 2.0);
-      return 'they came';
+      const came = this.spawnAmbushAround(this.player.x, this.player.y, n);
+      if (came > 0) {
+        this.particles.text(this.player.x, this.player.y - 1.4, 'THEY HEARD', '#e05a3c', 15, 2.0);
+        return came + ' of them';
+      }
+      // Standing somewhere with nowhere for them to come from does not make
+      // the offering free. The altar takes the only other thing to hand, in
+      // points rather than blood -- a surprise price should never be lethal.
+      const toll = this.run.score.addPenalty(
+        (id === 'ambush' ? 900 : 400) * (1 + depth * 0.1), 'owed to an altar');
+      this.particles.text(this.player.x, this.player.y - 1.4,
+        'NOTHING CAME  -' + Math.round(toll), '#e05a3c', 14, 2.2);
+      return Math.round(toll) + ' points, since nothing came';
     }
     if (id === 'amnesia') {
       this.forgetEverything();
@@ -1739,6 +1757,7 @@ export class World {
       burstStone(this.particles, sx, sy, '#3a3a3a');
       placed++;
     }
+    return placed;
   }
 
   // --- encounters ---------------------------------------------------------

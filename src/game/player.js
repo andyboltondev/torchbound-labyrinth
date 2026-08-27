@@ -155,7 +155,9 @@ export class Player {
                this.run.hasCrossbow && this.run.arrows > 0) {
       const duration = 0.3;
       this.attack = { type: 'fire', t: 0, duration, hitAt: 0.1, resolved: false };
-      this.fireCooldown = 0.7;
+      // How long until the next bolt can be drawn. A heavier bow is a slower
+      // one, which is the price Extended Limbs charges for its reach.
+      this.fireCooldown = 0.7 / (mods.boltRate || 1);
       this.attackCooldown = 0.24;
     }
   }
