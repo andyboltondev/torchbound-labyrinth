@@ -91,6 +91,10 @@ export class World {
     // puts an arrow on its rim for each one; whatever adds a hint owns
     // clearing it, and reaching the spot resolves it automatically.
     this.hints = [];
+    // Rooms the player has actually walked into, so a chamber only announces
+    // itself the first time.
+    this.enteredRooms = new Set();
+    this.currentRoom = null;
     this.occupied = new Map();   // tile index -> enemy id, refreshed each frame
 
     this.flow = null;
@@ -312,6 +316,7 @@ export class World {
   // One footfall per tile, which is exactly the rhythm grid movement wants.
   onPlayerEnterTile(x, y) {
     this.gore.tread(this.player, x, y);
+    this.checkChamber(x, y);
     const hz = this.hazardMods;
     const colour = hz.footstepSplash ? '#8fb4c4' : hz.footprints ? '#4a3722' : '#6f6a5e';
     footDust(this.particles, x + 0.5, y + 0.5, colour);
@@ -323,6 +328,25 @@ export class World {
   // the noise it makes will be hung off.
   onEnemyEnterTile(enemy, x, y) {
     this.gore.tread(enemy, x, y);
+  }
+
+  // Walking into a room nobody has been into yet. Announced once per room,
+  // so the score can make something of the moment without doing it every
+  // time the player crosses the same threshold.
+  checkChamber(x, y) {
+    let found = null;
+    for (const r of this.level.rooms) {
+      if (x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1) { found = r; break; }
+    }
+    if (!found || found === this.currentRoom) {
+      this.currentRoom = found;
+      return;
+    }
+    this.currentRoom = found;
+    if (this.enteredRooms.has(found.id)) return;
+    this.enteredRooms.add(found.id);
+    const area = (found.x1 - found.x0 + 1) * (found.y1 - found.y0 + 1);
+    this.emit('chamber', { room: found, area });
   }
 
   // Knockback is presentation only: shoving a grid mover off its lane would

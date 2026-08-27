@@ -60,6 +60,9 @@ export class Screens {
     this.root.appendChild(screen);
     this.node = screen;
     this.current = name;
+    // The score follows the screen. Told after the screen exists, so anything
+    // that reads game state on the way past sees the new one.
+    if (this.host.onScreen) this.host.onScreen(name, data);
     // Focus the primary control so keyboard and gamepad users are not lost.
     const focus = panel.querySelector('.btn.primary, input, .btn');
     if (focus) setTimeout(() => focus.focus({ preventScroll: true }), 40);

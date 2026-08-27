@@ -44,6 +44,7 @@ class Game {
       afterSummary: () => this.showRelicChoice(),
       onTouchModeChange: () => this.refreshTouchMode(),
       onSettingChanged: (key) => this.applySettings(key),
+      onScreen: (name) => this.scoreFor(name),
       get run() { return window.__game ? window.__game.run : null; },
     });
     this.state = STATE.MENU;
@@ -83,6 +84,12 @@ class Game {
       this.audio.init();
       this.audio.setReverbEnabled(profile.settings.reverb !== false);
       this.audio.resume();
+      // The score starts here and does not stop again for the life of the
+      // page. Everything after this is a crossfade between scenes, which is
+      // what makes the menu flow into a descent and back out of it.
+      this.music.start();
+      this.music.setScene(this.state === STATE.PLAYING ? 'explore' : 'menu');
+      this.music.setIntensity(0.12, false);
       window.removeEventListener('pointerdown', arm);
       window.removeEventListener('keydown', arm);
     };
@@ -175,6 +182,7 @@ class Game {
         this.music.start();
         const zone = level.zoneInfo[0];
         this.music.setBiome(zone ? zone.biome.id : level.biome.id, zone ? zone.hazardId : 'clear');
+        this.music.setScene(level.isBoss ? 'boss' : 'explore');
         this.music.setIntensity(level.isBoss ? 0.75 : 0.14, level.isBoss);
         this.audio.play('levelStart');
       }
@@ -217,12 +225,32 @@ class Game {
     this.hud.hide();
     this.touch.setVisible(false);
     const breakdown = this.world.summary();
-    if (this.audio.ready) this.music.setIntensity(0.1, false);
+    if (this.audio.ready) {
+      // The depth is behind them. Let the score say so before the relics do.
+      this.music.setScene('relics');
+      this.music.setIntensity(0.35, false);
+    }
     this.screens.show('summary', {
       breakdown,
       run: this.run,
       nextIsBoss: this.run.isBossDepth(this.run.depth + 1),
     });
+  }
+
+  // Every screen that is not a depth gets the scene that belongs to it.
+  // Anything shown over live play -- the pause menu, an altar, the bestiary
+  // opened mid-run -- is left alone: the labyrinth is still the labyrinth.
+  scoreFor(screen) {
+    if (!this.audio.ready || !this.music.running) return;
+    if (this.state === STATE.PLAYING || this.state === STATE.PAUSED) return;
+    if (screen === 'relics' || screen === 'summary') this.music.setScene('relics');
+    else if (screen === 'hall' || screen === 'gameover' || screen === 'fallen') {
+      this.music.setScene('hall');
+    } else if (screen === 'home' || screen === 'difficulty'
+               || screen === 'settings' || screen === 'bestiary') {
+      this.music.setScene('menu');
+      this.music.setIntensity(0.1, false);
+    }
   }
 
   showRelicChoice() {
@@ -287,7 +315,8 @@ class Game {
     this.hud.hide();
     this.touch.setVisible(false);
     if (this.audio.ready) {
-      this.music.stop();
+      this.music.setScene('hall');
+      this.music.setIntensity(0.2, false);
       this.audio.master.gain.value = profile.settings.master;
     }
     // A run that ends mid-depth still banks what was earned on the way down.
@@ -384,12 +413,22 @@ class Game {
       case 'wave': this.hud.toast('Wave ' + data.index + ' of ' + data.total, 'bad'); break;
       case 'bossAwake':
         this.hud.toast(data.boss.def.name + ' stirs', 'bad');
-        if (this.audio.ready) this.music.setIntensity(1, true);
+        if (this.audio.ready) {
+          this.music.setScene('boss');
+          this.music.setIntensity(1, true);
+        }
+        break;
+      case 'chamber':
+        // A brief tonal lift as a room nobody has been in opens up.
+        if (this.audio.ready) this.music.chamberShift(Math.min(1.4, data.area / 30));
         break;
       case 'bossPhase': this.hud.toast('It changes', 'bad'); break;
       case 'bossKilled':
         this.hud.toast(data.boss.def.name + ' falls', 'good');
-        if (this.audio.ready) this.music.setIntensity(0.25, false);
+        if (this.audio.ready) {
+          this.music.setScene('explore');
+          this.music.setIntensity(0.25, false);
+        }
         break;
       case 'descend': this.descend(); break;
       case 'playerDied':
