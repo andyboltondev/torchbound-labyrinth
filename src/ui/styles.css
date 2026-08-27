@@ -361,6 +361,10 @@ input, textarea { -webkit-user-select: text; user-select: text; }
 .tbtn.slash { border-color: rgba(232,180,92,.6); color: var(--gold); grid-column: 2; grid-row: 2; }
 .tbtn.fire { border-color: rgba(168,216,239,.55); color: var(--frost); grid-column: 1; grid-row: 2; }
 .tbtn.action { border-color: rgba(111,206,135,.5); color: var(--good); grid-column: 2; grid-row: 1; }
+/* The torch toggle takes the one free corner of the pad. Smaller type: it is
+   a word, not a verb, and it is pressed far less often than the other three. */
+.tbtn.torch { border-color: rgba(255,154,58,.5); color: var(--ember); grid-column: 1; grid-row: 1; font-size: 10px; }
+.tbtn.torch.out { border-color: rgba(143,160,184,.4); color: var(--stone); }
 
 /* -------------------------------------------------------------- screens */
 #screens { position: absolute; inset: 0; z-index: 10; pointer-events: none; }
@@ -537,6 +541,20 @@ table.board td { padding: 9px 10px; border-bottom: 1px solid rgba(43,52,68,.5); 
 table.board tr.you td { background: rgba(232,180,92,.1); color: var(--gold); }
 table.board td.rank { font-family: var(--display); color: var(--gold-dim); width: 46px; }
 table.board td.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.board td.when { color: var(--stone-dim); font-size: 11.5px; }
+table.board td.empty { text-align: center; color: var(--stone-dim); padding: 26px 10px; }
+/* Fifty rows will not fit on a phone, so the table gets its own scroll strip
+   with the header pinned to the top of it. */
+.board-wrap.tall { max-height: min(46vh, 420px); overflow-y: auto; }
+.board-wrap.tall table.board th {
+  position: sticky; top: 0; z-index: 1; background: var(--panel);
+  box-shadow: 0 1px 0 var(--panel-edge);
+}
+.hall-filter { margin-bottom: 10px; }
+.hall-files { justify-content: flex-start; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.hall-note { color: var(--gold-dim); }
+.btn.danger { border-color: rgba(194,69,47,.5); color: var(--blood); }
+.btn.danger:hover { border-color: var(--blood); }
 table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
 
 /* ------------------------------------------------------------ relics */
@@ -651,6 +669,41 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
 }
 .relic-pill b { color: var(--gold); font-weight: 600; }
 .hint { font-size: 12px; color: var(--stone-dim); line-height: 1.6; }
+
+/* The altar's offers. Three cards, warmer and more expensive left to right,
+   so the price is legible before the reward is read. */
+.offer-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 4px 0 18px; }
+.offer-card {
+  display: flex; flex-direction: column; gap: 7px; text-align: left; cursor: pointer;
+  padding: 15px 16px 14px; border-radius: 6px; font-family: var(--ui);
+  background: rgba(14,12,20,.82); border: 1px solid var(--panel-edge);
+  transition: border-color .12s, transform .08s, background .12s;
+}
+.offer-card:hover, .offer-card:focus-visible {
+  border-color: rgba(196,106,216,.75); background: rgba(26,18,34,.9); transform: translateY(-2px);
+  outline: none;
+}
+.offer-tier { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--stone-dim); }
+.offer-name { font-family: var(--display); font-size: 19px; color: var(--parchment); }
+.offer-text { font-size: 12.5px; color: var(--stone); line-height: 1.55; flex: 1 1 auto; }
+.offer-cost {
+  display: flex; flex-direction: column; gap: 2px; margin-top: 4px; padding-top: 9px;
+  border-top: 1px solid rgba(196,106,216,.22); font-size: 12px; color: #d9a0e8;
+}
+.offer-cost b { font-family: var(--display); font-size: 13.5px; font-weight: 500; color: #e0a8f0; }
+.offer-card.tier1 { border-left: 3px solid rgba(143,183,255,.5); }
+.offer-card.tier2 { border-left: 3px solid rgba(232,180,92,.55); }
+.offer-card.tier3 { border-left: 3px solid rgba(224,90,60,.65); }
+
+/* The build stamp. Deliberately the quietest thing on the panel: it exists so
+   a screenshot can be traced back to a commit, not to be read while playing. */
+.build-stamp {
+  margin: 18px 0 0; text-align: center; font-size: 10.5px; letter-spacing: .08em;
+  color: var(--stone-dim); opacity: .62; font-variant-numeric: tabular-nums;
+  user-select: text; -webkit-user-select: text;
+}
+.build-stamp b { font-weight: 500; color: var(--stone); }
+.build-stamp small { display: block; margin-top: 3px; font-size: 9.5px; opacity: .8; }
 .controls-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px 22px; margin-top: 10px; }
 .controls-grid div { font-size: 12.5px; color: var(--stone); display: flex; justify-content: space-between; gap: 10px; }
 .controls-grid b { color: var(--parchment); font-weight: 500; }

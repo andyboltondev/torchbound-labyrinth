@@ -9,11 +9,14 @@ import { generateLevel } from '../src/gen/dungeon.js';
 import { Run } from '../src/game/run.js';
 import { World } from '../src/game/world.js';
 import { Enemy } from '../src/game/enemies.js';
-import { RELICS, RELIC_BY_ID, computeMods, offerRelics } from '../src/game/relics.js';
+import { RELICS, RELIC_BY_ID, computeMods, offerRelics, baseMods, MOD_BETTER } from '../src/game/relics.js';
 import { T } from '../src/gen/tiles.js';
 import { inputDirToGrid, screenDirToGrid, screenX, screenY } from '../src/render/iso.js';
 import { bfsField, N4 } from '../src/gen/grid.js';
 import { RNG } from '../src/core/rng.js';
+import { SoundField } from '../src/game/soundfield.js';
+import { HP_FLOOR, REWARDS, SACRIFICES, REWARD_BY_ID, SACRIFICE_BY_ID } from '../src/game/altars.js';
+import { toCsv, parseCsv, normalise, rank, merge, HALL_SIZE } from '../src/game/hall.js';
 import { hazardBudget, HAZARDS } from '../src/gen/biomes.js';
 import { DIFFICULTIES, DIFFICULTY_LIST } from '../src/game/difficulty.js';
 
@@ -135,6 +138,9 @@ function clearArena(world, cx, cy, radius = 3) {
   }
   world.sealBlocks.clear();
   world.enemies.length = 0;
+  // A raving captive screaming somewhere off-stage is a real noise source,
+  // which is wonderful in play and ruinous in a controlled scenario.
+  world.level.props = world.level.props.filter((p) => p.type !== 'prisoner');
   for (let y = cy - radius; y <= cy + radius; y++) {
     for (let x = cx - radius; x <= cx + radius; x++) world.grid.set(x, y, T.FLOOR);
   }
@@ -250,6 +256,667 @@ test('a blocked diagonal takes the nearest way round, unless told to stop', () =
   step(world, 40, { moveX: 0.7071, moveY: -0.7071, slash: false, fire: false });
   assert(world.player.mover.tileX === cx && world.player.mover.tileY === cy,
     'strict mode deflected a blocked diagonal');
+});
+
+test('the character turns the moment you turn, not a tile later', () => {
+  const { world, level } = makeWorld(3, 'facing-1');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 6);
+  place(world, cx, cy);
+  world.player.mover.heading = null;
+
+  const turns = [
+    { name: 'east to north', from: { x: 1, y: 0 }, to: { x: 0, y: -1 } },
+    { name: 'east to west', from: { x: 1, y: 0 }, to: { x: -1, y: 0 } },   // a full about-face
+    { name: 'north to south-west', from: { x: 0, y: -1 }, to: { x: -0.7071, y: 0.7071 } },
+  ];
+
+  for (const turn of turns) {
+    place(world, cx, cy);
+    world.player.mover.heading = null;
+    // Settle into a run in the first direction.
+    step(world, 40, { moveX: turn.from.x, moveY: turn.from.y, slash: false, fire: false });
+    const startTile = { x: world.player.mover.tileX, y: world.player.mover.tileY };
+
+    // Now turn, and measure how far the feet travel before the body agrees.
+    let frames = 0;
+    const want = Math.atan2(turn.to.y, turn.to.x);
+    const facing = () => {
+      let d = Math.atan2(world.player.faceY, world.player.faceX) - want;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      return Math.abs(d);
+    };
+    while (frames < 120 && facing() > 0.2) {
+      world.update(1 / 60, { moveX: turn.to.x, moveY: turn.to.y, slash: false, fire: false });
+      frames++;
+    }
+    const tiles = Math.abs(world.player.mover.tileX - startTile.x)
+      + Math.abs(world.player.mover.tileY - startTile.y);
+    assert(facing() <= 0.2,
+      `${turn.name}: never came round (${(facing() * 57.3).toFixed(0)} degrees off after ${frames} frames)`);
+    // The feet finish the step they are committed to; the body must not need
+    // a whole tile of travel to notice.
+    assert(tiles <= 1,
+      `${turn.name}: took ${tiles} tiles of walking to face the right way`);
+    assert(frames <= 18,
+      `${turn.name}: took ${frames} frames (${(frames / 60).toFixed(2)}s) to come round`);
+  }
+});
+
+test('a swing in progress still locks the facing where it was aimed', () => {
+  const { world, level } = makeWorld(3, 'facing-2');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 6);
+  place(world, cx, cy);
+  step(world, 30, { moveX: 1, moveY: 0, slash: false, fire: false });
+  const aimed = { x: world.player.faceX, y: world.player.faceY };
+
+  // Swing, and try to turn away mid-arc.
+  world.update(1 / 60, { moveX: 1, moveY: 0, slash: true, fire: false });
+  assert(world.player.attack, 'the swing did not start');
+  for (let i = 0; i < 10; i++) {
+    world.update(1 / 60, { moveX: -1, moveY: 0, slash: false, fire: false });
+    if (!world.player.attack) break;
+  }
+  const drift = Math.hypot(world.player.faceX - aimed.x, world.player.faceY - aimed.y);
+  assert(drift < 0.05, `the arc swept round with the feet (drifted ${drift.toFixed(2)})`);
+});
+
+test('a doorway one tile off the line pulls you through it', () => {
+  const { world, level } = makeWorld(3, 'doorway-1');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 4);
+  // A wall across the north of the arena with a single gap, one tile west of
+  // where the player stands. Pressing north alone should find it.
+  for (let x = cx - 4; x <= cx + 4; x++) level.grid.set(x, cy - 1, T.WALL);
+  level.grid.set(cx - 1, cy - 1, T.FLOOR);
+
+  world.strictMovement = false;
+  place(world, cx, cy);
+  world.player.mover.heading = null;
+  step(world, 60, { moveX: 0, moveY: -1, slash: false, fire: false });
+  assert(world.player.mover.tileY < cy,
+    `holding north beside a doorway left the player at ${world.player.mover.tileX},`
+    + `${world.player.mover.tileY} instead of walking through it`);
+  assert(world.player.mover.tileX === cx - 1,
+    'the player went through something other than the doorway');
+
+  // ...but only one tile of tolerance. Two tiles off is a wall, not a near miss.
+  place(world, cx + 1, cy);
+  world.player.mover.heading = null;
+  step(world, 60, { moveX: 0, moveY: -1, slash: false, fire: false });
+  assert(world.player.mover.tileY === cy,
+    'the assist reached across two tiles to find a doorway');
+
+  // Strict movement means exactly what was pressed, including the refusal.
+  world.strictMovement = true;
+  place(world, cx, cy);
+  world.player.mover.heading = null;
+  step(world, 60, { moveX: 0, moveY: -1, slash: false, fire: false });
+  assert(world.player.mover.tileX === cx && world.player.mover.tileY === cy,
+    'strict movement still slid the player sideways into a doorway');
+});
+
+test('a lone pillar is not mistaken for a doorway', () => {
+  const { world, level } = makeWorld(3, 'doorway-2');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 4);
+  level.grid.set(cx, cy - 1, T.WALL);   // one block, open ground either side
+
+  world.strictMovement = false;
+  place(world, cx, cy);
+  world.player.mover.heading = null;
+  step(world, 60, { moveX: 0, moveY: -1, slash: false, fire: false });
+  assert(world.player.mover.tileX === cx && world.player.mover.tileY === cy,
+    'the assist shunted the player round an obstacle rather than through a door');
+});
+
+test('dousing the torch costs sight and buys hearing, and is reversible', () => {
+  const { world } = makeWorld(4, 'torch-1');
+  step(world, 10);
+  const litRadius = world.torchRadius;
+  const litHearing = world.hearingScale;
+  assert(litRadius > 5, 'a lit torch should reach a useful distance');
+
+  world.toggleTorch();
+  step(world, 10);
+  assert(!world.torchLit, 'the torch did not go out');
+  assert(world.torchRadius < litRadius * 0.5,
+    `dousing barely changed the torch radius (${litRadius} -> ${world.torchRadius})`);
+  assert(world.hearingScale > litHearing, 'going dark did not sharpen hearing');
+
+  world.torchToggleCooldown = 0;
+  world.toggleTorch();
+  step(world, 10);
+  assert(world.torchLit && world.torchRadius > litRadius * 0.9,
+    'relighting did not restore the torch');
+});
+
+test('a cold fire can be lit, but not by a torchbearer with no torch', () => {
+  const { world, level } = makeWorld(4, 'fire-1');
+  const fire = { kind: 'brazier', x: 0, y: 0, seed: 0.5, lit: false, radius: 4.4, intensity: 0.7, id: 'test_fire' };
+  const cell = level.floorCells.find((c) => world.layerAt(c.y) === 0);
+  fire.x = cell.x + 0.5; fire.y = cell.y + 0.5;
+  level.sconces.push(fire);
+  place(world, cell.x, cell.y);
+  clearArena(world, cell.x, cell.y, 2);
+
+  world.toggleTorch();          // go dark first
+  step(world, 6);
+  world.updateInteractTarget();
+  assert(world.interactTarget && world.interactTarget.type === 'fire',
+    'standing on a cold fire offered no action');
+  assert(!world.interactTarget.enabled, 'a doused torchbearer was allowed to light a fire');
+  world.interact();
+  assert(!fire.lit, 'the fire lit itself with nothing to light it from');
+
+  world.torchToggleCooldown = 0;
+  world.toggleTorch();
+  step(world, 6);
+  world.updateInteractTarget();
+  assert(world.interactTarget.enabled, 'a lit torch was still refused');
+  world.interact();
+  assert(fire.lit, 'the fire did not catch');
+  // ...and it now lights the room it is standing in.
+  world.refreshVisibility(0);
+  assert(world.vis.lightAt(Math.floor(fire.x) + 2, Math.floor(fire.y)) > 0,
+    'a lit fire threw no light');
+});
+
+test('blood is left where things bleed, and carried a few tiles on the boots', () => {
+  const { world, level } = makeWorld(4, 'gore-1');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 5);
+  place(world, cx, cy);
+
+  const enemy = spawnAt(world, 'draugr_thrall', cx + 1, cy);
+  enemy.hp = 1;
+  world.player.faceX = 1; world.player.faceY = 0;
+  step(world, 40, { moveX: 0, moveY: 0, slash: true, fire: false });
+  assert(world.gore.stains.length > 0, 'a kill left no blood at all');
+  assert(world.gore.corpses.length === 1, 'a kill left no body');
+
+  // Walk over the pool and away from it: the first tiles carry prints.
+  world.gore.stains.length = 0;
+  world.gore.pool(cx + 0.5, cy + 0.5, '#7a1f1c', 1);
+  const before = world.gore.stains.length;
+  world.player.mover.heading = null;
+  step(world, 90, { moveX: 1, moveY: 0, slash: false, fire: false });
+  const prints = world.gore.stains.filter((s) => s.print);
+  assert(prints.length > 0, 'walking out of a pool of blood left no prints');
+  assert(prints.length <= 6, `prints did not wear off: ${prints.length} of them`);
+  assert(world.gore.stains.length > before, 'no new stains were recorded at all');
+});
+
+// --- sound -----------------------------------------------------------------
+
+// Carves an explicit little map into a real level so the propagation rules can
+// be checked against a shape rather than against whatever the generator made.
+function carve(level, cells) {
+  for (const [x, y] of cells) level.grid.set(x, y, T.FLOOR);
+}
+
+test('sound will not go through a wall, and pays for every corner it turns', () => {
+  const { world, level } = makeWorld(3, 'sound-1');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  // Wall off a generous block, then cut two corridors of the same length out
+  // of it: one straight east, one that goes east then turns north.
+  for (let y = cy - 8; y <= cy + 8; y++) {
+    for (let x = cx - 2; x <= cx + 10; x++) level.grid.set(x, y, T.WALL);
+  }
+  const straight = [];
+  for (let i = 0; i <= 8; i++) straight.push([cx + i, cy]);
+  const dogleg = [];
+  for (let i = 0; i <= 4; i++) dogleg.push([cx + i, cy + 4]);
+  for (let i = 1; i <= 4; i++) dogleg.push([cx + 4, cy + 4 + i]);
+  carve(level, straight);
+  carve(level, dogleg);
+  level.grid.set(cx, cy + 1, T.FLOOR);
+  level.grid.set(cx, cy + 2, T.FLOOR);
+  level.grid.set(cx, cy + 3, T.FLOOR);
+  level.grid.set(cx, cy + 4, T.FLOOR);
+
+  const field = new SoundField(level.grid);
+  field.build(cx + 0.5, cy + 0.5, 30, () => false);
+
+  // Straight down the corridor: nothing turned, and it is exactly as far as
+  // it looks.
+  const far = field.hear(cx + 8.5, cy + 0.5, 1);
+  assert(far, 'a straight corridor did not carry sound at all');
+  assert(far.corners === 0, `a straight corridor counted ${far.corners} corners`);
+  assertNear(far.distance, 8, 0.1, 'straight corridor distance');
+
+  // Through the stone: eight tiles across, but not reachable in eight.
+  const behind = field.hear(cx + 8.5, cy + 2.5, 1);
+  assert(!behind || behind.distance > 9,
+    'sound reached straight through a wall');
+
+  // Round the bend: the same walk, but it cost more and it registered.
+  const bent = field.hear(cx + 4.5, cy + 8.5, 1);
+  assert(bent, 'sound did not turn the corner at all');
+  assert(bent.corners >= 1, 'turning a corner registered no corners');
+  assert(bent.distance > 8, `a dog-leg cost ${bent.distance}, no more than a straight run`);
+  assert(bent.echo > far.echo, 'a bend did not muddy the sound');
+});
+
+test('hearing reaches further than the torch, and further again in the dark', () => {
+  const { world } = makeWorld(4, 'sound-2');
+  step(world, 20);
+  const litRange = world.hearingRange;
+  assert(litRange > world.torchRadius * 1.4,
+    `hearing (${litRange}) barely beats the torch (${world.torchRadius})`);
+  world.toggleTorch();
+  step(world, 30);
+  assert(world.hearingRange > litRange, 'going dark did not extend hearing');
+});
+
+test('a bolt clattering off stone pulls unaware creatures to the noise', () => {
+  const { world, level } = makeWorld(4, 'sound-3', (r) => { r.hasCrossbow = true; });
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 1);
+  // One long corridor, so the creature is well outside the torch and cannot
+  // see the player however it happens to be facing.
+  for (let x = cx - 16; x <= cx + 2; x++) level.grid.set(x, cy, T.FLOOR);
+  world.flow = null;
+  place(world, cx, cy);
+
+  const watcher = spawnAt(world, 'draugr_thrall', cx - 12, cy);
+  watcher.state = 'idle';
+  step(world, 30);
+  assert(watcher.state === 'idle',
+    `the creature noticed the player twelve tiles off (state ${watcher.state})`);
+  // Read the starting tile after it has settled: an idle creature wanders, so
+  // where it was when it was placed is not where it is now.
+  const homeX = watcher.mover.tileX;
+
+  // A noise beyond it, on the far side from the player, so what it walks
+  // toward is the noise and not the torch.
+  const drawn = world.makeNoise(cx - 15, cy, 1.2);
+  assert(drawn >= 1, 'nothing heard a noise three tiles away down a straight corridor');
+  assert(watcher.state === 'seeking', 'the creature heard the noise and ignored it');
+  step(world, 180);
+  assert(watcher.mover.tileX < homeX,
+    `the creature never went to look (${homeX} -> ${watcher.mover.tileX})`);
+
+  // ...and it gives up rather than standing there for the rest of the level.
+  step(world, 60 * 8);
+  assert(watcher.state !== 'seeking', 'the creature investigated forever');
+});
+
+// --- what the labyrinth tells you, and who it tells you about --------------
+
+test('a map scrap marks one real thing and puts an arrow on the chart', () => {
+  const { world, level } = makeWorld(5, 'map-1');
+  const scrap = level.props.find((p) => p.type === 'mapScrap');
+  assert(scrap, 'no map was generated on a depth five level');
+  assert(world.hints.length === 0, 'the level started with hints already given');
+
+  const before = world.vis.seen.slice();
+  assert(world.readMap(scrap), 'the map could not be read');
+  assert(scrap.read && scrap.consumed, 'a read map is still lying there');
+  assert(world.hints.length === 1, 'reading a map gave no hint');
+
+  const hint = world.hints[0];
+  const i = level.grid.idx(Math.floor(hint.x), Math.floor(hint.y));
+  assert(world.vis.seen[i], 'the hint was not put on the chart');
+  // Being told where a thing is must not light the road to it.
+  let opened = 0;
+  for (let n = 0; n < before.length; n++) if (!before[n] && world.vis.seen[n]) opened++;
+  assert(opened <= 1, `reading a map revealed ${opened} tiles, not just the one`);
+
+  // ...and it stops pointing once the player has been there.
+  place(world, Math.floor(hint.x), Math.floor(hint.y));
+  step(world, 10);
+  assert(hint.resolved, 'the hint kept pointing after the player arrived');
+});
+
+test('a hint never points at something already taken', () => {
+  const { world, level } = makeWorld(6, 'map-2');
+  for (const k of level.keys) k.taken = true;
+  const hint = world.revealHint('key');
+  if (hint) {
+    assert(hint.kind !== 'key', 'a hint pointed at a key that was already taken');
+  }
+});
+
+test('killing a captive that did not ask for it costs, and mercy does not', () => {
+  const { world, level, run } = makeWorld(5, 'captive-1');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 4);
+
+  // One who is frightened, and one who has had enough.
+  const afraid = {
+    type: 'prisoner', x: cx + 1.5, y: cy + 0.5, wallX: 0, wallY: -1, mood: 'afraid',
+    seed: 0.3, spoken: false, searched: false, freed: false, knows: 'exit', carries: null,
+    id: 'captive_afraid',
+  };
+  const begging = {
+    type: 'prisoner', x: cx + 1.5, y: cy + 2.5, wallX: 0, wallY: -1, mood: 'begging',
+    seed: 0.7, spoken: false, searched: false, freed: false, knows: 'nothing', carries: null,
+    id: 'captive_begging',
+  };
+  level.props.push(afraid, begging);
+
+  // Speaking to the frightened one is free, and what they know is the point.
+  place(world, cx + 1, cy);
+  step(world, 6);
+  world.updateInteractTarget();
+  assert(world.interactTarget && world.interactTarget.type === 'captive',
+    'standing beside a captive offered nothing');
+  world.interact();
+  assert(afraid.spoken, 'the captive was not spoken to');
+  assert(world.hints.length === 1, 'a captive who knows the way said nothing useful');
+  assert(run.score.level.penalty === 0, 'listening to someone cost score');
+
+  // Cutting the frightened one down: killing them without being asked.
+  world.player.faceX = 0; world.player.faceY = 1;
+  world.murderCaptive(afraid);
+  assert(run.score.level.penalty < 0, 'murder cost nothing at all');
+  const murderCost = run.score.level.penalty;
+
+  // The one who asked. Listening first is what makes it mercy.
+  place(world, cx + 1, cy + 2);
+  step(world, 6);
+  world.updateInteractTarget();
+  world.interact();
+  assert(begging.spoken, 'the begging captive was not listened to');
+  const before = run.score.level.combat;
+  world.murderCaptive(begging);
+  assert(run.score.level.penalty === murderCost, 'mercy was charged as murder');
+  assert(run.score.level.combat > before, 'mercy paid nothing');
+});
+
+test('a raving captive brings company', () => {
+  const { world, level } = makeWorld(5, 'captive-2');
+  const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+  clearArena(world, cx, cy, 1);
+  // The same corridor trick as the bolt test: far enough away that nothing
+  // here has anything to do with the player being visible.
+  for (let x = cx - 2; x <= cx + 16; x++) level.grid.set(x, cy, T.FLOOR);
+  world.flow = null;
+  place(world, cx, cy);
+  const watcher = spawnAt(world, 'draugr_thrall', cx + 12, cy);
+  watcher.state = 'idle';
+  step(world, 20);
+  assert(watcher.state === 'idle', `the creature already saw the player (${watcher.state})`);
+
+  level.props.push({
+    type: 'prisoner', x: cx + 14.5, y: cy + 0.5, wallX: 0, wallY: -1, mood: 'raving',
+    seed: 0.1, spoken: false, searched: false, freed: false, knows: 'nothing',
+    carries: null, screamTimer: 0.01, id: 'captive_raving',
+  });
+  step(world, 12);
+  assert(watcher.state === 'seeking',
+    `screaming did not draw anything (state ${watcher.state})`);
+});
+
+// --- altars ----------------------------------------------------------------
+
+function altarAt(world, x, y, id = 'test_altar') {
+  const prop = { type: 'altar', x: x + 0.5, y: y + 0.5, used: false, seed: 0.42, id };
+  world.level.props.push(prop);
+  return prop;
+}
+
+test('an altar never asks for something the player cannot pay', () => {
+  // Swept across a wide range of states, because the whole promise of the
+  // system is that every offer on the slab is payable when it is shown.
+  for (const hp of [14, 30, 49, 60, 120]) {
+    for (const levelScore of [0, 600, 3000]) {
+      const { world, run } = makeWorld(6, 'altar-afford-' + hp + '-' + levelScore);
+      run.hp = hp;
+      run.score.level.combat = levelScore;
+      const prop = altarAt(world, Math.floor(world.player.x), Math.floor(world.player.y));
+      for (const offer of world.altarOffers(prop)) {
+        const id = offer.sacrifice.id;
+        if (id === 'hpFixed' || id === 'hpPercent' || id === 'hpDrop') {
+          assert(run.hp - offer.amount >= HP_FLOOR,
+            `${id} at ${hp}hp would leave ${run.hp - offer.amount}`);
+        }
+        // Losing a whole percentage of nothing is not a sacrifice.
+        if (id === 'hpPercent') assert(hp >= 50, `a percentage was asked at ${hp}hp`);
+        // Dropping to a number is only ever offered from real strength.
+        if (id === 'hpDrop') {
+          assert(hp >= (run.hp - offer.amount) * 2,
+            `drop-to-a-number offered at ${hp}hp for a floor of ${run.hp - offer.amount}`);
+        }
+        if (id === 'scoreLevel') {
+          assert(levelScore >= 1200, `a level reset was asked for ${levelScore} points`);
+        }
+        if (id === 'scoreFixed') {
+          assert(levelScore >= 500, `a score payment was asked for ${levelScore} points`);
+        }
+      }
+    }
+  }
+});
+
+test('an altar never offers something the player has no use for', () => {
+  const { world, run } = makeWorld(6, 'altar-usable');
+  run.hasCrossbow = false;
+  run.hp = run.maxHp;
+  const prop = altarAt(world, Math.floor(world.player.x), Math.floor(world.player.y));
+  for (const offer of world.altarOffers(prop)) {
+    assert(offer.reward.id !== 'arrows', 'bolts were offered to somebody with no crossbow');
+    assert(offer.reward.id !== 'mend' && offer.reward.id !== 'heal' && offer.reward.id !== 'restored',
+      'healing was offered at full health');
+  }
+});
+
+test('an altar takes exactly what it said and gives exactly what it promised', () => {
+  const { world, run, level } = makeWorld(6, 'altar-trade');
+  run.hp = 90;
+  const prop = altarAt(world, Math.floor(world.player.x), Math.floor(world.player.y));
+  const offer = {
+    tier: 3,
+    reward: REWARD_BY_ID.exit,
+    sacrifice: SACRIFICE_BY_ID.hpFixed,
+    amount: 24,
+    costText: '24 vitality',
+  };
+  assert(world.takeOffer(prop, offer), 'the offer was refused');
+  assert(run.hp === 66, `paid ${90 - run.hp} instead of 24`);
+  assert(world.hints.some((h) => h.kind === 'exit'), 'the way down was not shown');
+  const st = level.stairs;
+  assert(world.vis.seen[level.grid.idx(st.x, st.y)], 'the stairs were not put on the chart');
+  // And it is spent: an altar answers once.
+  assert(prop.used, 'the altar is still live');
+  assert(!world.takeOffer(prop, offer), 'a spent altar answered a second time');
+});
+
+test('every altar reward actually gives something', () => {
+  for (const reward of REWARDS) {
+    // The key reward needs a level that actually has a sealed gate on it, so
+    // walk seeds until one turns up rather than hoping the first one does.
+    let built = null;
+    for (let s = 0; s < 12 && !built; s++) {
+      const candidate = makeWorld(12, `reward-${reward.id}-${s}`, (r) => { r.hasCrossbow = true; });
+      if (reward.id !== 'key' || candidate.level.gates.length > 0) built = candidate;
+    }
+    assert(built, `no level with a gate on it was found for ${reward.id}`);
+    const { world, run, level } = built;
+    const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+    clearArena(world, cx, cy, 3);
+    place(world, cx, cy);
+    step(world, 20);
+    // Put the run in a state where this reward is worth having.
+    run.hp = Math.round(run.maxHp * 0.4);
+    run.arrows = 0;
+    assert(reward.usable(run, world), `${reward.id} is never usable, even when it should be`);
+
+    const before = {
+      hp: run.hp, arrows: run.arrows, hints: world.hints.length,
+      seen: world.vis.discoveredCount,
+    };
+    const prop = altarAt(world, cx, cy, 'reward_' + reward.id);
+    world.takeOffer(prop, {
+      tier: reward.tier, reward, sacrifice: SACRIFICE_BY_ID.hpFixed,
+      amount: 1, costText: '1 vitality',
+    });
+    const gained = run.hp > before.hp - 1                 // the price was 1
+      || run.arrows > before.arrows
+      || world.hints.length > before.hints
+      || world.vis.discoveredCount > before.seen;
+    assert(gained, `${reward.id} paid out nothing at all`);
+  }
+});
+
+test('every altar sacrifice actually takes something', () => {
+  for (const sacrifice of SACRIFICES) {
+    const { world, run, level } = makeWorld(7, 'sac-' + sacrifice.id, (r) => { r.hasCrossbow = true; });
+    const cx = Math.floor(level.grid.w / 2), cy = Math.floor(level.grid.h / 3);
+    clearArena(world, cx, cy, 4);
+    place(world, cx, cy);
+    step(world, 30);
+    run.hp = run.maxHp;
+    run.score.level.combat = 4000;
+    assert(sacrifice.affordable(run, world, 1),
+      `${sacrifice.id} is never affordable, even from full health and a full board`);
+
+    const before = {
+      hp: run.hp, score: run.score.levelSubtotal, enemies: world.enemies.length,
+      seen: world.vis.discoveredCount, hints: world.hints.length,
+    };
+    const prop = altarAt(world, cx, cy, 'sac_' + sacrifice.id);
+    world.takeOffer(prop, {
+      tier: sacrifice.tier, reward: REWARD_BY_ID.mend, sacrifice,
+      amount: sacrifice.amount(run, 1), costText: sacrifice.text(run, 1),
+    });
+    const paid = run.hp < before.hp
+      || run.score.levelSubtotal < before.score
+      || world.enemies.length > before.enemies
+      || world.vis.discoveredCount < before.seen;
+    assert(paid, `${sacrifice.id} cost the player nothing`);
+  }
+});
+
+test('an altar always pairs a reward with a price of its own size', () => {
+  for (const hp of [30, 60, 140]) {
+    for (const levelScore of [0, 900, 5000]) {
+      const { world, run } = makeWorld(9, `pair-${hp}-${levelScore}`, (r) => { r.hasCrossbow = true; });
+      run.hp = hp;
+      run.arrows = 0;
+      run.score.level.combat = levelScore;
+      step(world, 20);
+      const prop = altarAt(world, Math.floor(world.player.x), Math.floor(world.player.y));
+      const offers = world.altarOffers(prop);
+      const seenTiers = new Set();
+      for (const offer of offers) {
+        assert(offer.reward.tier === offer.sacrifice.tier,
+          `a tier ${offer.reward.tier} reward was sold for a tier ${offer.sacrifice.tier} price`);
+        assert(!seenTiers.has(offer.tier),
+          `two offers of tier ${offer.tier} on the same slab`);
+        seenTiers.add(offer.tier);
+      }
+    }
+  }
+});
+
+test('a bigger answer costs more of the same thing', () => {
+  const { world, run } = makeWorld(7, 'sac-scale');
+  run.hp = 140;
+  run.score.level.combat = 6000;
+  const cost = (id) => SACRIFICE_BY_ID[id].amount(run, 1);
+  // Health, tier by tier: a measure of blood, then a third of you, then all
+  // but the last of you.
+  assert(cost('hpFixed') < cost('hpPercent'),
+    `tier 1 health (${cost('hpFixed')}) is not cheaper than tier 2 (${cost('hpPercent')})`);
+  assert(cost('hpPercent') < cost('hpDrop'),
+    `tier 2 health (${cost('hpPercent')}) is not cheaper than tier 3 (${cost('hpDrop')})`);
+  // Score: a fixed toll, then the whole depth.
+  assert(cost('scoreFixed') < cost('scoreLevel'),
+    `tier 1 score (${cost('scoreFixed')}) is not cheaper than tier 2 (${cost('scoreLevel')})`);
+  // ...and the relic that softens them softens all of them.
+  for (const id of ['hpFixed', 'hpPercent', 'scoreFixed']) {
+    assert(SACRIFICE_BY_ID[id].amount(run, 0.6) < SACRIFICE_BY_ID[id].amount(run, 1),
+      `${id} ignores the Bloodless Bargain`);
+  }
+  assert(SACRIFICE_BY_ID.hpDrop.amount(run, 0.6) < SACRIFICE_BY_ID.hpDrop.amount(run, 1),
+    'hpDrop ignores the Bloodless Bargain');
+});
+
+test('forgetting wipes the chart, and charting fills it without marking anything', () => {
+  const { world, level } = makeWorld(6, 'altar-chart');
+  step(world, 30);
+  const walked = world.vis.discoveredCount;
+  assert(walked > 0, 'nothing was discovered by standing still with a torch');
+
+  const charted = world.revealLayout(false);
+  assert(charted > walked * 3, `charting only added ${charted} tiles`);
+  // The layout, and nothing standing in it: props are not revealed by it.
+  const hidden = level.props.filter((p) => p.hidden);
+  for (const p of hidden) {
+    assert(!world.revealedProps.has(p.id), 'charting the layout uncovered a hidden prop');
+  }
+  assert(world.hints.length === 0, 'charting the layout marked things on it');
+
+  world.forgetEverything();
+  // Only what the torch is on right now survives, because it is being seen.
+  assert(world.vis.discoveredCount < walked + 40,
+    `forgetting left ${world.vis.discoveredCount} tiles charted`);
+  assert(world.hints.length === 0, 'forgetting left the hints behind');
+});
+
+// --- the hall of fame ------------------------------------------------------
+
+test('the hall round-trips through CSV without losing or inventing anything', () => {
+  const rows = [
+    { name: 'Ragnvald', score: 48200, depth: 17, bosses: 3, kills: 210, secrets: 6,
+      diff: 'ashenvow', build: 'Berserker', date: '2026-08-27', seed: 'abc', version: '1.2.0' },
+    { name: 'Sigrun, the Bold', score: 41750, depth: 15, bosses: 2, kills: 180, secrets: 4,
+      diff: 'torchbound', build: 'Ranger', date: '2026-08-26', seed: 'd,e"f', version: '1.2.0' },
+  ];
+  const csv = toCsv(rows);
+  const back = parseCsv(csv);
+  assert(back.length === 2, `read ${back.length} rows back from two`);
+  // A name with a comma in it and a seed with a quote in it are exactly the
+  // two things a hand-rolled CSV writer gets wrong.
+  assert(back[1].name === 'Sigrun, the Bold', `name came back as "${back[1].name}"`);
+  assert(back[1].seed === 'd,e"f', `seed came back as "${back[1].seed}"`);
+  assert(back[0].score === 48200 && back[0].depth === 17, 'numbers did not survive the trip');
+});
+
+test('the hall keeps fifty names, in order, and never the same run twice', () => {
+  const many = [];
+  for (let i = 0; i < 80; i++) {
+    many.push({ name: 'Name' + i, score: i * 100, depth: 1 + (i % 20), diff: 'torchbound' });
+  }
+  const ranked = rank(many.map(normalise));
+  assert(ranked.length === HALL_SIZE, `the hall held ${ranked.length} names`);
+  assert(ranked[0].score === 7900, 'the hall is not in order');
+  for (let i = 1; i < ranked.length; i++) {
+    assert(ranked[i - 1].score >= ranked[i].score, 'the hall is out of order at ' + i);
+  }
+
+  // Merging a table into itself must be a no-op, or importing your own
+  // export doubles every name you have.
+  const twice = merge(ranked, ranked);
+  assert(twice.length === ranked.length, `merging with itself grew the hall to ${twice.length}`);
+
+  // ...but a genuinely new name gets in and pushes the last one out.
+  const grown = merge(ranked, [normalise({ name: 'Newcomer', score: 99999, depth: 30, diff: 'ashenvow' })]);
+  assert(grown.length === HALL_SIZE, 'the hall overflowed');
+  assert(grown[0].name === 'Newcomer', 'a record score did not take first place');
+});
+
+test('a hall file written by a stranger is read without trusting it', () => {
+  const hostile = [
+    'name,score,depth,diff',
+    ',999999,50,ashenvow',                          // no name: dropped
+    'Nobody,,3,torchbound',                          // no score: dropped
+    'Ghost,-500,4,torchbound',                       // a negative score is no score
+    'Cheat,500,-9,torchbound',                       // a negative depth is clamped
+    'A very long name indeed that goes on and on,120,4,torchbound',
+    'Fine,1500,7,torchbound',
+  ].join(String.fromCharCode(10));
+  const rows = parseCsv(hostile);
+  assert(rows.length === 3, `read ${rows.length} rows from three valid ones`);
+  for (const r of rows) {
+    assert(r.score > 0 && r.depth >= 1, 'a nonsense row got through unclamped');
+    assert(r.name.length <= 18, `a name of ${r.name.length} characters got through`);
+  }
+  assert(rows.some((r) => r.name === 'Cheat' && r.depth === 1), 'a negative depth was not clamped');
 });
 
 // --- keys, gates and the exit ----------------------------------------------
@@ -470,11 +1137,60 @@ test('relic modifiers are recomputed, never applied twice', () => {
   assertNear(again.torchRadius, doubled.torchRadius, 0.0001, 'recompute drifted');
 });
 
-test('every relic states a real trade-off or explicitly states it has none', () => {
+test('every relic gives something up, in numbers and not only in prose', () => {
   for (const relic of RELICS) {
     assert(relic.text && relic.text.length > 8, `${relic.id} has no description`);
-    assert(relic.cost && relic.cost.length > 3, `${relic.id} has no stated cost`);
     assert(relic.max >= 1, `${relic.id} has no stack limit`);
+    assert(relic.cost && relic.cost.length > 3, `${relic.id} has no stated cost`);
+    // A cost line that says there is no cost is not a cost line.
+    assert(!/^none\b/i.test(relic.cost.trim()),
+      `${relic.id} claims to be free: "${relic.cost}"`);
+
+    // And the prose has to be backed by the numbers. Applied at one stack and
+    // at its limit, every relic must move at least one modifier in the
+    // player's favour and at least one against them.
+    for (const stacks of [1, relic.max]) {
+      const base = baseMods();
+      const mods = baseMods();
+      relic.mod(mods, stacks);
+      let better = [];
+      let worse = [];
+      for (const key of Object.keys(base)) {
+        const dir = MOD_BETTER[key];
+        assert(dir !== undefined, `no direction is recorded for the modifier "${key}"`);
+        const from = Number(base[key]);
+        const to = Number(mods[key]);
+        if (to === from) continue;
+        if ((to > from) === (dir > 0)) better.push(key);
+        else worse.push(key);
+      }
+      assert(better.length > 0,
+        `${relic.id} at ${stacks} does nothing for the player`);
+      assert(worse.length > 0,
+        `${relic.id} at ${stacks} costs the player nothing: it only improves ${better.join(', ')}`);
+    }
+  }
+});
+
+test('a relic stacked to its limit costs more than one taken once', () => {
+  for (const relic of RELICS) {
+    if (relic.max < 2) continue;
+    const one = baseMods();
+    const many = baseMods();
+    relic.mod(one, 1);
+    relic.mod(many, relic.max);
+    const base = baseMods();
+    let deepened = false;
+    for (const key of Object.keys(base)) {
+      if (MOD_BETTER[key] > 0 ? many[key] < one[key] : many[key] > one[key]) {
+        // Only counts if this modifier is a cost for this relic in the first
+        // place -- i.e. it already moved against the player at one stack.
+        const isCost = MOD_BETTER[key] > 0 ? one[key] < base[key] : one[key] > base[key];
+        if (isCost) { deepened = true; break; }
+      }
+    }
+    assert(deepened,
+      `${relic.id} stacks to ${relic.max} without the cost growing with it`);
   }
 });
 

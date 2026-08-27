@@ -11,6 +11,8 @@ import {
 import { T } from '../gen/tiles.js';
 import { tileSet, VARIANTS, hazardOverlay, warmLightSprites, contactShadow } from './sprites.js';
 import { Ambience } from './ambience.js';
+import { Critters } from './critters.js';
+import { drawStains, drawCorpses } from './gore.js';
 import { PostFX } from './postfx.js';
 import { TIERS } from '../core/perf.js';
 import { rgba, shade } from './palette.js';
@@ -39,6 +41,7 @@ export class Renderer {
     this.quality = 1;
     this.tier = TIERS[TIERS.length - 1];
     this.ambience = new Ambience();
+    this.critters = new Critters();
     this.post = new PostFX();
     this.warm = null;
     this.resize();
@@ -67,6 +70,7 @@ export class Renderer {
 
   onLevel(level) {
     this.ambience.bind(level);
+    this.critters.bind();
     this.weatherT = 0;
   }
 
@@ -225,12 +229,16 @@ export class Renderer {
       screenY(world.player.x, world.player.y) - 24, tier.softShadows);
 
     this.ambience.update(dt, world, tier);
+    this.critters.update(dt, world, tier);
     this.computeFades(world, bounds);
     this.drawFloors(world, bounds);
     if (this.warm) this.drawFloorLight(world, bounds);
+    drawStains(ctx, world, tier);
+    drawCorpses(ctx, world, tier);
     this.ambience.drawGround(ctx, world, tier);
     this.buildRenderList(world, bounds);
     this.drawRenderList(world, t);
+    this.critters.draw(ctx, world, tier);
     world.particles.draw(ctx, (x, y) => this.lightSample(world, x, y));
     this.ambience.drawMotes(ctx, world, tier);
     this.drawGroundEffects(world, bounds, t);
@@ -377,7 +385,10 @@ export class Renderer {
       if (!onLayer(s.y)) continue;
       const v = seenAt(Math.floor(s.x), Math.floor(s.y));
       if (v.lit <= 0.02 && v.mem <= MEMORY_MIN) continue;
-      list.push({ d: s.x + s.y + 0.006, kind: 'sconce', item: s, lit: Math.max(v.lit, 0.6), mem: v.mem });
+      // A lit fire lights itself; a cold one is only as visible as the floor
+      // it is standing on, which is what makes finding them worth doing.
+      const own = s.lit === false ? 0 : 0.6;
+      list.push({ d: s.x + s.y + 0.006, kind: 'sconce', item: s, lit: Math.max(v.lit, own), mem: v.mem });
     }
     for (const prop of level.props) {
       if (prop.consumed || !onLayer(prop.y)) continue;
@@ -426,7 +437,9 @@ export class Renderer {
           ctx.globalAlpha = 1;
           break;
         case 'sconce':
+          ctx.globalAlpha = entry.lit > 0.02 ? Math.min(1, 0.4 + entry.lit * 0.6) : 0.18 + entry.mem * 0.2;
           drawSconce(ctx, entry.item, t);
+          ctx.globalAlpha = 1;
           break;
         case 'prop':
           ctx.globalAlpha = entry.lit > 0.02 ? 0.4 + entry.lit * 0.6 : 0.2 + entry.mem * 0.2;

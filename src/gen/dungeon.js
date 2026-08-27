@@ -334,7 +334,11 @@ function zoneOf(zones, x, y) {
 
 const PERP = { '1,0': [0, 1], '-1,0': [0, 1], '0,1': [1, 0], '0,-1': [1, 0] };
 
-function tryCloset(grid, x, y, dir, reserved) {
+// `maxY` is the first row a closet may not touch. The vaults live in a strip
+// below the maze on the same grid, and a pocket two cells deep dug from the
+// bottom row of the maze reached straight into it -- which quietly made a
+// vault walkable and turned its ladder into scenery.
+function tryCloset(grid, x, y, dir, reserved, maxY) {
   const [dx, dy] = dir;
   const [px, py] = PERP[dx + ',' + dy];
   const bx = x - dx, by = y - dy; // first cell on the far side of the wall
@@ -355,6 +359,7 @@ function tryCloset(grid, x, y, dir, reserved) {
     let ok = true;
     for (const c of cells) {
       if (c.x <= 1 || c.y <= 1 || c.x >= grid.w - 2 || c.y >= grid.h - 2) { ok = false; break; }
+      if (maxY !== undefined && c.y >= maxY) { ok = false; break; }
       if (grid.get(c.x, c.y) !== T.WALL || reserved.has(grid.idx(c.x, c.y))) { ok = false; break; }
       // The pocket must not already touch open floor, or it is not a secret.
       for (const [nx, ny] of N4) {
@@ -395,7 +400,7 @@ function addSecrets(level, rng, depth) {
   rng.shuffle(closetSpots);
   for (const spot of closetSpots) {
     if (level.secrets.length >= wanted) break;
-    const cells = tryCloset(grid, spot.x, spot.y, spot.dir, reserved);
+    const cells = tryCloset(grid, spot.x, spot.y, spot.dir, reserved, level.mazeHeight);
     if (!cells) continue;
     for (const c of cells) { grid.set(c.x, c.y, T.FLOOR); reserved.add(grid.idx(c.x, c.y)); }
     reserved.add(grid.idx(spot.x, spot.y));
@@ -553,7 +558,7 @@ function addPostBattleChambers(level, rng) {
     }
     rng.shuffle(perimeter);
     for (const spot of perimeter) {
-      const cells = tryCloset(level.grid, spot.x, spot.y, spot.dir, level._reserved);
+      const cells = tryCloset(level.grid, spot.x, spot.y, spot.dir, level._reserved, level.mazeHeight);
       if (!cells) continue;
       for (const c of cells) {
         level.grid.set(c.x, c.y, T.FLOOR);
@@ -670,6 +675,96 @@ function addProps(level, rng, depth, ctx) {
   }
   if (staged && rng.bool(0.5)) place('shrine', { flavour: 'blessing', used: false });
 
+  // Altars. Never on depth one -- the first descent is for learning what the
+  // buttons do, not for being asked what a third of your blood is worth --
+  // and never more than one on a level, so the choice stays a moment.
+  if (depth >= 2 && rng.bool(depth >= 4 ? 0.62 : 0.4)) {
+    place('altar', { used: false, seed: rng.next() }, false);
+  }
+  addCaptives(level, rng, depth, busy, mark);
+  addMaps(level, rng, depth, place);
+  addFires(level, rng, depth, candidates, mark);
+  addDecor(level, rng, candidates);
+}
+
+// Somebody else got here first.
+//
+// Chained to the wall, and in one of four states. Most are dead. Some will
+// talk, and what they know is worth more than what they are carrying. Some
+// want it over with, and will say so. And some have been down here long
+// enough to have stopped making sense, and scream -- which brings company.
+function addCaptives(level, rng, depth, busy, mark) {
+  const { grid } = level;
+  // A captive needs a wall at its back, so the only candidates are floor
+  // tiles with exactly one wall neighbour that is not a doorway.
+  const spots = [];
+  for (const { x, y } of level.floorCells) {
+    if (busy.has(grid.idx(x, y))) continue;
+    let wall = null, walls = 0, exits = 0;
+    for (const [dx, dy] of N4) {
+      if (grid.get(x + dx, y + dy) === T.WALL) { walls++; wall = [dx, dy]; }
+      else exits++;
+    }
+    if (walls < 1 || exits < 2) continue;
+    spots.push({ x, y, wall });
+  }
+  rng.shuffle(spots);
+
+  // Deeper levels are longer and hold more of them, but the labyrinth is
+  // never a gallery: three is plenty to make a corridor feel occupied.
+  const count = Math.min(spots.length, 1 + rng.int(0, 1) + Math.min(2, Math.floor(depth / 4)));
+  for (let i = 0; i < count; i++) {
+    const spot = spots[i];
+    if (!spot) break;
+    // Most of them did not last. Of the ones that did, the deeper you are the
+    // worse the state they are in.
+    const alive = rng.bool(0.55);
+    const madness = Math.min(0.5, 0.15 + depth * 0.025);
+    const mood = !alive ? 'dead'
+      : rng.bool(madness) ? 'raving'
+        : rng.bool(0.3) ? 'begging' : 'afraid';
+    level.props.push({
+      type: 'prisoner',
+      x: spot.x + 0.5 + spot.wall[0] * 0.28,
+      y: spot.y + 0.5 + spot.wall[1] * 0.28,
+      wallX: spot.wall[0], wallY: spot.wall[1],
+      mood, seed: rng.next(), spoken: false, searched: false, freed: false,
+      // What they know, if they know anything. Resolved when they are spoken
+      // to, so it can point at what is still unfound at that moment.
+      knows: rng.weighted(['exit', 'key', 'secret', 'treasure', 'nothing'],
+        (k) => (k === 'nothing' ? 1.4 : k === 'exit' ? 1.6 : 1)),
+      carries: rng.bool(alive ? 0.25 : 0.45)
+        ? rng.weighted(['potion', 'arrows', 'treasure'], (t) => (t === 'treasure' ? 1 : 1.6)) : null,
+      id: 'prisoner_' + level.props.length,
+    });
+    mark(spot.x, spot.y, 1);
+  }
+}
+
+// Somebody's map of somewhere. Scratched into a slate, or rolled up in a dead
+// hand. Each one names one thing and marks it on the chart, and the ones
+// worth finding are the ones something is standing over.
+function addMaps(level, rng, depth, place) {
+  const count = 1 + (rng.bool(0.4) ? 1 : 0) + (level.zones.length >= 3 ? 1 : 0);
+  for (let i = 0; i < count; i++) {
+    place('mapScrap', {
+      shows: rng.weighted(['exit', 'key', 'secret', 'treasure', 'health'],
+        (k) => (k === 'exit' ? 1.8 : k === 'key' ? 1.4 : 1)),
+      read: false,
+    }, rng.bool(0.5));
+  }
+}
+
+// Fire in the labyrinth, in four sizes.
+//
+// Wall sconces are the small one and have always been here. Above them sit
+// braziers, firepits and campfires, which are placed on the floor of the
+// rooms big enough to swallow a torch, and which throw enough light to make a
+// hall read as a hall. Some are cold: a torchbearer can light those, and once
+// lit they stay lit, so a room the player has warmed stays warm on the chart.
+function addFires(level, rng, depth, candidates, mark) {
+  const { grid } = level;
+
   // Wall sconces: atmosphere, but they cast a little real light.
   for (let y = 1; y < grid.h - 1; y++) {
     for (let x = 1; x < grid.w - 1; x++) {
@@ -677,21 +772,87 @@ function addProps(level, rng, depth, ctx) {
       let dir = null, floors = 0;
       for (const [dx, dy] of N4)
         if (grid.get(x + dx, y + dy) === T.FLOOR) { floors++; dir = [dx, dy]; }
-      if (floors !== 1 || !rng.bool(0.028)) continue;
-      level.sconces.push({ x: x + 0.5 + dir[0] * 0.3, y: y + 0.5 + dir[1] * 0.3, seed: rng.next() });
+      if (floors !== 1 || !rng.bool(0.032)) continue;
+      // Roughly a third of them have gone out over the centuries.
+      const lit = rng.bool(0.66);
+      level.sconces.push({
+        kind: 'sconce', x: x + 0.5 + dir[0] * 0.3, y: y + 0.5 + dir[1] * 0.3,
+        seed: rng.next(), lit, radius: 3.6, intensity: 0.6,
+        id: 'fire_s' + level.sconces.length,
+      });
     }
   }
 
-  // Scatter decoration -- never on a cell that matters for play.
-  for (const c of candidates) {
-    if (!rng.bool(0.07)) continue;
-    level.decor.push({
-      type: rng.weighted(['bones', 'urn', 'rubble', 'banner', 'statue', 'grass'],
-        (t) => (t === 'statue' ? 0.4 : t === 'banner' ? 0.6 : 1.6)),
-      x: c.x + 0.5 + rng.float(-0.22, 0.22),
-      y: c.y + 0.5 + rng.float(-0.22, 0.22),
-      seed: rng.next(),
+  // The bigger fires want the middle of a big room, and nothing else wants
+  // to be standing there.
+  const halls = level.rooms
+    .filter((r) => r.kind !== 'vault')
+    .map((r) => ({ room: r, area: (r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1) }))
+    .filter((h) => h.area >= 20)
+    .sort((a, b) => b.area - a.area);
+
+  for (const h of halls) {
+    const r = h.room;
+    const cx = Math.floor((r.x0 + r.x1) / 2), cy = Math.floor((r.y0 + r.y1) / 2);
+    if (grid.get(cx, cy) !== T.FLOOR) continue;
+    if (level._reserved.has(grid.idx(cx, cy))) continue;
+    // The largest halls almost always have something burning in them; a
+    // middling room is a coin toss, so the labyrinth is never uniformly lit.
+    const chance = h.area >= 42 ? 0.85 : h.area >= 28 ? 0.55 : 0.3;
+    if (!rng.bool(chance)) continue;
+    const kind = h.area >= 42 ? rng.weighted(['firepit', 'campfire'], (k) => (k === 'firepit' ? 2 : 1))
+      : rng.weighted(['brazier', 'firepit'], (k) => (k === 'brazier' ? 2 : 1));
+    const size = kind === 'campfire' ? { radius: 6.4, intensity: 0.95 }
+      : kind === 'firepit' ? { radius: 5.4, intensity: 0.85 }
+        : { radius: 4.4, intensity: 0.7 };
+    level.sconces.push({
+      kind, x: cx + 0.5, y: cy + 0.5, seed: rng.next(),
+      // Deeper down, more of them have gone cold.
+      lit: rng.bool(Math.max(0.32, 0.78 - depth * 0.03)),
+      radius: size.radius, intensity: size.intensity,
+      id: 'fire_b' + level.sconces.length,
     });
+    mark(cx, cy, 1);
+    for (let i = candidates.length - 1; i >= 0; i--) {
+      if (Math.abs(candidates[i].x - cx) <= 1 && Math.abs(candidates[i].y - cy) <= 1) {
+        candidates.splice(i, 1);
+      }
+    }
+  }
+}
+
+// Scatter decoration -- never on a cell that matters for play.
+//
+// Density matters more than variety here. A labyrinth of bare floor reads as
+// unfinished whatever is standing in it, so most free floor gets something,
+// and most of that something is small.
+function addDecor(level, rng, candidates) {
+  const { grid } = level;
+  const add = (type, x, y, extra) => {
+    level.decor.push({ type, x, y, seed: rng.next(), ...extra });
+  };
+
+  for (const c of candidates) {
+    if (!rng.bool(0.19)) continue;
+    add(rng.weighted(
+      ['bones', 'urn', 'rubble', 'banner', 'statue', 'grass', 'debris', 'skull', 'crate', 'chain'],
+      (t) => (t === 'statue' ? 0.3 : t === 'banner' ? 0.5 : t === 'crate' ? 0.7
+        : t === 'chain' ? 0.6 : t === 'debris' ? 2.4 : t === 'skull' ? 1.1 : 1.4)),
+    c.x + 0.5 + rng.float(-0.24, 0.24), c.y + 0.5 + rng.float(-0.24, 0.24));
+  }
+
+  // Cobwebs want corners: a floor tile with two walls meeting on it. Placed
+  // separately because the scatter above would put them in the open, and a
+  // cobweb in the middle of a room is strung between nothing.
+  for (const { x, y } of level.floorCells) {
+    if (!rng.bool(0.16)) continue;
+    let wallX = 0, wallY = 0;
+    if (grid.get(x - 1, y) === T.WALL) wallX = -1;
+    else if (grid.get(x + 1, y) === T.WALL) wallX = 1;
+    if (grid.get(x, y - 1) === T.WALL) wallY = -1;
+    else if (grid.get(x, y + 1) === T.WALL) wallY = 1;
+    if (!wallX || !wallY) continue;
+    add('cobweb', x + 0.5 + wallX * 0.34, y + 0.5 + wallY * 0.34, { wallX, wallY });
   }
 }
 

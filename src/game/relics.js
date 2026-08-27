@@ -16,14 +16,40 @@ export function baseMods() {
     enemyAggro: 1, enemySpeed: 1, enemyHp: 1, enemyDamage: 1,
     timeBonus: 1, scoreMult: 1,
     crossbowDamage: 1, crossbowRangeBonus: 0, crossbowCapacity: 0,
-    boltSpeed: 1, reclaim: 0,
+    boltSpeed: 1, boltRate: 1, reclaim: 0,
     secretSense: 1, revealObjectives: false, hazardFooting: false, desperation: 0,
+    // How far the player's ears reach, how far their own noise carries, and
+    // whether they can see what they hear.
+    hearing: 1, playerNoise: 1, sonar: false,
+    // How steeply an altar charges, and how much it gives back.
+    sacrificeScale: 1, rewardScale: 1,
   };
 }
 
+// Which way is up for every modifier: +1 where a bigger number helps the
+// player, -1 where it hurts them. Authored here, next to the relics, because
+// it is what makes "every relic costs something" a rule the tests can check
+// rather than a promise in the prose -- a relic that only moves numbers in
+// its own favour fails, whatever its cost line says.
+export const MOD_BETTER = {
+  torchRadius: 1, torchInstability: -1, memoryDecay: -1,
+  swordDamage: 1, swordRange: 1, attackSpeed: 1,
+  moveSpeed: 1, maxHpBonus: 1, damageTaken: -1,
+  healing: 1, levelHeal: 1, lifesteal: 1, lifestealAmount: 1,
+  shield: 1, streakWindow: 1,
+  enemyAggro: -1, enemySpeed: -1, enemyHp: -1, enemyDamage: -1,
+  timeBonus: 1, scoreMult: 1,
+  crossbowDamage: 1, crossbowRangeBonus: 1, crossbowCapacity: 1,
+  boltSpeed: 1, boltRate: 1, reclaim: 1,
+  secretSense: 1, revealObjectives: 1, hazardFooting: 1, desperation: 1,
+  hearing: 1, playerNoise: -1, sonar: 1,
+  sacrificeScale: -1, rewardScale: 1,
+};
+
 const T = {
   TORCH: 'Torch', SWORD: 'Sword', BOW: 'Crossbow', SHIELD: 'Defence',
-  EXPLORE: 'Exploration', SCORE: 'Score', BODY: 'Body',
+  EXPLORE: 'Exploration', SCORE: 'Score', BODY: 'Body', SOUND: 'Hearing',
+  ALTAR: 'Bargains',
 };
 
 export const RELICS = [
@@ -32,6 +58,40 @@ export const RELICS = [
     text: 'Your torch burns wider and further.',
     cost: 'The dead notice it from further away too.',
     mod: (m, n) => { m.torchRadius *= 1 + 0.3 * n; m.enemyAggro *= 1 + 0.22 * n; },
+  },
+  {
+    id: 'bloodless_bargain', name: 'Bloodless Bargain', tag: T.ALTAR, rarity: 2, max: 1,
+    text: 'Altars ask a good deal less of you.',
+    cost: 'A cheap offering is remembered. You recover far less on the stair, '
+      + 'so what the altar spared you is taken back on the way down.',
+    mod: (m) => { m.sacrificeScale *= 0.6; m.levelHeal *= 0.5; },
+  },
+  {
+    id: 'gilded_debt', name: 'Gilded Debt', tag: T.ALTAR, rarity: 3, max: 1,
+    text: 'What an altar gives you, it gives generously: healing runs deeper, '
+      + 'a chart comes with its keys, and the way down comes with the treasure.',
+    cost: 'And it charges accordingly.',
+    mod: (m) => { m.rewardScale *= 1.5; m.sacrificeScale *= 1.3; },
+  },
+  {
+    id: 'deep_ear', name: 'Ear of the Deep', tag: T.SOUND, rarity: 2, max: 2,
+    text: 'You hear the labyrinth much further off, and round more corners.',
+    cost: 'Listening that hard means standing still enough to be found. '
+      + 'Your own footfalls carry as far as what you are listening to.',
+    mod: (m, n) => { m.hearing *= 1 + 0.45 * n; m.playerNoise *= 1 + 0.3 * n; },
+  },
+  {
+    id: 'wolfskin_soles', name: 'Wolfskin Soles', tag: T.SOUND, rarity: 2, max: 1,
+    text: 'You walk quietly. Things have to see you to find you.',
+    cost: 'Soft soles are slow soles.',
+    mod: (m) => { m.playerNoise *= 0.45; m.moveSpeed *= 0.9; },
+  },
+  {
+    id: 'whisper_stone', name: 'Whisper-Stone', tag: T.SOUND, rarity: 3, max: 1,
+    text: 'What you hear, you also see: a pulse on the map where the sound '
+      + 'came from, and how far round the corners it had to come.',
+    cost: 'The stone hums. Everything down here can hear it too.',
+    mod: (m) => { m.sonar = true; m.playerNoise *= 1.35; },
   },
   {
     id: 'cartographers_thread', name: "Cartographer's Thread", tag: T.EXPLORE, rarity: 2, max: 1,
@@ -66,8 +126,10 @@ export const RELICS = [
   {
     id: 'wolfs_hunger', name: "Wolf's Hunger", tag: T.SWORD, rarity: 2, max: 1,
     text: 'Below a third of your health, your blows land with real fury.',
-    cost: 'None. Living long enough to use it is the cost.',
-    mod: (m) => { m.desperation = 0.6; },
+    cost: 'You fight past your own guard. Everything lands harder on you, '
+      + 'whatever your health -- including on the way down to the third that '
+      + 'pays out.',
+    mod: (m) => { m.desperation = 0.75; m.damageTaken *= 1.12; },
   },
   {
     id: 'bell_of_the_hunt', name: 'Bell of the Hunt', tag: T.SCORE, rarity: 2, max: 1,
@@ -90,8 +152,9 @@ export const RELICS = [
   {
     id: 'aegis_drowned', name: 'Aegis of the Drowned', tag: T.SHIELD, rarity: 3, max: 1,
     text: 'A drowned shield turns blows aside: 1% ricochets back, 5% blocked outright, 20% blunted.',
-    cost: 'None. It simply does not save you every time.',
-    mod: (m) => { m.shield = true; },
+    cost: 'It came up full of water and it never dried. You walk and swing '
+      + 'slower carrying it.',
+    mod: (m) => { m.shield = true; m.moveSpeed *= 0.93; m.attackSpeed *= 0.9; },
   },
   {
     id: 'grave_ward', name: 'Grave-Ward Charm', tag: T.SHIELD, rarity: 1, max: 2,
@@ -115,17 +178,18 @@ export const RELICS = [
   {
     id: 'draught_hall', name: 'Draught of the Hall', tag: T.BODY, rarity: 1, max: 1,
     text: 'Mends you now, and makes every later remedy work better.',
-    cost: 'None.',
+    cost: 'It is strong drink. Your hand is less steady on the brand, and the '
+      + 'flame gutters for it.',
     requires: (run) => run.hp < run.maxHp,
-    mod: (m) => { m.healing *= 1.6; m.levelHeal *= 1.3; },
+    mod: (m) => { m.healing *= 1.7; m.levelHeal *= 1.3; m.torchInstability *= 1.4; },
     onTake: (run) => run.heal(30, true),
   },
   {
     id: 'ember_ward', name: 'Ember Ward', tag: T.BODY, rarity: 2, max: 1,
     text: 'Mud cannot drag at you and ice cannot take your footing.',
-    cost: 'None. It is simply narrow.',
+    cost: 'It runs hot in the hand, and the dark notices heat.',
     requires: (run) => run.seenHazards.has('mud') || run.seenHazards.has('ice'),
-    mod: (m) => { m.hazardFooting = true; },
+    mod: (m) => { m.hazardFooting = true; m.enemyAggro *= 1.16; },
   },
   {
     id: 'seers_eye', name: "Seer's Eye", tag: T.EXPLORE, rarity: 2, max: 1,
@@ -136,23 +200,29 @@ export const RELICS = [
   {
     id: 'bone_reader', name: 'Bone Reader', tag: T.EXPLORE, rarity: 1, max: 2,
     text: 'You notice cracked stone from much further away.',
-    cost: 'None.',
-    mod: (m, n) => { m.secretSense *= 1 + 0.8 * n; },
+    cost: 'Your ear is on the wall rather than on the passage. You hear much '
+      + 'less of what is coming.',
+    mod: (m, n) => { m.secretSense *= 1 + 0.9 * n; m.hearing *= Math.pow(0.78, n); },
   },
   {
     id: 'quiver_hunt', name: 'Quiver of the Hunt', tag: T.BOW, rarity: 1, max: 3,
     text: 'You can carry three more bolts, and you find three now.',
-    cost: 'None.',
+    cost: 'A full quiver is a heavy one, and it rattles. You are slower, and '
+      + 'easier to hear behind you.',
     requires: (run) => run.hasCrossbow,
-    mod: (m, n) => { m.crossbowCapacity += 3 * n; },
+    mod: (m, n) => {
+      m.crossbowCapacity += 3 * n;
+      m.moveSpeed *= Math.pow(0.98, n);
+      m.playerNoise *= 1 + 0.15 * n;
+    },
     onTake: (run) => run.giveArrows(3),
   },
   {
     id: 'extended_limbs', name: 'Extended Limbs', tag: T.BOW, rarity: 2, max: 2,
     text: 'Longer limbs, longer reach.',
-    cost: 'None.',
+    cost: 'A heavier draw. You are markedly slower to get the next bolt away.',
     requires: (run) => run.hasCrossbow,
-    mod: (m, n) => { m.crossbowRangeBonus += 2.5 * n; },
+    mod: (m, n) => { m.crossbowRangeBonus += 3 * n; m.boltRate *= Math.pow(0.85, n); },
   },
   {
     id: 'heavy_bolt', name: 'Heavy Bolt', tag: T.BOW, rarity: 2, max: 2,
@@ -163,10 +233,11 @@ export const RELICS = [
   },
   {
     id: 'reclaimer', name: 'Reclaimer', tag: T.BOW, rarity: 3, max: 1,
-    text: 'A bolt that kills has a 30% chance of returning to your quiver.',
-    cost: 'None.',
+    text: 'A bolt that kills has a 35% chance of returning to your quiver.',
+    cost: 'A bolt pulled back out of something never flies quite the same '
+      + 'again. All of yours hit softer.',
     requires: (run) => run.hasCrossbow,
-    mod: (m) => { m.reclaim = 0.3; },
+    mod: (m) => { m.reclaim = 0.35; m.crossbowDamage *= 0.85; },
   },
 ];
 

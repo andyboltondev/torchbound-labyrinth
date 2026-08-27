@@ -2,11 +2,16 @@
 // bestiary, settings, pause, relic choice, score summary and run end.
 
 import { profile, DEFAULT_SETTINGS } from '../game/profile.js';
+import { rank } from '../game/hall.js';
 import { DIFFICULTY_LIST, difficultyById } from '../game/difficulty.js';
 import { ENEMY_LIST, BOSSES, ENEMIES } from '../game/enemyData.js';
 import { RELIC_BY_ID } from '../game/relics.js';
 import { formatScore, depthLabel } from '../core/util.js';
 import { drawEnemy, drawBoss } from '../render/actors.js';
+import { BUILD_STRING, BUILD_DETAIL } from '../core/version.js';
+
+// What each size of bargain is called. The player never sees the word "tier".
+const TIER_NAME = { 1: 'A small thing', 2: 'A real price', 3: 'Everything it can ask' };
 
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -55,6 +60,9 @@ export class Screens {
     this.root.appendChild(screen);
     this.node = screen;
     this.current = name;
+    // The score follows the screen. Told after the screen exists, so anything
+    // that reads game state on the way past sees the new one.
+    if (this.host.onScreen) this.host.onScreen(name, data);
     // Focus the primary control so keyboard and gamepad users are not lost.
     const focus = panel.querySelector('.btn.primary, input, .btn');
     if (focus) setTimeout(() => focus.focus({ preventScroll: true }), 40);
@@ -83,6 +91,17 @@ export class Screens {
     item('dark', 'Unseen', 'Never lit. Drawn as nothing at all.');
     wrap.appendChild(row);
     return wrap;
+  }
+
+  // The build stamp, shown on the home screen and in the pause menu. The
+  // detail line names the commit (and pull request, when the build came from
+  // one) so a report of "it did this on build X" can be traced to the code.
+  _buildStamp() {
+    const p = el('p', 'build-stamp');
+    p.appendChild(el('b', null, BUILD_STRING));
+    if (BUILD_DETAIL) p.appendChild(el('small', null, BUILD_DETAIL));
+    p.title = BUILD_STRING + '  ·  ' + BUILD_DETAIL;
+    return p;
   }
 
   click(fn) {
@@ -135,9 +154,11 @@ export class Screens {
     controls.style.marginTop = '16px';
     controls.appendChild(el('p', 'hint', 'Move with WASD or the arrow keys: they walk the '
       + 'dungeon’s compass, so Up is north and the corridors run with your keys. '
-      + 'Space or J to slash, F or K to loose a bolt, E to act, Esc to pause. '
+      + 'Space or J to slash, F or K to loose a bolt, E to act, T to put out '
+      + 'your torch or light it again, Esc to pause. '
       + 'On a touch screen the controls appear on the glass.'));
     panel.appendChild(controls);
+    panel.appendChild(this._buildStamp());
     return panel;
   }
 
@@ -213,22 +234,42 @@ export class Screens {
   }
 
   // ----------------------------------------------------- hall of fame
+  // Fifty names, scrollable, filterable by mode, and a table you can take
+  // away with you. The file is the point: a hall of fame kept on one machine
+  // that cannot be moved off it is a hall of fame you lose with the browser.
   screen_hall(data = {}) {
-    const panel = el('div', 'panel');
+    const panel = el('div', 'panel wide');
     panel.appendChild(el('h2', 'screen-title', 'Hall of Fame'));
-    panel.appendChild(el('p', 'screen-sub', 'The ten deepest names still spoken in the mead hall.'));
+    panel.appendChild(el('p', 'screen-sub',
+      'The fifty deepest names still spoken in the mead hall. Kept on this '
+      + 'machine, in a file you can carry.'));
 
+    const filter = data.filter || 'all';
+    const modes = el('div', 'seg hall-filter');
+    modes.setAttribute('role', 'group');
+    modes.setAttribute('aria-label', 'Filter by mode');
+    const addMode = (value, label) => {
+      const b = el('button', filter === value ? 'on' : '', label);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(filter === value));
+      b.addEventListener('click', this.click(() => this.show('hall', { ...data, filter: value })));
+      modes.appendChild(b);
+    };
+    addMode('all', 'All');
+    for (const d of DIFFICULTY_LIST) if (d.ranked) addMode(d.id, d.name);
+    panel.appendChild(modes);
+
+    const board = rank(profile.board).filter((e) => filter === 'all' || e.diff === filter);
     const table = el('table', 'board');
     const head = el('tr');
-    for (const h of ['', 'Name', 'Build', 'Mode', 'Depth', 'Bosses', 'Score']) {
+    for (const h of ['', 'Name', 'Path', 'Mode', 'Depth', 'Foes', 'When', 'Score']) {
       head.appendChild(el('th', null, h));
     }
     table.appendChild(head);
 
-    const board = profile.board.slice().sort((a, b) => b.score - a.score).slice(0, 10);
     board.forEach((entry, i) => {
       const tr = el('tr');
-      if (data.highlight !== undefined && data.highlight === i) {
+      if (data.highlight !== undefined && data.highlight === i && filter === 'all') {
         tr.className = 'you';
         tr.setAttribute('aria-current', 'true');
       }
@@ -239,18 +280,88 @@ export class Screens {
       tr.appendChild(el('td', 'mode ' + diff.id, diff.name));
       tr.appendChild(el('td', 'num', 'D' + entry.depth));
       tr.appendChild(el('td', 'num', String(entry.bosses || 0)));
+      const when = el('td', 'num when', entry.date || '\u2014');
+      if (entry.version) when.title = 'Build ' + entry.version;
+      tr.appendChild(when);
       tr.appendChild(el('td', 'num', formatScore(entry.score)));
       table.appendChild(tr);
     });
-    const wrap = el('div', 'board-wrap');
+    if (!board.length) {
+      const tr = el('tr');
+      const td = el('td', 'empty', 'No names carved here yet.');
+      td.colSpan = 8;
+      tr.appendChild(td);
+      table.appendChild(tr);
+    }
+    const wrap = el('div', 'board-wrap tall');
     wrap.appendChild(table);
     panel.appendChild(wrap);
+
+    if (data.note) panel.appendChild(el('p', 'hint hall-note', data.note));
     panel.appendChild(el('p', 'hint',
       'Hearthlight descents are not carved here: a run that cannot be lost '
       + 'cannot be ranked against one that can.'));
+    panel.appendChild(this._hallFileRow(data));
 
     const row = el('div', 'btn-row');
     row.appendChild(button('Back', 'btn', this.click(() => this.show(data.from || 'home'))));
+    panel.appendChild(row);
+    return panel;
+  }
+
+  // Taking the table off this machine, and putting one back. Import merges
+  // rather than replaces, and the same export read twice adds nothing the
+  // second time, so there is no way to lose names by pressing the wrong one.
+  _hallFileRow(data) {
+    const row = el('div', 'btn-row hall-files');
+    row.appendChild(button('Export CSV', 'btn ghost small', this.click(() => {
+      const blob = new Blob([profile.exportHall()], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'torchbound-hall-of-fame.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    })));
+
+    const picker = el('input');
+    picker.type = 'file';
+    picker.accept = '.csv,text/csv,text/plain';
+    picker.hidden = true;
+    picker.addEventListener('change', () => {
+      const file = picker.files && picker.files[0];
+      if (!file) return;
+      file.text().then((text) => profile.importHall(text)).then((result) => {
+        const note = result.read
+          ? `Read ${result.read} name${result.read === 1 ? '' : 's'}; `
+            + `${result.added} new to this hall.`
+          : 'That file held no names this hall could read.';
+        this.show('hall', { ...data, note, highlight: undefined });
+      });
+    });
+    row.appendChild(picker);
+    row.appendChild(button('Import CSV', 'btn ghost small', this.click(() => picker.click())));
+    row.appendChild(button('Clear the hall', 'btn ghost small danger', this.click(() => {
+      this.show('confirmClearHall', data);
+    })));
+    return row;
+  }
+
+  screen_confirmClearHall(data = {}) {
+    const panel = el('div', 'panel');
+    panel.appendChild(el('h2', 'screen-title', 'Strike every name?'));
+    panel.appendChild(el('p', 'screen-sub',
+      'Every name in the hall is scratched off, including the ones that were '
+      + 'here when you arrived. Export first if you want them back.'));
+    const row = el('div', 'btn-row');
+    row.appendChild(button('Keep them', 'btn primary',
+      this.click(() => this.show('hall', { ...data, note: undefined }))));
+    row.appendChild(button('Strike them all', 'btn ghost danger', this.click(() => {
+      profile.clearHall();
+      this.show('hall', { ...data, note: 'The stone is bare.', highlight: undefined });
+    })));
     panel.appendChild(row);
     return panel;
   }
@@ -437,9 +548,10 @@ export class Screens {
     segmented('Blocked direction', 'movementAssist', [
       { value: 'corridor', label: 'Take the nearest way' },
       { value: 'strict', label: 'Stop' },
-    ], 'What happens when the way you pressed is a wall. Under the dungeon '
-      + 'axes a blocked cardinal always stops you either way, so this only '
-      + 'changes diagonal presses.');
+    ], 'What happens when the way you pressed is a wall. Taking the nearest '
+      + 'way also lines you up with doorways: press into the stone beside an '
+      + 'opening and you sidestep into it rather than standing there. Stop '
+      + 'means exactly what you pressed, or nothing.');
 
     segmented('Touch pad', 'touchPad', [
       { value: 'diamond', label: 'Diamond' },
@@ -506,6 +618,48 @@ export class Screens {
   }
 
   // ----------------------------------------------------------- pause
+  // ---------------------------------------------------------- altar
+  // Three offers at most, ordered smallest first so the eye reads up to the
+  // expensive one rather than being hit with it. Walking away is a button of
+  // the same size as the rest: it is a real answer, not a cancel.
+  screen_altar(data = {}) {
+    const panel = el('div', 'panel wide');
+    panel.appendChild(el('h2', 'screen-title', 'The altar wants paying'));
+    panel.appendChild(el('p', 'screen-sub',
+      'It will answer one question. It has already decided what each answer costs.'));
+
+    const grid = el('div', 'offer-grid');
+    const offers = (data.offers || []).slice().sort((a, b) => a.tier - b.tier);
+    for (const offer of offers) {
+      const card = el('button', 'offer-card tier' + offer.tier);
+      card.type = 'button';
+      card.appendChild(el('span', 'offer-tier', TIER_NAME[offer.tier] || ''));
+      card.appendChild(el('span', 'offer-name', offer.reward.name));
+      card.appendChild(el('span', 'offer-text', offer.reward.text));
+      const cost = el('span', 'offer-cost');
+      cost.appendChild(el('b', null, offer.sacrifice.name));
+      cost.appendChild(el('span', null, offer.costText));
+      card.appendChild(cost);
+      card.addEventListener('click', this.click(() => {
+        if (this.host.takeOffer) this.host.takeOffer(offer);
+      }));
+      grid.appendChild(card);
+    }
+    if (!offers.length) {
+      grid.appendChild(el('p', 'hint', 'It looks at you and finds nothing it wants.'));
+    }
+    panel.appendChild(grid);
+
+    const row = el('div', 'btn-row');
+    row.appendChild(button('Walk away', 'btn primary',
+      this.click(() => { if (this.host.leaveAltar) this.host.leaveAltar(); })));
+    panel.appendChild(row);
+    panel.appendChild(el('p', 'hint',
+      'Nothing here is a trick. What it says it will take, it takes; what it '
+      + 'says it will give, it gives. Whether that was worth it is your problem.'));
+    return panel;
+  }
+
   screen_pause(data = {}) {
     const run = this.host.run;
     const panel = el('div', 'panel');
@@ -521,6 +675,7 @@ export class Screens {
     menu.appendChild(button('Settings', 'btn', this.click(() => this.show('settings', { from: 'pause' }))));
     menu.appendChild(button('Abandon Run', 'btn ghost', this.click(() => this.show('confirmQuit'))));
     panel.appendChild(menu);
+    panel.appendChild(this._buildStamp());
     return panel;
   }
 
@@ -612,7 +767,7 @@ export class Screens {
       card.appendChild(el('span', 'relic-tag', relic.tag));
       card.appendChild(el('span', 'relic-name', relic.name));
       card.appendChild(el('span', 'relic-text', relic.text));
-      if (relic.cost && relic.cost !== 'None.') card.appendChild(el('span', 'relic-cost', relic.cost));
+      card.appendChild(el('span', 'relic-cost', relic.cost));
       card.addEventListener('click', () => {
         if (this.host.audio) this.host.audio.play('relicTake');
         this.host.chooseRelic(relic);
@@ -721,12 +876,18 @@ export class Screens {
       const submit = button('Carve it', 'btn primary', () => {
         const name = (input.value || 'Nameless').trim().slice(0, 14) || 'Nameless';
         try { localStorage.setItem('torchbound.lastName', name); } catch (e) { /* ignore */ }
-        const placed = profile.submit({
+        submit.disabled = true;
+        // Carving waits for the table to be free, so it is a promise. The
+        // wait is measured in tens of milliseconds and nothing else is
+        // happening, but the button is locked so it cannot be pressed twice.
+        profile.submit({
           name, score, depth: run.depth, bosses: run.bossesDefeated,
-          build: run.build, diff: run.difficulty.id,
+          kills: run.score.runBest.kills, secrets: run.score.runBest.secrets,
+          build: run.build, diff: run.difficulty.id, seed: run.seed,
+        }).then((placed) => {
+          if (this.host.audio) this.host.audio.play('fanfare');
+          this.show('hall', { highlight: placed ? placed - 1 : undefined, from: 'home' });
         });
-        if (this.host.audio) this.host.audio.play('fanfare');
-        this.show('hall', { highlight: placed - 1, from: 'home' });
       });
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit.click(); });
       entry.appendChild(input);

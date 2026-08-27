@@ -33,6 +33,11 @@ jobs:
         uses: actions/checkout@v4
       - name: Setup Pages
         uses: actions/configure-pages@v5
+      # The game has no build step, so the build stamp is a source file. Rewrite
+      # it here so the number in the menus is the moment this deploy shipped and
+      # the commit it shipped from, not whenever the file was last committed.
+      - name: Stamp the build number
+        run: python3 tools/stamp_version.py
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:

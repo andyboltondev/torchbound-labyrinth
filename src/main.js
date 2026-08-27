@@ -39,9 +39,12 @@ class Game {
       resume: () => this.resume(),
       quit: (reason) => this.endRun(reason || 'quit'),
       chooseRelic: (relic) => this.chooseRelic(relic),
+      takeOffer: (offer) => this.takeOffer(offer),
+      leaveAltar: () => this.leaveAltar(),
       afterSummary: () => this.showRelicChoice(),
       onTouchModeChange: () => this.refreshTouchMode(),
       onSettingChanged: (key) => this.applySettings(key),
+      onScreen: (name) => this.scoreFor(name),
       get run() { return window.__game ? window.__game.run : null; },
     });
     this.state = STATE.MENU;
@@ -81,6 +84,12 @@ class Game {
       this.audio.init();
       this.audio.setReverbEnabled(profile.settings.reverb !== false);
       this.audio.resume();
+      // The score starts here and does not stop again for the life of the
+      // page. Everything after this is a crossfade between scenes, which is
+      // what makes the menu flow into a descent and back out of it.
+      this.music.start();
+      this.music.setScene(this.state === STATE.PLAYING ? 'explore' : 'menu');
+      this.music.setIntensity(0.12, false);
       window.removeEventListener('pointerdown', arm);
       window.removeEventListener('keydown', arm);
     };
@@ -173,6 +182,7 @@ class Game {
         this.music.start();
         const zone = level.zoneInfo[0];
         this.music.setBiome(zone ? zone.biome.id : level.biome.id, zone ? zone.hazardId : 'clear');
+        this.music.setScene(level.isBoss ? 'boss' : 'explore');
         this.music.setIntensity(level.isBoss ? 0.75 : 0.14, level.isBoss);
         this.audio.play('levelStart');
       }
@@ -215,12 +225,32 @@ class Game {
     this.hud.hide();
     this.touch.setVisible(false);
     const breakdown = this.world.summary();
-    if (this.audio.ready) this.music.setIntensity(0.1, false);
+    if (this.audio.ready) {
+      // The depth is behind them. Let the score say so before the relics do.
+      this.music.setScene('relics');
+      this.music.setIntensity(0.35, false);
+    }
     this.screens.show('summary', {
       breakdown,
       run: this.run,
       nextIsBoss: this.run.isBossDepth(this.run.depth + 1),
     });
+  }
+
+  // Every screen that is not a depth gets the scene that belongs to it.
+  // Anything shown over live play -- the pause menu, an altar, the bestiary
+  // opened mid-run -- is left alone: the labyrinth is still the labyrinth.
+  scoreFor(screen) {
+    if (!this.audio.ready || !this.music.running) return;
+    if (this.state === STATE.PLAYING || this.state === STATE.PAUSED) return;
+    if (screen === 'relics' || screen === 'summary') this.music.setScene('relics');
+    else if (screen === 'hall' || screen === 'gameover' || screen === 'fallen') {
+      this.music.setScene('hall');
+    } else if (screen === 'home' || screen === 'difficulty'
+               || screen === 'settings' || screen === 'bestiary') {
+      this.music.setScene('menu');
+      this.music.setIntensity(0.1, false);
+    }
   }
 
   showRelicChoice() {
@@ -236,6 +266,35 @@ class Game {
     }
     this.run.descend();
     this.loadLevel();
+  }
+
+  // An altar stops the world while the choice is being made. It is the same
+  // shape as a pause: the simulation is untouched, and resuming puts the
+  // player back exactly where they were standing.
+  openAltar(prop, offers) {
+    if (this.state !== STATE.PLAYING) return;
+    this.state = STATE.PAUSED;
+    this.altarProp = prop;
+    this.input.releaseAll();
+    this.touch.setVisible(false);
+    if (this.audio.ready) this.audio.master.gain.value = profile.settings.master * 0.55;
+    this.screens.show('altar', { offers });
+  }
+
+  takeOffer(offer) {
+    const prop = this.altarProp;
+    this.leaveAltar();
+    if (prop && this.world) this.world.takeOffer(prop, offer);
+  }
+
+  leaveAltar() {
+    this.altarProp = null;
+    if (this.state !== STATE.PAUSED) return;
+    this.screens.hide();
+    this.state = STATE.PLAYING;
+    this.input.clearEdges();
+    this.refreshTouchMode();
+    if (this.audio.ready) this.audio.master.gain.value = profile.settings.master;
   }
 
   // Hearthlight only. The run total survives; this depth's earnings do not.
@@ -256,7 +315,8 @@ class Game {
     this.hud.hide();
     this.touch.setVisible(false);
     if (this.audio.ready) {
-      this.music.stop();
+      this.music.setScene('hall');
+      this.music.setIntensity(0.2, false);
       this.audio.master.gain.value = profile.settings.master;
     }
     // A run that ends mid-depth still banks what was earned on the way down.
@@ -291,12 +351,53 @@ class Game {
       case 'kill': this.combatHeat = Math.min(1, this.combatHeat + 0.32); break;
       case 'alert': this.combatHeat = Math.min(1, this.combatHeat + 0.12); break;
       case 'secretFound': this.hud.toast('Cracked stone -- strike it', 'good'); break;
-      case 'secretBroken': this.hud.toast('Secret discovered', 'good'); break;
+      case 'secretBroken':
+        this.hud.toast('Secret discovered', 'good');
+        // The chart paints each tile once, so a wall that stops being a wall
+        // has to ask for its square back.
+        if (data.secret) this.minimap.repaint(data.secret.x, data.secret.y);
+        break;
       case 'crossbow':
         this.touch.setCrossbow(true);
         this.hud.toast('Crossbow recovered  \u2014  F or K to loose', 'good');
         break;
-      case 'gateOpened': this.hud.toast('Gate opened', 'good'); break;
+      case 'torch':
+        this.touch.setTorch(data.lit);
+        this.hud.toast(data.lit ? 'Torch lit' : 'Torch out  —  you can hear better in the dark',
+          data.lit ? 'good' : '');
+        break;
+      case 'fireLit': this.hud.toast('The fire catches', 'good'); break;
+      case 'altarOpen': this.openAltar(data.prop, data.offers); break;
+      case 'altarUsed':
+        this.hud.toast(data.gave ? 'The altar answers: ' + data.gave : 'The altar takes and says nothing',
+          data.gave ? 'good' : 'bad');
+        break;
+      case 'forgot':
+        // The chart is painted once per tile and never rubbed out, so it has
+        // to be told when there is suddenly nothing to remember.
+        this.minimap.bind(this.world.level);
+        this.hud.toast('You do not remember any of this', 'bad');
+        break;
+      case 'charted': this.hud.toast('The passages draw themselves', 'good'); break;
+      case 'hint':
+        this.hud.toast('You are shown ' + data.hint.label, 'good');
+        break;
+      case 'mapRead':
+        if (!data.hint) this.hud.toast('The map tells you nothing new');
+        break;
+      case 'scream': this.combatHeat = Math.min(1, this.combatHeat + 0.2); break;
+      case 'captive':
+        if (data.action === 'murdered') this.hud.toast('That will be answered for', 'bad');
+        else if (data.action === 'mercy') this.hud.toast('You gave them what they asked for', 'good');
+        else if (data.action === 'freed') this.hud.toast('You cut them loose', 'good');
+        break;
+      case 'distraction':
+        this.hud.toast(data.count === 1 ? 'Something goes to look' : data.count + ' go to look', 'good');
+        break;
+      case 'gateOpened':
+        this.hud.toast('Gate opened', 'good');
+        if (data.gate) this.minimap.repaint(data.gate.x, data.gate.y);
+        break;
       case 'ladder':
         // The camera has to cut, not pan: the vault is nowhere near the maze.
         this.renderer.cameraReady = false;
@@ -312,12 +413,22 @@ class Game {
       case 'wave': this.hud.toast('Wave ' + data.index + ' of ' + data.total, 'bad'); break;
       case 'bossAwake':
         this.hud.toast(data.boss.def.name + ' stirs', 'bad');
-        if (this.audio.ready) this.music.setIntensity(1, true);
+        if (this.audio.ready) {
+          this.music.setScene('boss');
+          this.music.setIntensity(1, true);
+        }
+        break;
+      case 'chamber':
+        // A brief tonal lift as a room nobody has been in opens up.
+        if (this.audio.ready) this.music.chamberShift(Math.min(1.4, data.area / 30));
         break;
       case 'bossPhase': this.hud.toast('It changes', 'bad'); break;
       case 'bossKilled':
         this.hud.toast(data.boss.def.name + ' falls', 'good');
-        if (this.audio.ready) this.music.setIntensity(0.25, false);
+        if (this.audio.ready) {
+          this.music.setScene('explore');
+          this.music.setIntensity(0.25, false);
+        }
         break;
       case 'descend': this.descend(); break;
       case 'playerDied':
@@ -356,6 +467,7 @@ class Game {
       fire: this.input.held('fire'),
     };
     if (this.input.consume('action')) this.world.interact();
+    if (this.input.consume('torch')) this.world.toggleTorch();
 
     this.world.update(dt, intent);
 

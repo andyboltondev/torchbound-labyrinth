@@ -231,8 +231,201 @@ export function drawProp(ctx, prop, t) {
     case 'crossbow': drawCrossbowPickup(ctx, sx, sy, t); break;
     case 'treasure': drawTreasure(ctx, sx, sy, t); break;
     case 'ladder': drawLadder(ctx, sx, sy, t, prop); break;
+    case 'altar': drawAltar(ctx, sx, sy, t, prop); break;
+    case 'prisoner': drawPrisoner(ctx, sx, sy, t, prop); break;
+    case 'mapScrap': drawMapScrap(ctx, sx, sy, t, prop); break;
     default: break;
   }
+}
+
+// Somebody chained to the wall. Four states, and the whole point is that you
+// can tell which one you are looking at before you are close enough to act:
+// a slumped body, someone who lifts their head, someone reaching for you, and
+// something that has stopped being a someone.
+function drawPrisoner(ctx, sx, sy, t, prop) {
+  const r = prop.seed;
+  const dead = prop.mood === 'dead' || prop.freed;
+  const raving = prop.mood === 'raving';
+  const begging = prop.mood === 'begging';
+  const breathe = dead ? 0 : Math.sin(t * (raving ? 5.2 : 1.5) + r * 9) * (raving ? 2.2 : 0.9);
+  const slump = dead ? 12 : begging ? 5 : 2;
+
+  pedestalShadow(ctx, sx, sy, 11);
+
+  // The chains, from the wall behind down to the wrists. Drawn first so the
+  // body hangs in front of them.
+  ctx.strokeStyle = rgba('#6b6459', 0.85);
+  ctx.lineWidth = 1.7;
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(sx + side * 9, sy - 40);
+    ctx.quadraticCurveTo(sx + side * 11, sy - 30 + breathe * 0.4, sx + side * 7, sy - 24 + slump);
+    ctx.stroke();
+  }
+
+  const skin = dead ? '#8c8378' : raving ? '#c9a184' : '#b5967c';
+  const cloth = dead ? '#3d3a34' : '#4a4239';
+  const headY = sy - 30 + slump + breathe * 0.5;
+
+  // Legs, folded under.
+  ctx.strokeStyle = rgba(cloth, 0.95);
+  ctx.lineWidth = 4;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(sx - 2, sy - 14 + slump * 0.6);
+  ctx.lineTo(sx - 6, sy - 2);
+  ctx.moveTo(sx + 2, sy - 14 + slump * 0.6);
+  ctx.lineTo(sx + 6, sy - 3);
+  ctx.stroke();
+
+  // Torso.
+  ctx.fillStyle = cloth;
+  ctx.beginPath();
+  ctx.moveTo(sx - 5, sy - 13 + slump * 0.6);
+  ctx.lineTo(sx + 5, sy - 13 + slump * 0.6);
+  ctx.lineTo(sx + 4.5, headY + 5);
+  ctx.lineTo(sx - 4.5, headY + 5);
+  ctx.closePath();
+  ctx.fill();
+
+  // Arms, up to the wrists the chains hold.
+  ctx.strokeStyle = rgba(skin, 0.95);
+  ctx.lineWidth = 3.4;
+  for (const side of [-1, 1]) {
+    const reachOut = raving ? 3.5 : begging ? 2 : 0;
+    ctx.beginPath();
+    ctx.moveTo(sx + side * 4, headY + 6);
+    ctx.lineTo(sx + side * (7 + reachOut), sy - 24 + slump);
+    ctx.stroke();
+  }
+
+  // Head. Dead ones hang forward; raving ones are thrown back.
+  ctx.fillStyle = skin;
+  ctx.beginPath();
+  ctx.ellipse(sx + (dead ? 2.5 : 0), headY, 4.8, 5.2, dead ? 0.6 : raving ? -0.4 : 0, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = rgba('#241d19', 0.75);
+  if (dead) {
+    ctx.fillRect(sx - 1, headY - 1, 5, 1.6);
+  } else if (raving) {
+    // An open mouth, which is all a scream needs to be at this size.
+    ctx.beginPath();
+    ctx.ellipse(sx + 1, headY + 2, 1.4, 2 + Math.abs(breathe) * 0.4, 0, 0, TAU);
+    ctx.fill();
+    ctx.fillRect(sx - 2.4, headY - 1.4, 5, 1.2);
+  } else {
+    ctx.fillRect(sx - 2.4, headY - 1, 5, 1.2);
+  }
+
+  // Something to catch the eye of a player who has not learned the shapes yet.
+  if (!dead && !prop.spoken) {
+    const pulse = 0.4 + Math.sin(t * 2.4 + r * 7) * 0.25;
+    ctx.fillStyle = rgba(raving ? '#e05a3c' : begging ? '#c9b9d8' : '#8fb7ff', pulse);
+    ctx.beginPath();
+    ctx.arc(sx, headY - 12, 1.8, 0, TAU);
+    ctx.fill();
+  }
+}
+
+// A map. Somebody drew it, and did not get to use it.
+function drawMapScrap(ctx, sx, sy, t, prop) {
+  const bob = Math.sin(t * 1.6 + prop.x) * 1.2;
+  pedestalShadow(ctx, sx, sy, 8);
+  ctx.save();
+  ctx.translate(sx, sy - 5 + bob);
+  ctx.rotate(-0.22);
+  ctx.fillStyle = '#cbbb92';
+  ctx.beginPath();
+  ctx.moveTo(-7, -5); ctx.lineTo(7, -6); ctx.lineTo(8, 5); ctx.lineTo(-6, 6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = rgba('#000000', 0.16);
+  ctx.beginPath();
+  ctx.moveTo(-7, -5); ctx.lineTo(-6, 6); ctx.lineTo(-3, 5); ctx.lineTo(-4, -5);
+  ctx.closePath();
+  ctx.fill();
+  // Lines on it. Not a real map, just enough marks to read as one.
+  ctx.strokeStyle = rgba('#5a4a30', 0.8);
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(-4, -2); ctx.lineTo(1, -2); ctx.lineTo(1, 2); ctx.lineTo(5, 2);
+  ctx.moveTo(-2, 4); ctx.lineTo(-2, -3);
+  ctx.stroke();
+  ctx.fillStyle = rgba('#a03a2a', 0.85);
+  ctx.beginPath();
+  ctx.arc(5, 2, 1.4, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+  // A glimmer, so it is findable in a room full of debris.
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = rgba('#e8d9a8', 0.1 + Math.sin(t * 2.1 + prop.y) * 0.05);
+  ctx.beginPath();
+  ctx.ellipse(sx, sy - 5, 13, 7, 0, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+}
+
+// A sacrifice altar: a bowl on a block, with a runed slab behind it. Lit from
+// inside while it still has something to offer, and cold stone once it does
+// not, so a spent one is obviously spent from across the room.
+function drawAltar(ctx, sx, sy, t, prop) {
+  const spent = !!prop.used;
+  const pulse = spent ? 0 : 0.55 + Math.sin(t * 1.5 + prop.seed * 8) * 0.3
+    + Math.sin(t * 3.7 + prop.seed * 3) * 0.12;
+  pedestalShadow(ctx, sx, sy, 20);
+
+  // The slab behind, carved with a rune that only reads when it is live.
+  ctx.fillStyle = spent ? '#3c3a3a' : '#4a4046';
+  ctx.beginPath();
+  ctx.moveTo(sx - 11, sy - 12);
+  ctx.lineTo(sx + 11, sy - 12);
+  ctx.lineTo(sx + 9, sy - 46);
+  ctx.lineTo(sx - 9, sy - 46);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = rgba('#000000', 0.3);
+  ctx.fillRect(sx - 11, sy - 14, 22, 2);
+  ctx.strokeStyle = rgba(spent ? '#5a5560' : '#c46ad8', spent ? 0.4 : 0.5 + pulse * 0.4);
+  ctx.lineWidth = 1.6;
+  drawRune(ctx, sx, sy - 32, 'berkano', 7);
+
+  // The block and the bowl.
+  ctx.fillStyle = '#585049';
+  ctx.fillRect(sx - 14, sy - 14, 28, 12);
+  ctx.fillStyle = shade('#585049', 0.12);
+  ctx.beginPath();
+  ctx.ellipse(sx, sy - 14, 14, 5.4, 0, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = '#2a2220';
+  ctx.beginPath();
+  ctx.ellipse(sx, sy - 15, 9, 3.4, 0, 0, TAU);
+  ctx.fill();
+
+  if (spent) {
+    ctx.fillStyle = rgba('#3c2a2a', 0.8);
+    ctx.beginPath();
+    ctx.ellipse(sx, sy - 15, 7.4, 2.6, 0, 0, TAU);
+    ctx.fill();
+    return;
+  }
+
+  // What is in the bowl. A cold violet light, and it breathes.
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const g = ctx.createRadialGradient(sx, sy - 18, 0, sx, sy - 18, 34 * (0.7 + pulse * 0.5));
+  g.addColorStop(0, rgba('#c46ad8', 0.3 * pulse));
+  g.addColorStop(0.5, rgba('#8b4ad8', 0.11 * pulse));
+  g.addColorStop(1, rgba('#8b4ad8', 0));
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(sx, sy - 18, 34 * (0.7 + pulse * 0.5), 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = rgba('#e0a8f0', 0.5 + pulse * 0.35);
+  ctx.beginPath();
+  ctx.ellipse(sx, sy - 15, 7 + pulse, 2.6 + pulse * 0.6, 0, 0, TAU);
+  ctx.fill();
+  ctx.restore();
 }
 
 function pedestalShadow(ctx, sx, sy, r = 15) {
@@ -541,6 +734,97 @@ export function drawDecor(ctx, d, t) {
       ctx.fillStyle = rgba('#000000', 0.35);
       ctx.fillRect(sx - 5, sy - 20, 10, 2);
       break;
+    case 'debris': {
+      // Chips of fallen masonry. The commonest thing on the floor, and the
+      // main reason a corridor no longer reads as a clean grey ramp.
+      ctx.fillStyle = rgba('#4c4740', 0.85);
+      for (let i = 0; i < 5; i++) {
+        const a = r * 30 + i * 1.7;
+        const dx = Math.cos(a) * 7, dy = Math.sin(a) * 3.4;
+        ctx.beginPath();
+        ctx.moveTo(sx + dx, sy + dy - 1.6);
+        ctx.lineTo(sx + dx + 2.4, sy + dy);
+        ctx.lineTo(sx + dx - 1.4, sy + dy + 1.2);
+        ctx.closePath();
+        ctx.fill();
+      }
+      break;
+    }
+    case 'skull':
+      ctx.fillStyle = rgba('#000000', 0.3);
+      ctx.beginPath();
+      ctx.ellipse(sx, sy, 5, 2.4, 0, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = '#cabfa4';
+      ctx.beginPath();
+      ctx.ellipse(sx, sy - 3, 4.2, 3.6, r * 2, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = '#2a241d';
+      ctx.beginPath();
+      ctx.ellipse(sx - 1.6, sy - 3.4, 1.1, 1.3, 0, 0, TAU);
+      ctx.ellipse(sx + 1.6, sy - 3.4, 1.1, 1.3, 0, 0, TAU);
+      ctx.fill();
+      break;
+    case 'crate':
+      ctx.fillStyle = rgba('#000000', 0.32);
+      ctx.beginPath();
+      ctx.ellipse(sx, sy, 10, 4.4, 0, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = '#5b452c';
+      ctx.fillRect(sx - 8, sy - 15, 16, 15);
+      ctx.fillStyle = rgba('#000000', 0.28);
+      ctx.fillRect(sx - 8, sy - 15, 16, 2);
+      ctx.strokeStyle = rgba('#3a2c1c', 0.9);
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(sx - 8, sy - 8); ctx.lineTo(sx + 8, sy - 8);
+      ctx.moveTo(sx - 8, sy - 15); ctx.lineTo(sx + 8, sy);
+      ctx.stroke();
+      break;
+    case 'chain': {
+      // Hanging from somewhere above, swinging just enough to be alive.
+      const swing = Math.sin(t * 0.9 + r * 8) * 2.2;
+      ctx.strokeStyle = rgba('#5f5a52', 0.85);
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy - 40);
+      ctx.quadraticCurveTo(sx + swing, sy - 24, sx + swing * 1.4, sy - 10);
+      ctx.stroke();
+      ctx.fillStyle = rgba('#6b6459', 0.9);
+      for (let i = 0; i < 4; i++) {
+        const k = i / 4;
+        ctx.beginPath();
+        ctx.ellipse(sx + swing * (0.4 + k), sy - 34 + i * 7, 2, 2.8, 0, 0, TAU);
+        ctx.fill();
+      }
+      break;
+    }
+    case 'cobweb': {
+      // Strung into the corner it was generated for, so the radials always
+      // have two walls to be anchored to.
+      const wx = d.wallX || 1, wy = d.wallY || 1;
+      const ax = screenX(d.x - wx * 0.5, d.y), ay = screenY(d.x - wx * 0.5, d.y) - 22;
+      const bx = screenX(d.x, d.y - wy * 0.5), by = screenY(d.x, d.y - wy * 0.5) - 22;
+      ctx.strokeStyle = rgba('#cfd6df', 0.22 + Math.sin(t * 0.7 + r * 9) * 0.03);
+      ctx.lineWidth = 0.9;
+      const cx = (ax + bx) / 2, cy = (ay + by) / 2;
+      for (let i = 0; i <= 4; i++) {
+        const k = i / 4;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy - 26);
+        ctx.lineTo(ax + (bx - ax) * k, ay + (by - ay) * k);
+        ctx.stroke();
+      }
+      for (let ring = 1; ring <= 3; ring++) {
+        const k = ring / 3.4;
+        ctx.beginPath();
+        ctx.moveTo(sx + (ax - sx) * k, sy - 26 + (ay - (sy - 26)) * k);
+        ctx.quadraticCurveTo(sx + (cx - sx) * k * 1.15, sy - 26 + (cy - (sy - 26)) * k * 1.15,
+          sx + (bx - sx) * k, sy - 26 + (by - (sy - 26)) * k);
+        ctx.stroke();
+      }
+      break;
+    }
     default: // grass / growth
       ctx.strokeStyle = rgba('#6f9447', 0.7);
       ctx.lineWidth = 1.4;
@@ -555,14 +839,121 @@ export function drawDecor(ctx, d, t) {
   }
 }
 
+// Every fire in the labyrinth, from a wall sconce to a hall-sized campfire.
+// A cold one is drawn as the same object without the flame, so the player can
+// see at a glance which of them is worth walking over to light.
 export function drawSconce(ctx, s, t) {
   const sx = screenX(s.x, s.y);
-  const sy = screenY(s.x, s.y) - 26;
+  const phase = t + s.seed * 10;
+  switch (s.kind) {
+    case 'brazier': drawBrazier(ctx, sx, screenY(s.x, s.y), phase, s); break;
+    case 'firepit': drawFirepit(ctx, sx, screenY(s.x, s.y), phase, s); break;
+    case 'campfire': drawCampfire(ctx, sx, screenY(s.x, s.y), phase, s); break;
+    default: drawWallSconce(ctx, sx, screenY(s.x, s.y) - 26, phase, s); break;
+  }
+}
+
+function drawWallSconce(ctx, sx, sy, phase, s) {
   ctx.fillStyle = '#3a352e';
   ctx.fillRect(sx - 2, sy, 4, 10);
   ctx.fillStyle = '#4e483e';
   ctx.beginPath();
   ctx.ellipse(sx, sy, 5, 2.6, 0, 0, TAU);
   ctx.fill();
-  drawFlame(ctx, sx, sy - 4, 0.62, t + s.seed * 10, 1);
+  if (s.lit === false) { coldMark(ctx, sx, sy - 3, 0.7); return; }
+  drawFlame(ctx, sx, sy - 4, 0.62, phase, flicker(phase));
+}
+
+function drawBrazier(ctx, sx, sy, phase, s) {
+  pedestalShadow(ctx, sx, sy, 13);
+  ctx.strokeStyle = '#4a4238';
+  ctx.lineWidth = 2.4;
+  for (const ox of [-7, 0, 7]) {
+    ctx.beginPath();
+    ctx.moveTo(sx + ox * 0.55, sy - 12);
+    ctx.lineTo(sx + ox, sy - 1);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#5b5145';
+  ctx.beginPath();
+  ctx.ellipse(sx, sy - 14, 9, 4.4, 0, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = '#2a241d';
+  ctx.beginPath();
+  ctx.ellipse(sx, sy - 15, 7, 3.2, 0, 0, TAU);
+  ctx.fill();
+  if (s.lit === false) { coals(ctx, sx, sy - 15, 6, 0); coldMark(ctx, sx, sy - 22, 0.9); return; }
+  coals(ctx, sx, sy - 15, 6, 1);
+  drawFlame(ctx, sx, sy - 17, 1.05, phase, flicker(phase));
+}
+
+function drawFirepit(ctx, sx, sy, phase, s) {
+  pedestalShadow(ctx, sx, sy, 19);
+  // A ring of stones, drawn as an ellipse of blocks so it sits on the floor.
+  for (let i = 0; i < 9; i++) {
+    const a = (i / 9) * TAU + s.seed * 3;
+    const rx = sx + Math.cos(a) * 15, ry = sy + Math.sin(a) * 7.5;
+    ctx.fillStyle = i % 2 ? '#57503f' : '#6a6250';
+    ctx.beginPath();
+    ctx.ellipse(rx, ry - 2, 4.2, 3.2, a * 0.3, 0, TAU);
+    ctx.fill();
+  }
+  ctx.fillStyle = '#20190f';
+  ctx.beginPath();
+  ctx.ellipse(sx, sy - 1, 10, 5, 0, 0, TAU);
+  ctx.fill();
+  if (s.lit === false) { coals(ctx, sx, sy - 2, 8, 0); coldMark(ctx, sx, sy - 12, 1); return; }
+  coals(ctx, sx, sy - 2, 8, 1);
+  drawFlame(ctx, sx, sy - 5, 1.5, phase, flicker(phase));
+  drawFlame(ctx, sx - 5, sy - 2, 0.85, phase * 1.17 + 2, flicker(phase * 1.17));
+  drawFlame(ctx, sx + 5, sy - 3, 0.9, phase * 0.91 + 4, flicker(phase * 0.91));
+}
+
+function drawCampfire(ctx, sx, sy, phase, s) {
+  drawFirepit(ctx, sx, sy, phase, s);
+  // Logs leaned into the middle. Drawn over the pit so the fire is inside it.
+  ctx.strokeStyle = '#4a3826';
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 4;
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * TAU + s.seed * 5 + 0.4;
+    ctx.beginPath();
+    ctx.moveTo(sx + Math.cos(a) * 12, sy + Math.sin(a) * 6 - 1);
+    ctx.lineTo(sx + Math.cos(a) * 3, sy - 11);
+    ctx.stroke();
+  }
+  if (s.lit === false) return;
+  drawFlame(ctx, sx, sy - 10, 1.35, phase + 1.3, flicker(phase + 1.3));
+}
+
+// Layered sines, the same shape the torch uses, so every flame in the level
+// breathes rather than strobing -- and no two are ever in step.
+function flicker(phase) {
+  return 1 + Math.sin(phase * 11.3) * 0.05 + Math.sin(phase * 6.7 + 1.3) * 0.07
+    + Math.sin(phase * 3.1 + 0.7) * 0.08;
+}
+
+function coals(ctx, sx, sy, spread, heat) {
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * TAU + i;
+    const cx = sx + Math.cos(a) * spread * 0.6;
+    const cy = sy + Math.sin(a) * spread * 0.3;
+    ctx.fillStyle = heat
+      ? rgba(i % 2 ? '#ff7a2a' : '#ffbe5c', 0.55 + (i % 3) * 0.15)
+      : rgba('#3a332b', 0.9);
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 2.4, 1.5, 0, 0, TAU);
+    ctx.fill();
+  }
+}
+
+// The mark on a cold fire: a thin curl of nothing, so an unlit brazier does
+// not read as a lit one drawn badly.
+function coldMark(ctx, sx, sy, scale) {
+  ctx.strokeStyle = rgba('#8fa0b8', 0.32);
+  ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  ctx.moveTo(sx, sy);
+  ctx.quadraticCurveTo(sx + 3 * scale, sy - 5 * scale, sx - 1 * scale, sy - 10 * scale);
+  ctx.stroke();
 }

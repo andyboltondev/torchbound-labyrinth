@@ -24,6 +24,97 @@ const HAZARD_COLOUR = {
   clear: { droneGain: 1.0, percussion: 1.0, texture: 1.0, brightness: 1.0 },
 };
 
+// The five places the score has to be, and how each of them balances the same
+// set of layers. Nothing here starts or stops anything: a scene change is a
+// crossfade of gains plus a different pattern generator, so the music flows
+// from the menu into a descent into a boss hall into the relic table without
+// a seam anywhere.
+//
+// `tempo` is seconds per sixteenth. `swing` delays the off-beats, which is
+// most of what separates a march from a groove.
+const SCENES = {
+  // Melancholy. Slow, minor, almost all pad and drone, one horn line a long
+  // way off, and no drum at all -- a menu should feel like the moment before
+  // you decide to go down.
+  menu: {
+    tempo: 0.60, swing: 0, mode: 'aeolian',
+    drone: 1.3, pad: 1.5, perc: 0, snare: 0, lead: 0.35, bass: 0.45, texture: 1.4,
+    grit: 0, melody: 0.55, pattern: 'slow',
+  },
+  // Sombre, and meant to move you. Fuller than the menu, with a rising
+  // figure and a low swell under it: these are the names of the dead.
+  hall: {
+    tempo: 0.66, swing: 0, mode: 'aeolian',
+    drone: 1.1, pad: 1.9, perc: 0.2, snare: 0, lead: 0.7, bass: 0.8, texture: 1.1,
+    grit: 0, melody: 0.85, pattern: 'slow',
+  },
+  // The labyrinth itself. Atmospheric and adaptive; the grit only arrives
+  // with the intensity, so the guitar is something that happens to you.
+  explore: {
+    tempo: 0.52, swing: 0, mode: 'biome',
+    drone: 1, pad: 1, perc: 1, snare: 0.35, lead: 0.5, bass: 1, texture: 1,
+    grit: 0.45, melody: 1, pattern: 'explore',
+  },
+  // Energetic action. Everything open, a driving riff on the low strings and
+  // the drum on every beat.
+  boss: {
+    tempo: 0.30, swing: 0.06, mode: 'phrygian',
+    drone: 0.8, pad: 0.7, perc: 1.6, snare: 1.5, lead: 1.35, bass: 1.5, texture: 0.5,
+    grit: 1, melody: 0.5, pattern: 'drive',
+  },
+  // Relaxed and upbeat: the depth is behind you. Swung, warm, major-leaning,
+  // a bouncing bass and a bright tune over it -- the one place in the game
+  // that is allowed to sound like fun.
+  relics: {
+    tempo: 0.34, swing: 0.2, mode: 'dorian',
+    drone: 0.35, pad: 0.9, perc: 1.1, snare: 1, lead: 1, bass: 1.35, texture: 0.35,
+    grit: 0.35, melody: 1, pattern: 'drive',
+  },
+};
+
+// Mode overrides. The biome scales stay as they are while exploring; the
+// framing scenes borrow the same root and re-colour it, so moving between
+// them is a change of mood rather than a change of key.
+const MODES = {
+  aeolian: [0, 2, 3, 5, 7, 8, 10],
+  phrygian: [0, 1, 3, 5, 7, 8, 10],
+  dorian: [0, 2, 3, 5, 7, 9, 10],
+};
+
+// Sixteen-step patterns. `null` is a rest; numbers are scale degrees.
+//
+// The driving pair are deliberately built the way a tracker would: a bass
+// that lands on the beat and answers itself off it, a lead that runs in
+// eighths, and a snare on two and four. That is the shape the score is
+// reaching for whenever it is not being frightening.
+const RIFFS = {
+  boss: {
+    bass: [0, null, 0, 0, null, 0, 3, null, 0, null, 0, 0, 6, null, 5, 4],
+    lead: [0, null, 3, null, 4, null, 3, null, 0, null, 6, null, 5, null, 4, 3],
+    snare: [4, 12],
+    kick: [0, 3, 6, 8, 11, 14],
+  },
+  relics: {
+    bass: [0, null, 4, null, 2, null, 4, null, 3, null, 5, null, 4, null, 2, 1],
+    lead: [4, null, 5, 4, 2, null, 4, null, 5, null, 6, 5, 4, null, 2, null],
+    snare: [4, 12],
+    kick: [0, 6, 8, 14],
+  },
+};
+
+// A soft clipping curve. Gentle enough that a single note still reads as a
+// note; hard enough that a chord reads as a chord being pushed.
+function gritCurve(amount) {
+  const n = 1024;
+  const curve = new Float32Array(n);
+  const k = Math.max(0.001, amount) * 70;
+  for (let i = 0; i < n; i++) {
+    const x = (i * 2) / n - 1;
+    curve[i] = ((1 + k) * x) / (1 + k * Math.abs(x));
+  }
+  return curve;
+}
+
 export class Music {
   constructor(engine) {
     this.engine = engine;
@@ -47,6 +138,13 @@ export class Music {
     this.openness = 0.4;
     this.motif = [0, 2, 4, 2];
     this.motifStep = 0;
+    // Which of the five places the score is. Changed by crossfade, never by
+    // stopping and starting, so every transition in the game is seamless.
+    this.scene = SCENES.explore;
+    this.sceneName = 'explore';
+    this.biomeSteps = SCALES.ruins.steps;
+    // A brief tonal lift when a new chamber opens up. Decays on its own.
+    this.chamber = 0;
   }
 
   start() {
@@ -67,6 +165,20 @@ export class Music {
     this.nodes.textureGain = mk(0);
     this.nodes.combatGain = mk(0);
     this.nodes.bassGain = mk(0);
+    this.nodes.snareGain = mk(0);
+    // The rocky layer. Two detuned saws through a soft clipper and a mid
+    // bandpass, which is about as close to an overdriven string as a couple
+    // of oscillators get -- and close enough at this volume.
+    this.nodes.leadGain = mk(0);
+    this.nodes.leadTone = ctx.createBiquadFilter();
+    this.nodes.leadTone.type = 'bandpass';
+    this.nodes.leadTone.frequency.value = 900;
+    this.nodes.leadTone.Q.value = 0.9;
+    this.nodes.leadShaper = ctx.createWaveShaper();
+    this.nodes.leadShaper.curve = gritCurve(0.5);
+    this.nodes.leadShaper.oversample = '2x';
+    this.nodes.leadShaper.connect(this.nodes.leadTone);
+    this.nodes.leadTone.connect(this.nodes.leadGain);
 
     // Continuous drone: two saws a hair apart, heavily filtered.
     this.nodes.droneFilter = ctx.createBiquadFilter();
@@ -118,6 +230,7 @@ export class Music {
     this.nextNoteTime = ctx.currentTime + 0.1;
     this.step = 0;
     this.timer = setInterval(() => this._schedule(), 90);
+    this._applyScene();
     this.setIntensity(0.12);
   }
 
@@ -175,9 +288,12 @@ export class Music {
   setBiome(biomeId, hazardId) {
     const scale = SCALES[biomeId] || SCALES.ruins;
     this._buildMotif(biomeId);
+    // Kept aside so a scene that borrows the biome's mode can find it again
+    // after the framing scenes have overridden it.
+    this.biomeSteps = scale.steps;
     this.colour = HAZARD_COLOUR[hazardId] || HAZARD_COLOUR.clear;
-    if (scale !== this.scale && this.running) {
-      this.scale = scale;
+    if (scale.root !== this.scale.root && this.running) {
+      this.scale = { root: scale.root, steps: this.scale.steps };
       const t = this.engine.ctx.currentTime;
       // Slide the drone rather than cutting -- transitions must never jar.
       this.drones.forEach((d, i) => {
@@ -185,8 +301,9 @@ export class Music {
           scale.root * (i === 2 ? 0.5 : 1), t + 2.4);
       });
     } else {
-      this.scale = scale;
+      this.scale = { root: scale.root, steps: this.scale.steps };
     }
+    this._applyScene();
     this._applyColour();
   }
 
@@ -222,26 +339,42 @@ export class Music {
     // what you hear; in a hall the pad and the horn have somewhere to go.
     const open = 0.35 + this.openness * 0.9;
     const close = 1 - this.openness * 0.4;
-    set(this.nodes.droneGain, (0.16 + i * 0.07) * c.droneGain * close);
-    set(this.nodes.padGain, (0.05 + i * 0.09) * open);
-    set(this.nodes.percGain, (0.02 + i * 0.16) * c.percussion * (1.15 - this.openness * 0.25));
-    set(this.nodes.textureGain, (0.035 + (1 - i) * 0.03) * c.texture * (0.7 + this.openness * 0.7));
+    const sc = this.scene;
+    // The scene decides the shape of the mix; intensity and the room decide
+    // how far it leans. Multiplying rather than replacing is what lets a
+    // scene change be a crossfade of the same six layers.
+    set(this.nodes.droneGain, (0.16 + i * 0.07) * c.droneGain * close * sc.drone);
+    set(this.nodes.padGain, (0.05 + i * 0.09) * open * sc.pad);
+    set(this.nodes.percGain, (0.02 + i * 0.16) * c.percussion * (1.15 - this.openness * 0.25) * sc.perc);
+    set(this.nodes.textureGain, (0.035 + (1 - i) * 0.03) * c.texture * (0.7 + this.openness * 0.7) * sc.texture);
     set(this.nodes.combatGain, Math.max(0, i - 0.45) * 0.26);
-    set(this.nodes.bassGain, (0.04 + i * 0.1) * (1.1 - this.openness * 0.2));
+    set(this.nodes.bassGain, (0.04 + i * 0.1) * (1.1 - this.openness * 0.2) * sc.bass);
+    set(this.nodes.snareGain, (0.02 + i * 0.09) * sc.snare);
+    // While exploring the rocky layer is something that arrives with the
+    // trouble; in the riff scenes it is the tune.
+    const leadDrive = sc.pattern === 'explore' ? Math.max(0, i - 0.35) * 1.5 : 1;
+    set(this.nodes.leadGain, 0.13 * sc.lead * leadDrive);
   }
 
   _tempo() {
-    // Slow and patient while exploring; urgent in a fight.
-    return 0.52 - this.intensity * 0.16 - (this.boss ? 0.06 : 0);
+    // The scene sets the pace; intensity only pushes on it while exploring,
+    // because the framing scenes are not reacting to anything.
+    const base = this.scene.tempo;
+    if (this.scene.pattern !== 'explore') return base;
+    return base - this.intensity * 0.16 - (this.boss ? 0.06 : 0);
   }
 
   _schedule() {
     if (!this.running) return;
     const ctx = this.engine.ctx;
     this.intensity += (this.targetIntensity - this.intensity) * 0.08;
+    this.chamber = Math.max(0, this.chamber - 0.09);
     const beat = this._tempo();
     while (this.nextNoteTime < ctx.currentTime + 0.35) {
-      this._playStep(this.step, this.nextNoteTime, beat);
+      // Swing: the off-beats land late, which is the whole difference between
+      // a march and a groove and costs one line.
+      const nudge = (this.step % 2 === 1) ? beat * this.scene.swing : 0;
+      this._playStep(this.step, this.nextNoteTime + nudge, beat);
       this.nextNoteTime += beat;
       this.step = (this.step + 1) % 32;
     }
@@ -255,7 +388,15 @@ export class Music {
   }
 
   _playStep(step, time, beat) {
-    const ctx = this.engine.ctx;
+    const pattern = this.scene.pattern;
+    if (pattern === 'slow') { this._playSlow(step % 32, time, beat); return; }
+    if (pattern === 'drive') { this._playDrive(step % 16, time, beat); return; }
+    this._playExplore(step, time, beat);
+  }
+
+  // The labyrinth's own pattern: patient, adaptive, and the one that listens
+  // to the room it is being played in.
+  _playExplore(step, time, beat) {
     const i = this.intensity;
 
     // --- deep drum: the heartbeat of the hall
@@ -292,6 +433,220 @@ export class Music {
     // --- combat tension: a rising two-note figure
     if (i > 0.5 && step % 8 === 6) {
       this._tense(time, this._note(1, 1), beat);
+    }
+
+    // --- and once things are genuinely bad, the low strings come in on the
+    // root. This is the rocky layer arriving as a consequence rather than as
+    // a style: the player hears it because they are in trouble.
+    if (i > 0.42 && (step % 8 === 0 || (i > 0.7 && step % 8 === 3))) {
+      this._riffNote(time, this._note(0, 0), beat * 2.4, 0.1 + (i - 0.42) * 0.2);
+    }
+    if (i > 0.62 && step % 4 === 2) this._snare(time, 0.5);
+  }
+
+  // --- scenes ---------------------------------------------------------------
+  // Moving between them is a crossfade and a change of pattern generator. The
+  // clock, the drones and the noise wash all keep running underneath, which
+  // is what makes every transition in the game seamless.
+  setScene(name) {
+    const scene = SCENES[name];
+    if (!scene || this.sceneName === name) return;
+    this.sceneName = name;
+    this.scene = scene;
+    this.boss = name === 'boss';
+    // Land the change on the next bar rather than mid-phrase.
+    this.step = 0;
+    this.motifStep = 0;
+    this._applyScene();
+    this.setIntensity(this.targetIntensity, this.boss);
+  }
+
+  // The scene's key colour: its own mode, or the biome's while exploring.
+  _applyScene() {
+    if (!this.running) return;
+    const ctx = this.engine.ctx;
+    const t = ctx.currentTime;
+    const steps = this.scene.mode === 'biome'
+      ? this.biomeSteps
+      : (MODES[this.scene.mode] || MODES.aeolian);
+    this.scale = { root: this.scale.root, steps };
+    if (this.nodes.leadShaper) {
+      this.nodes.leadShaper.curve = gritCurve(0.12 + this.scene.grit * 0.9);
+    }
+    if (this.nodes.leadTone) {
+      this.nodes.leadTone.frequency.linearRampToValueAtTime(
+        620 + this.scene.grit * 900, t + 1.2);
+    }
+  }
+
+  // A new chamber opens up. A brief lift -- the drone bends up a whole tone
+  // and a shimmer comes off the top of the pad -- then it settles back on its
+  // own. Two seconds of "what is in here", and never twice for the same room.
+  chamberShift(size = 1) {
+    if (!this.running) return;
+    const ctx = this.engine.ctx;
+    const t = ctx.currentTime;
+    this.chamber = 1;
+    const bend = 1 + 0.055 * Math.min(1.4, size);
+    for (const d of this.drones) {
+      const f = d.osc.frequency;
+      const base = f.value;
+      f.cancelScheduledValues(t);
+      f.setValueAtTime(base, t);
+      f.exponentialRampToValueAtTime(base * bend, t + 0.45);
+      f.exponentialRampToValueAtTime(base, t + 2.4);
+    }
+    if (this.nodes.droneFilter) {
+      const f = this.nodes.droneFilter.frequency;
+      const base = f.value;
+      f.cancelScheduledValues(t);
+      f.setValueAtTime(base, t);
+      f.linearRampToValueAtTime(base * 1.9, t + 0.5);
+      f.linearRampToValueAtTime(base, t + 2.6);
+    }
+    // A suspended fourth over the top: unresolved, which is the sound of a
+    // room you have not looked at yet.
+    this._shimmer(t + 0.02, this._note(3, 2), 2.2);
+    this._shimmer(t + 0.06, this._note(4, 2), 2.0);
+  }
+
+  _shimmer(time, freq, duration) {
+    const ctx = this.engine.ctx;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(freq * 0.997, time);
+    osc.frequency.linearRampToValueAtTime(freq, time + duration * 0.5);
+    g.gain.setValueAtTime(0.0001, time);
+    g.gain.linearRampToValueAtTime(0.075, time + 0.5);
+    g.gain.exponentialRampToValueAtTime(0.0001, time + duration);
+    osc.connect(g);
+    g.connect(this.nodes.padGain);
+    osc.start(time);
+    osc.stop(time + duration + 0.2);
+  }
+
+  // --- pattern generators ---------------------------------------------------
+  // One per scene shape. All three read the same clock and write to the same
+  // layers; what differs is what they ask for and how often.
+
+  // Slow, unmetered, no drum. Used by the menu and the hall: a chord every
+  // four bars and a single line over the top of it.
+  _playSlow(step, time, beat) {
+    const roots = [0, 5, 3, 4];
+    if (step % 16 === 0) {
+      this.chordIndex = (this.chordIndex + 1) % 4;
+      this._pad(time, roots[this.chordIndex], beat * 17);
+      this._bass(time, this._note(roots[this.chordIndex], -1), beat * 8);
+    }
+    // A rising figure rather than a wandering one: it has somewhere to go,
+    // which is the difference between sombre and merely quiet.
+    if (step % 8 === 4 && Math.random() < this.scene.melody) {
+      const rise = [0, 2, 4, 5, 4, 2][this.motifStep % 6];
+      this.motifStep++;
+      this._horn(time, this._note(roots[this.chordIndex] + rise, 1), beat * 7);
+    }
+    if (this.sceneName === 'hall' && step % 32 === 16) {
+      // A low swell under the names.
+      this._pad(time, roots[this.chordIndex] - 2, beat * 20);
+    }
+  }
+
+  // Driving and metered: the riff scenes. Bass, lead, kick and snare all read
+  // straight out of a sixteen-step table, which is why they lock together.
+  _playDrive(step, time, beat) {
+    const riff = RIFFS[this.sceneName] || RIFFS.boss;
+    const i = this.intensity;
+    if (riff.kick.includes(step)) this._kick(time, this.sceneName === 'boss' ? 1 : 0.75);
+    if (riff.snare.includes(step)) this._snare(time, this.sceneName === 'boss' ? 1 : 0.7);
+    // Hats on the off-beats carry the swing.
+    if (step % 2 === 1) this._hat(time, 0.32 + (this.sceneName === 'boss' ? 0.2 : 0));
+
+    const bassDegree = riff.bass[step];
+    if (bassDegree !== null && bassDegree !== undefined) {
+      this._bass(time, this._note(bassDegree, -1), beat * 1.8);
+    }
+    const leadDegree = riff.lead[step];
+    if (leadDegree !== null && leadDegree !== undefined && Math.random() < 0.92) {
+      this._riffNote(time, this._note(leadDegree, 1), beat * 1.7,
+        this.sceneName === 'boss' ? 0.24 : 0.17);
+    }
+    if (step % 16 === 0) {
+      this.chordIndex = (this.chordIndex + 1) % 4;
+      this._pad(time, [0, 5, 3, 4][this.chordIndex], beat * 15);
+    }
+    // The boss keeps escalating: an extra octave over the top as it goes on.
+    if (this.sceneName === 'boss' && i > 0.85 && step % 16 === 8) {
+      this._riffNote(time, this._note(0, 2), beat * 6, 0.14);
+    }
+  }
+
+  // --- voices added for the riff scenes -------------------------------------
+  _snare(time, gainScale) {
+    const ctx = this.engine.ctx;
+    const src = ctx.createBufferSource();
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 0.22, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 3.2);
+    }
+    src.buffer = buf;
+    const f = ctx.createBiquadFilter();
+    f.type = 'highpass';
+    f.frequency.value = 1300;
+    const g = ctx.createGain();
+    g.gain.value = 0.6 * gainScale;
+    // A tuned body under the noise, or it reads as a hiss rather than a drum.
+    const body = ctx.createOscillator();
+    const bg = ctx.createGain();
+    body.type = 'triangle';
+    body.frequency.setValueAtTime(210, time);
+    body.frequency.exponentialRampToValueAtTime(150, time + 0.09);
+    bg.gain.setValueAtTime(0.0001, time);
+    bg.gain.exponentialRampToValueAtTime(0.34 * gainScale, time + 0.004);
+    bg.gain.exponentialRampToValueAtTime(0.0001, time + 0.13);
+    src.connect(f); f.connect(g); g.connect(this.nodes.snareGain);
+    body.connect(bg); bg.connect(this.nodes.snareGain);
+    src.start(time);
+    body.start(time);
+    body.stop(time + 0.2);
+  }
+
+  _hat(time, gainScale) {
+    const ctx = this.engine.ctx;
+    const src = ctx.createBufferSource();
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 0.06, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 5);
+    }
+    src.buffer = buf;
+    const f = ctx.createBiquadFilter();
+    f.type = 'highpass';
+    f.frequency.value = 6500;
+    const g = ctx.createGain();
+    g.gain.value = 0.28 * gainScale;
+    src.connect(f); f.connect(g); g.connect(this.nodes.snareGain);
+    src.start(time);
+  }
+
+  // The rocky voice: two saws a few cents apart into the soft clipper. The
+  // detune is what makes it a string section rather than a synth lead.
+  _riffNote(time, freq, duration, peak) {
+    const ctx = this.engine.ctx;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, time);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.002, peak), time + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, time + duration);
+    g.connect(this.nodes.leadShaper);
+    for (const cents of [-7, 7]) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.value = freq;
+      osc.detune.value = cents;
+      osc.connect(g);
+      osc.start(time);
+      osc.stop(time + duration + 0.05);
     }
   }
 

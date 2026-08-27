@@ -6,8 +6,9 @@ const STREAK_CAP = 4.0;
 function emptyLevelScore() {
   return {
     combat: 0, streak: 0, time: 0, clear: 0,
-    flawless: 0, secrets: 0, boss: 0, health: 0,
+    flawless: 0, secrets: 0, boss: 0, health: 0, penalty: 0,
     kills: 0, elites: 0, bestStreak: 0, flawlessRooms: 0, secretsFound: 0,
+    penalties: 0, penaltyLabel: '',
   };
 }
 
@@ -43,6 +44,14 @@ export class ScoreTracker {
       this.streakTimer -= dt;
       if (this.streakTimer <= 0) { this.streak = 0; this.multiplier = 1; }
     }
+  }
+
+  // What this depth is worth so far, before it is banked on the stair. The
+  // altars charge against this, so it has to be readable mid-level.
+  get levelSubtotal() {
+    return Math.round(
+      this.level.combat + this.level.streak + this.level.flawless
+      + this.level.secrets + this.level.boss + this.level.penalty);
   }
 
   get streakFraction() {
@@ -90,6 +99,17 @@ export class ScoreTracker {
     return p;
   }
 
+  // Points taken away for something the player chose to do. Never scaled by
+  // the score multiplier: a relic that makes deeds worth more must not also
+  // make a killing worth less to have done.
+  addPenalty(points, label) {
+    const p = Math.abs(points);
+    this.level.penalty -= p;
+    this.level.penalties++;
+    if (label) this.level.penaltyLabel = label;
+    return p;
+  }
+
   addBonus(points, mods = {}) {
     const p = points * (mods.scoreMult || 1);
     this.level.combat += p;
@@ -109,7 +129,8 @@ export class ScoreTracker {
 
     const subtotal = Math.round(
       this.level.combat + this.level.streak + this.level.time + this.level.clear +
-      this.level.flawless + this.level.secrets + this.level.boss + this.level.health);
+      this.level.flawless + this.level.secrets + this.level.boss + this.level.health
+      + this.level.penalty);
     this.total += subtotal;
 
     const breakdown = {
@@ -122,6 +143,8 @@ export class ScoreTracker {
         { label: 'Secrets', value: Math.round(this.level.secrets), detail: `${this.level.secretsFound} found` },
         { label: 'Depth Cleared', value: Math.round(this.level.clear), detail: '' },
         { label: 'Vigour Remaining', value: this.level.health, detail: `${Math.round(hp)} / ${Math.round(maxHp)}` },
+        { label: 'Blood Debt', value: Math.round(this.level.penalty),
+          detail: this.level.penaltyLabel || `${this.level.penalties} answered for` },
       ],
       subtotal,
       total: this.total,

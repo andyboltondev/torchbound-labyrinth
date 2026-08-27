@@ -193,6 +193,16 @@ export class TouchControls {
     this.input.setStick(dx / (m || 1), dy / (m || 1));
   }
 
+  // The torch button says what the torch is doing, not what pressing it does:
+  // the player can see the flame in their own hand either way, and a button
+  // that changes its own label is read as a state twice as often as a verb.
+  setTorch(lit) {
+    const btn = this.root.querySelector('.tbtn.torch');
+    if (!btn) return;
+    btn.classList.toggle('out', !lit);
+    btn.textContent = lit ? 'TORCH' : 'DARK';
+  }
+
   _bindButtons() {
     for (const btn of this.root.querySelectorAll('.tbtn')) {
       const action = btn.dataset.action;

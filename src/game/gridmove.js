@@ -75,6 +75,61 @@ export function chooseGridDirection(world, tileX, tileY, want, heading, isBlocke
   return best;
 }
 
+// Doorway assist.
+//
+// The labyrinth is full of one-tile openings, and tile movement means you are
+// either lined up with one or you are not. Walking a wall and pressing through
+// a door you are standing one tile short of used to do nothing at all, which
+// reads as the controls ignoring you rather than as a wall being in the way.
+//
+// So when the pressed direction is masonry, look for the door: if the tile one
+// step to either side has open ground *through* the wall behind it, take the
+// sidestep. The next frame the way ahead is clear and the player walks through
+// under their own steam, having pressed one direction the whole time.
+//
+// The tolerance is deliberately exactly one tile. Two would let the assist
+// walk you round pillars and along walls hunting for gaps you never saw, which
+// is a different feature and a worse one.
+export function doorwayStep(world, tileX, tileY, want, heading, isBlocked) {
+  const m = Math.hypot(want.x, want.y);
+  if (m < 0.001) return null;
+  const wx = want.x / m, wy = want.y / m;
+
+  // Only cardinals: a blocked diagonal already has two orthogonal fallbacks,
+  // and the ordinary chooser will have taken one of them.
+  let best = null, bestScore = -Infinity;
+  for (const dir of GRID_DIRS) {
+    if (dir.x !== 0 && dir.y !== 0) continue;
+    const dot = dir.x * wx + dir.y * wy;
+    if (dot < 0.5) continue;
+
+    // The way ahead has to be genuinely solid. A tile held by another creature
+    // is not a door to be found -- shoving past bodies is a separate feature.
+    const ax = tileX + dir.x, ay = tileY + dir.y;
+    if (tileOpen(world, ax, ay)) continue;
+
+    for (const side of [{ x: -dir.y, y: dir.x }, { x: dir.y, y: -dir.x }]) {
+      const sx = tileX + side.x, sy = tileY + side.y;
+      if (!tileOpen(world, sx, sy)) continue;
+      if (isBlocked && isBlocked(sx, sy)) continue;
+      // ...and the opening has to lead somewhere, not just be floor beside us.
+      if (!tileOpen(world, sx + dir.x, sy + dir.y)) continue;
+      // The wall must genuinely continue the other way. Without this test a
+      // lone pillar reads as a doorway with an opening on both sides, and
+      // pressing into it would shunt the player round it -- which is routing
+      // around obstacles, not lining up with a door, and is not wanted.
+      if (tileOpen(world, tileX - side.x + dir.x, tileY - side.y + dir.y)) continue;
+
+      // Prefer the side the stick is already leaning towards, then the side we
+      // are already travelling, so the choice is stable frame to frame.
+      let score = dot + (side.x * wx + side.y * wy) * 0.5;
+      if (heading && side.x === heading.x && side.y === heading.y) score += 0.25;
+      if (score > bestScore) { bestScore = score; best = side; }
+    }
+  }
+  return best;
+}
+
 export class GridMover {
   constructor(entity) {
     this.ent = entity;
@@ -89,6 +144,7 @@ export class GridMover {
     this.speedNow = 0;
     this.carry = 0;         // leftover time owed to the next step
     this.arrived = false;   // true on the frame a tile is reached
+    this.assisted = false;  // true when the last step was a doorway sidestep
   }
 
   placeAt(tileX, tileY) {
@@ -128,6 +184,7 @@ export class GridMover {
   update(dt, world, desired, opts = {}) {
     const startX = this.ent.x, startY = this.ent.y;
     this.arrived = false;
+    this.assisted = false;
     let remaining = dt + this.carry;
     this.carry = 0;
 
@@ -192,8 +249,14 @@ export class GridMover {
       if (dot < -0.3 && canHold()) { this.slideSteps--; return this.heading; }
     }
 
-    const dir = chooseGridDirection(world, this.tileX, this.tileY, desired,
+    let dir = chooseGridDirection(world, this.tileX, this.tileY, desired,
       this.heading, opts.isBlocked, opts.strict);
+    // Nothing anywhere near the pressed direction is open. Before giving up,
+    // check whether a doorway is sitting one tile off the line.
+    if (!dir && opts.doorAssist) {
+      dir = doorwayStep(world, this.tileX, this.tileY, desired, this.heading, opts.isBlocked);
+      if (dir) this.assisted = true;
+    }
     if (dir && opts.ice) this.slideSteps = ICE_SLIDE_TILES;
     return dir;
   }

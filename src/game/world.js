@@ -10,7 +10,10 @@ import { Particles, burstSparks, burstBlood, burstStone, ring, footDust } from '
 import { Player } from './player.js';
 import { Enemy } from './enemies.js';
 import { Boss } from './boss.js';
-import { ENEMIES, enemyPoolFor } from './enemyData.js';
+import { ENEMIES, enemyPoolFor, DEFAULT_BLOOD, HEARING_REACH } from './enemyData.js';
+import { SoundField } from './soundfield.js';
+import { buildOffers } from './altars.js';
+import { Gore } from './gore.js';
 import { hasLineOfSight, tileBlocks } from './physics.js';
 import { probeAcoustics, spaceProfile, blendSpace, DEFAULT_SPACE } from '../audio/space.js';
 import { clamp } from '../core/util.js';
@@ -18,6 +21,26 @@ import { RNG } from '../core/rng.js';
 
 const FLOW_INTERVAL = 0.14;
 const FLOW_RADIUS = 30;
+
+// How far a torchbearer sees with the torch out. Enough not to walk into the
+// walls, nothing like enough to see what is coming.
+const DOUSED_RADIUS = 2.4;
+
+// How much better the ears work in the dark. Deliberately slight: this is
+// compensation for going blind, not a second way of seeing.
+const DOUSED_HEARING = 1.3;
+
+// What each size of fire is called when the player is standing over a cold one.
+const FIRE_NAMES = {
+  sconce: 'sconce', brazier: 'brazier', firepit: 'firepit', campfire: 'campfire',
+};
+
+// One colour per kind of answer, used by the chart arrow, the toast and the
+// mark on the map, so the player learns to read the colour rather than the
+// words. Keys use their own colour instead.
+const HINT_COLOUR = {
+  exit: '#6fce87', secret: '#c46ad8', treasure: '#e8b45c', health: '#e0607a',
+};
 
 // Not everything in the labyrinth bleeds. The spark colour a hit throws is
 // the visual half of the same material lookup the mixer uses for the sound.
@@ -39,6 +62,8 @@ export class World {
     this.vis = new Visibility(level.grid);
     this.torch = new Torch();
     this.particles = new Particles();
+    // Blood, bodies and the prints they get tracked around on.
+    this.gore = new Gore(level.grid);
 
     this.enemies = [];
     this.projectiles = [];
@@ -62,6 +87,14 @@ export class World {
     }
     this.revealedProps = new Set();
     this.sealBlocks = new Set();
+    // Places the player has been told about but not yet reached. The chart
+    // puts an arrow on its rim for each one; whatever adds a hint owns
+    // clearing it, and reaching the spot resolves it automatically.
+    this.hints = [];
+    // Rooms the player has actually walked into, so a chamber only announces
+    // itself the first time.
+    this.enteredRooms = new Set();
+    this.currentRoom = null;
     this.occupied = new Map();   // tile index -> enemy id, refreshed each frame
 
     this.flow = null;
@@ -72,6 +105,24 @@ export class World {
     this.currentHazard = HAZARDS.clear;
     this.currentZone = 0;
     this.torchRadius = 7;
+    this.revealRadius = 0;
+    // A torch can be put out. It is the only thing the player carries that
+    // the labyrinth can see from a distance, so dousing it is a real choice:
+    // you go nearly blind, and so does most of what is hunting you.
+    this.torchLit = true;
+    this.torchToggleCooldown = 0;
+    // What the player can hear from where they are standing, worked out along
+    // open ground. Rebuilt a few times a second; every creature that makes a
+    // noise looks itself up in it rather than working it out for itself.
+    this.hearing = new SoundField(level.grid);
+    this.hearingTimer = 0;
+    this.hearingRange = 12;
+    // A second field, built on demand when something loud happens, so
+    // creatures can decide whether they heard it. Loud things are rare.
+    this.noiseField = new SoundField(level.grid);
+    // What the player has heard recently and roughly where from, for the
+    // sonar relic and anything else that wants to draw it.
+    this.echoes = [];
     this.revealRadius = 0;
     this.lowHealthPulse = 0;
     this.secretsFound = 0;
@@ -202,10 +253,13 @@ export class World {
     this.time += dt;
     if (!this.finished && !this.playerDead) this.elapsed += dt;
 
+    this.torchToggleCooldown = Math.max(0, this.torchToggleCooldown - dt);
     this.updateHazard();
+    this.updateHearing(dt);
     this.updateAcoustics(dt);
     this.torch.update(dt, this.hazardMods);
     this.player.torchFlicker = this.torch.flicker;
+    this.player.torchLit = this.torchLit;
 
     this._refreshOccupancy();
     this.player.update(dt, this, intent);
@@ -219,9 +273,12 @@ export class World {
     if (this.boss) this.boss.update(dt, this);
     this.updateProjectiles(dt);
     this.particles.update(dt);
+    this.gore.update(dt);
     this.updateEncounters(dt);
     this.updatePickups();
     this.updateSecretAwareness();
+    this.updateHints(dt);
+    this.updateCaptives(dt);
     this.updateInteractTarget();
     this.updateAmbience(dt);
     this.run.score.update(dt, this.run.mods.streakWindow);
@@ -229,7 +286,7 @@ export class World {
     const frac = this.run.hp / Math.max(1, this.run.maxHp);
     this.lowHealthPulse = frac < 0.3 ? (0.3 - frac) / 0.3 : 0;
 
-    // Retire the dead once their effects have played out.
+      // Retire the dead once their effects have played out.
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       if (this.enemies[i].dead) this.enemies.splice(i, 1);
     }
@@ -258,10 +315,38 @@ export class World {
 
   // One footfall per tile, which is exactly the rhythm grid movement wants.
   onPlayerEnterTile(x, y) {
+    this.gore.tread(this.player, x, y);
+    this.checkChamber(x, y);
     const hz = this.hazardMods;
     const colour = hz.footstepSplash ? '#8fb4c4' : hz.footprints ? '#4a3722' : '#6f6a5e';
     footDust(this.particles, x + 0.5, y + 0.5, colour);
     this.playSfx('step', { surface: this.surfaceAt() });
+  }
+
+  // Anything that walks tracks blood the same way the player does. This is
+  // also the one place that knows an enemy has taken a step, which is what
+  // the noise it makes will be hung off.
+  onEnemyEnterTile(enemy, x, y) {
+    this.gore.tread(enemy, x, y);
+  }
+
+  // Walking into a room nobody has been into yet. Announced once per room,
+  // so the score can make something of the moment without doing it every
+  // time the player crosses the same threshold.
+  checkChamber(x, y) {
+    let found = null;
+    for (const r of this.level.rooms) {
+      if (x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1) { found = r; break; }
+    }
+    if (!found || found === this.currentRoom) {
+      this.currentRoom = found;
+      return;
+    }
+    this.currentRoom = found;
+    if (this.enteredRooms.has(found.id)) return;
+    this.enteredRooms.add(found.id);
+    const area = (found.x1 - found.x0 + 1) * (found.y1 - found.y0 + 1);
+    this.emit('chamber', { room: found, area });
   }
 
   // Knockback is presentation only: shoving a grid mover off its lane would
@@ -286,8 +371,83 @@ export class World {
     const mods = this.run.mods;
     this.torch.baseRadius = 7.5 * mods.torchRadius;
     this.torch.instability = mods.torchInstability;
-    this.torchRadius = this.torch.effectiveRadius(this.hazardMods);
+    this.torchRadius = this.torchLit
+      ? this.torch.effectiveRadius(this.hazardMods)
+      : DOUSED_RADIUS * (0.94 + this.torch.flicker * 0.06);
     this.revealRadius = this.hazardMods.revealMovers || 0;
+  }
+
+  // --- hearing ------------------------------------------------------------
+  // Sound is the half of the labyrinth that works in the dark, so the field
+  // it travels through is a first-class thing rather than a mixer trick. See
+  // soundfield.js for how it is worked out.
+  updateHearing(dt) {
+    this.hearingTimer -= dt;
+    for (let i = this.echoes.length - 1; i >= 0; i--) {
+      this.echoes[i].life -= dt;
+      if (this.echoes[i].life <= 0) this.echoes.splice(i, 1);
+    }
+    if (this.hearingTimer > 0) return;
+    this.hearingTimer = 0.22;
+    // Hearing reaches further than the torch, and further again in the dark.
+    this.hearingRange = this.torch.baseRadius * HEARING_REACH * this.hearingScale;
+    this.hearing.build(this.player.x, this.player.y, this.hearingRange,
+      (x, y) => this.soundBlocked(x, y));
+  }
+
+  soundBlocked(x, y) {
+    if (this.sealBlocks.has(this.grid.idx(x, y))) return true;
+    const g = this.gateAt(x, y);
+    return !!(g && !g.open);
+  }
+
+  // Plays a sound only if it could actually reach the player, at the volume
+  // and dullness the journey left it with, and from the direction it arrived
+  // rather than from wherever the thing making it happens to be standing.
+  hearSfx(name, x, y, loudness = 1, opts = {}) {
+    const heard = this.hearing.hear(x, y, loudness);
+    if (!heard || heard.volume < 0.015) return null;
+    // Placed at the mouth of whatever it came round, not through the wall.
+    const apparent = Math.min(heard.distance, 9);
+    this.emit('sfx', {
+      name,
+      x: this.player.x + heard.dirX * apparent,
+      y: this.player.y + heard.dirY * apparent,
+      heard,
+      ...opts,
+    });
+    if (this.run.mods.sonar) {
+      this.echoes.push({
+        x: this.player.x + heard.dirX * apparent,
+        y: this.player.y + heard.dirY * apparent,
+        trueX: x, trueY: y,
+        strength: heard.volume, corners: heard.corners,
+        life: 1.6, maxLife: 1.6, colour: opts.colour || '#8fd7ff',
+      });
+      if (this.echoes.length > 24) this.echoes.shift();
+    }
+    return heard;
+  }
+
+  // Something loud happened at a place that is not the player. Everything
+  // that could have heard it goes to look, which is what makes a bolt fired
+  // down a side passage a tool rather than a wasted bolt.
+  makeNoise(x, y, loudness = 1, opts = {}) {
+    // Roughly as far as the bolt that made it flew, before the walls and the
+    // corners take their cut. A distraction that only carried across a room
+    // would never be worth spending a bolt on.
+    const range = 12 * loudness;
+    this.noiseField.build(x, y, range, (gx, gy) => this.soundBlocked(gx, gy));
+    let drawn = 0;
+    for (const e of this.enemies) {
+      if (e.dead || e.sealed || e.dormant) continue;
+      if (!e.investigable) continue;
+      const heard = this.noiseField.hear(e.x, e.y, 1);
+      if (!heard || heard.volume < 0.07) continue;
+      if (e.hearNoise(this, x, y, heard)) drawn++;
+    }
+    if (opts.playerHears !== false) this.hearSfx(opts.sfx || 'clatterFar', x, y, loudness);
+    return drawn;
   }
 
   // --- acoustics ----------------------------------------------------------
@@ -375,12 +535,16 @@ export class World {
   refreshVisibility(dt) {
     const sources = [{
       x: this.player.x, y: this.player.y,
-      radius: this.torchRadius, intensity: 1,
+      radius: this.torchRadius, intensity: this.torchLit ? 1 : 0.5,
     }];
-    // Wall sconces contribute genuine light, but only nearby ones.
+    // Fires contribute genuine light, but only nearby ones. A doused
+    // torchbearer can still see by somebody else's flame, which is what makes
+    // walking a lit hall in the dark a thing worth doing.
     for (const s of this.level.sconces) {
-      if (Math.abs(s.x - this.player.x) + Math.abs(s.y - this.player.y) > 14) continue;
-      sources.push({ x: s.x, y: s.y, radius: 3.6, intensity: 0.6 });
+      if (s.lit === false) continue;
+      const reach = (s.radius || 3.6) + 7;
+      if (Math.abs(s.x - this.player.x) + Math.abs(s.y - this.player.y) > reach) continue;
+      sources.push({ x: s.x, y: s.y, radius: s.radius || 3.6, intensity: s.intensity || 0.6 });
     }
     const decay = 0.05 * this.run.mods.memoryDecay * (this.hazardMods.memoryDecay || 1);
     this.vis.update(sources, dt, decay);
@@ -477,6 +641,15 @@ export class World {
   onProjectileHitWall(p) {
     burstSparks(this.particles, p.x, p.y, p.friendly ? '#c9b48b' : (p.colour || '#cfc6b2'), 5, 2);
     this.playSfx(p.friendly ? 'arrowWall' : 'shotWall', { x: p.x, y: p.y });
+    // A bolt hitting stone is a noise somewhere the player is not, which is
+    // the one deliberate distraction the player owns.
+    if (p.friendly) {
+      const drawn = this.makeNoise(p.x, p.y, 1.15, { playerHears: false });
+      if (drawn > 0) {
+        ring(this.particles, p.x, p.y, '#8fd7ff', 14, 1.1, 0.5);
+        this.emit('distraction', { x: p.x, y: p.y, count: drawn });
+      }
+    }
   }
 
   // --- player combat ------------------------------------------------------
@@ -518,6 +691,8 @@ export class World {
       const m = Math.hypot(dx, dy) || 1;
       this.knock(e, dx, dy, 0.3);
       burstBlood(this.particles, e.x, e.y, dx / m, dy / m, IMPACT_SPARK[e.def.material]);
+      this.gore.splat(e.x, e.y, e.def.blood || DEFAULT_BLOOD,
+        Math.min(1.4, 0.35 + damage / 40), dx / m, dy / m);
       this.particles.text(e.x, e.y, Math.round(damage), '#ffe0b0', 13);
       material = e.def.material || 'flesh';
       hitAt = { x: e.x, y: e.y };
@@ -530,6 +705,18 @@ export class World {
       this.particles.text(this.boss.x, this.boss.y, Math.round(damage), '#ffe0b0', 14);
       material = this.boss.def.material || 'armour';
       hitAt = { x: this.boss.x, y: this.boss.y };
+    }
+
+    // A captive is in reach of the same swing as anything else. Nothing stops
+    // it and nothing warns you, because a choice you are protected from making
+    // is not a choice.
+    for (const prop of this.level.props) {
+      if (prop.type !== 'prisoner' || prop.mood === 'dead' || prop.freed) continue;
+      if (!player.hitsWithSword(prop.x, prop.y, 0.3)) continue;
+      this.murderCaptive(prop);
+      hitSomething = true;
+      material = 'flesh';
+      hitAt = { x: prop.x, y: prop.y };
     }
 
     // Cracked walls break to the same swing -- no separate verb to learn.
@@ -584,6 +771,8 @@ export class World {
     enemy.takeDamage(damage, this, 'bolt');
     burstBlood(this.particles, projectile.x, projectile.y, projectile.vx, projectile.vy,
       IMPACT_SPARK[enemy.def.material]);
+    this.gore.splat(projectile.x, projectile.y, enemy.def.blood || DEFAULT_BLOOD, 0.7,
+      projectile.vx * 0.1, projectile.vy * 0.1);
     this.particles.text(enemy.x, enemy.y, Math.round(damage), '#ffe0b0', 13);
     this.playSfx('arrowHit', { x: enemy.x, y: enemy.y, material: enemy.def.material || 'flesh' });
     // Reclaimer: a killing bolt sometimes comes home.
@@ -655,6 +844,8 @@ export class World {
     player.onDamaged(dealt);
     this.particles.text(player.x, player.y, '-' + dealt, '#ff8a72', 15, 1.1);
     burstBlood(this.particles, player.x, player.y, -player.faceX, -player.faceY, '#a02020');
+    this.gore.splat(player.x, player.y, '#8e2320', Math.min(1.4, 0.4 + dealt / 26),
+      -player.faceX, -player.faceY);
     this.shake(6 + dealt * 0.2);
     this.playSfx('playerHurt');
     this.emit('health', { hp: this.run.hp, maxHp: this.run.maxHp });
@@ -692,6 +883,16 @@ export class World {
     }
     burstBlood(this.particles, enemy.x, enemy.y, 0, -1);
     burstSparks(this.particles, enemy.x, enemy.y, enemy.def.palette.eye, 6, 2.4);
+    // The body stays where it fell for the rest of the depth.
+    const blood = enemy.def.blood || DEFAULT_BLOOD;
+    this.gore.pool(enemy.x, enemy.y, blood, 0.8 + (enemy.elite ? 0.5 : 0));
+    this.gore.splat(enemy.x, enemy.y, blood, 1.3, this.player.faceX, this.player.faceY);
+    this.gore.corpse({
+      defId: enemy.def.id, x: enemy.x, y: enemy.y,
+      faceX: enemy.faceX, faceY: enemy.faceY,
+      elite: enemy.elite, scale: enemy.scale, seed: enemy.seed,
+      palette: enemy.def.palette, blood,
+    });
     this.playSfx(enemy.elite ? 'eliteDeath' : 'enemyDeath',
       { x: enemy.x, y: enemy.y, material: enemy.def.material || 'flesh' });
     this.run.discover(enemy.def.id);
@@ -722,6 +923,13 @@ export class World {
     }
     this.emit('kill', { enemy, points: result.points, streak: result.streak });
     this.checkEncounterProgress();
+  }
+
+  // Something went to look at a noise. Presentation only -- the decision was
+  // taken in the creature -- but the player has to be able to tell it worked.
+  onEnemyHeardNoise(enemy, x, y, heard) {
+    this.particles.text(enemy.x, enemy.y - 0.9, '?', '#8fd7ff', 15, 1.1);
+    this.playSfx('alert', { x: enemy.x, y: enemy.y, key: 'heard' + enemy.id, peak: 0.4 });
   }
 
   onEnemyAlerted(enemy) {
@@ -786,6 +994,114 @@ export class World {
     }
   }
 
+  // --- hints ---------------------------------------------------------------
+  //
+  // Anything that tells the player where something is goes through here: a
+  // map scrap, a prisoner who will talk, an altar taking payment for the
+  // answer. One place, so a hint always looks and behaves the same however it
+  // was earned, and so nothing can point at something already found.
+  hintTarget(kind) {
+    const level = this.level;
+    if (kind === 'exit') {
+      return { x: level.stairs.x + 0.5, y: level.stairs.y + 0.5, colour: HINT_COLOUR.exit, label: 'the stairs down' };
+    }
+    if (kind === 'key') {
+      // The next key they will need, which is the one for the next gate on
+      // the route -- not whichever happens to be nearest.
+      for (const gate of level.gates) {
+        if (gate.open || this.run.keys.has(gate.colourIndex)) continue;
+        const key = level.keys.find((k) => k.colourIndex === gate.colourIndex && !k.taken);
+        if (!key) continue;
+        const col = keyColour(key.colourIndex);
+        if (key.holder === 'enemy') {
+          const carrier = this.enemies.find((e) => e.carriesKey === key.colourIndex && !e.dead);
+          if (!carrier) continue;
+          return { x: carrier.x, y: carrier.y, colour: col.glow, follow: carrier,
+            label: 'what carries the ' + col.name + ' Key' };
+        }
+        return { x: key.x + 0.5, y: key.y + 0.5, colour: col.glow, label: 'the ' + col.name + ' Key' };
+      }
+      return null;
+    }
+    if (kind === 'secret') {
+      const s = level.secrets.find((x) => !x.broken && !x.discovered && !x.hiddenUntil);
+      if (!s) return null;
+      return { x: s.x + 0.5, y: s.y + 0.5, colour: HINT_COLOUR.secret, label: 'a hollow wall', secret: s };
+    }
+    if (kind === 'treasure') {
+      const prop = level.props.find((x) => !x.consumed && !x.opened
+        && (x.type === 'chest' || x.type === 'cursedChest' || x.type === 'treasure'));
+      if (!prop) return null;
+      return { x: prop.x, y: prop.y, colour: HINT_COLOUR.treasure, label: 'something worth carrying' };
+    }
+    if (kind === 'health') {
+      const prop = level.props.find((x) => !x.consumed && !x.used
+        && (x.type === 'potion' || x.type === 'shrine' || x.type === 'shrineSmall'));
+      if (!prop) return null;
+      return { x: prop.x, y: prop.y, colour: HINT_COLOUR.health, label: 'something to drink' };
+    }
+    return null;
+  }
+
+  // Is there already an unresolved hint pointing at whatever this kind would
+  // name? Used to keep an altar from selling an answer the player has.
+  alreadyHinted(kind) {
+    const t = this.hintTarget(kind);
+    if (!t) return false;
+    return this.hints.some((h) => !h.resolved && Math.hypot(h.x - t.x, h.y - t.y) < 0.6);
+  }
+
+  // Adds the hint and marks the spot on the chart. Returns what it revealed,
+  // or null when there was nothing left of that kind to point at.
+  revealHint(kind, source) {
+    let target = this.hintTarget(kind);
+    let gave = kind;
+    // Nothing of that kind left. Fall back rather than wasting the moment --
+    // being told nothing is a worse outcome than being told something else.
+    // The hint reports what it actually points at, not what was asked for.
+    if (!target) {
+      for (const alt of ['exit', 'key', 'secret', 'treasure', 'health']) {
+        if (alt === kind) continue;
+        target = this.hintTarget(alt);
+        if (target) { gave = alt; break; }
+      }
+    }
+    if (!target) return null;
+    if (this.hints.some((h) => !h.resolved && Math.hypot(h.x - target.x, h.y - target.y) < 0.6)) {
+      return null;
+    }
+    // Put the spot itself on the chart without lighting the road to it: the
+    // player is being told where, not how.
+    const gx = Math.floor(target.x), gy = Math.floor(target.y);
+    if (this.grid.inBounds(gx, gy)) {
+      const i = this.grid.idx(gx, gy);
+      this.vis.seen[i] = 1;
+      this.vis.memory[i] = Math.max(this.vis.memory[i], 0.55);
+    }
+    if (target.secret) target.secret.discovered = true;
+    const hint = { ...target, kind: gave, asked: kind, source: source || null, resolved: false };
+    this.hints.push(hint);
+    this.emit('hint', { hint });
+    return hint;
+  }
+
+  // A hint stops pointing once the player has been to the spot, or once the
+  // thing it named has been taken.
+  updateHints(dt) {
+    const p = this.player;
+    for (const h of this.hints) {
+      if (h.resolved) continue;
+      if (h.follow) {
+        if (h.follow.dead) { h.resolved = true; continue; }
+        h.x = h.follow.x; h.y = h.follow.y;
+      }
+      if (Math.hypot(h.x - p.x, h.y - p.y) < 2.2) {
+        h.resolved = true;
+        this.emit('hintReached', { hint: h });
+      }
+    }
+  }
+
   // --- secrets ------------------------------------------------------------
   updateSecretAwareness() {
     const p = this.player;
@@ -832,6 +1148,316 @@ export class World {
     this.actionableSecret = null;
     this.flow = null;
     this.emit('secretBroken', { secret });
+  }
+
+  // --- captives -------------------------------------------------------------
+  //
+  // The one part of the labyrinth that can be wronged. Everything else in it
+  // is trying to kill you; these are people, and what the player does about
+  // that is the only genuinely moral choice in the game -- so it has to cost
+  // something, and the exception has to be real.
+  updateCaptives(dt) {
+    for (const prop of this.level.props) {
+      if (prop.type !== 'prisoner' || prop.mood !== 'raving' || prop.freed) continue;
+      prop.screamTimer = (prop.screamTimer === undefined ? 3 + prop.seed * 6 : prop.screamTimer) - dt;
+      if (prop.screamTimer > 0) continue;
+      prop.screamTimer = 9 + Math.random() * 12;
+      if (Math.hypot(prop.x - this.player.x, prop.y - this.player.y) > 22) continue;
+      // A scream is a noise like any other, which means it brings company --
+      // and that is the whole reason a raving captive is a problem and not
+      // just a sad thing to walk past.
+      this.makeNoise(prop.x, prop.y, 1.6, { sfx: 'scream' });
+      this.emit('scream', { prop });
+    }
+  }
+
+  captiveLabel(prop) {
+    if (prop.mood === 'dead') {
+      return prop.searched ? { label: 'Nothing else on them', enabled: false }
+        : { label: 'Search the body', enabled: true };
+    }
+    if (prop.freed) return { label: 'They have said all they will', enabled: false };
+    if (prop.mood === 'raving') {
+      return { label: 'It does not hear you', hint: 'Its screaming carries', enabled: false };
+    }
+    if (prop.mood === 'begging') {
+      return prop.spoken
+        ? { label: 'End it', hint: 'They asked', enabled: true }
+        : { label: 'Listen', enabled: true };
+    }
+    return { label: prop.spoken ? 'Cut them down' : 'Speak to them', enabled: true };
+  }
+
+  useCaptive(prop) {
+    if (prop.mood === 'dead') {
+      prop.searched = true;
+      this.playSfx('chest', { x: prop.x, y: prop.y });
+      if (prop.carries) {
+        this.grantFrom(prop, prop.carries);
+        prop.carries = null;
+      } else {
+        this.particles.text(prop.x, prop.y - 1, 'nothing', '#8fa0b8', 12, 1.2);
+      }
+      this.emit('captive', { prop, action: 'searched' });
+      return true;
+    }
+    if (prop.mood === 'begging' && prop.spoken) return this.releaseCaptive(prop, true);
+    if (prop.mood === 'afraid' && prop.spoken) return this.releaseCaptive(prop, false);
+
+    prop.spoken = true;
+    this.playSfx('shrineBless', { x: prop.x, y: prop.y });
+    if (prop.mood === 'begging') {
+      this.particles.text(prop.x, prop.y - 1, 'Please.', '#c9b9d8', 13, 2.4);
+      this.emit('captive', { prop, action: 'begged' });
+      return true;
+    }
+    // They will talk. What they know is worth more than what they carry.
+    const hint = prop.knows === 'nothing' ? null : this.revealHint(prop.knows, 'captive');
+    if (hint) {
+      this.particles.text(prop.x, prop.y - 1, 'THEY KNOW', hint.colour, 13, 2.0);
+    } else {
+      this.particles.text(prop.x, prop.y - 1, 'I have been here too long.', '#c9b9d8', 12, 2.4);
+    }
+    this.emit('captive', { prop, action: 'spoke', hint });
+    return true;
+  }
+
+  // Cutting a captive loose. Merciful when they asked for it, which is the
+  // one case that pays instead of costing.
+  releaseCaptive(prop, mercy) {
+    prop.freed = true;
+    prop.mood = 'dead';
+    prop.searched = !prop.carries;
+    this.gore.pool(prop.x, prop.y, '#7a1f1c', 0.7);
+    if (mercy) {
+      this.playSfx('shrineHeal', { x: prop.x, y: prop.y });
+      const pts = this.run.score.addBonus(260 + this.level.depth * 30, this.run.mods);
+      this.particles.text(prop.x, prop.y - 1, 'MERCY  +' + Math.round(pts), '#8fb7ff', 14, 2.2);
+      // They had been saving it for whoever was willing.
+      const hint = this.revealHint(prop.knows === 'nothing' ? 'exit' : prop.knows, 'captive');
+      if (hint) this.particles.text(prop.x, prop.y - 1.7, 'THEY KNEW', hint.colour, 12, 2.0);
+      if (prop.carries) { this.grantFrom(prop, prop.carries); prop.carries = null; }
+    } else {
+      this.playSfx('gateUnlock', { x: prop.x, y: prop.y });
+      const pts = this.run.score.addBonus(120, this.run.mods);
+      this.particles.text(prop.x, prop.y - 1, 'FREED  +' + Math.round(pts), '#6fce87', 13, 1.8);
+    }
+    this.emit('captive', { prop, action: mercy ? 'mercy' : 'freed' });
+    return true;
+  }
+
+  // Killing one that did not ask. The labyrinth does not stop you; it simply
+  // takes it out of the tally, and it takes rather a lot.
+  murderCaptive(prop) {
+    if (prop.mood === 'dead' || prop.freed) return false;
+    const asked = prop.mood === 'begging' && prop.spoken;
+    this.gore.splat(prop.x, prop.y, '#7a1f1c', 1.4, this.player.faceX, this.player.faceY);
+    this.shake(6);
+    if (asked) return this.releaseCaptive(prop, true);
+
+    prop.freed = true;
+    prop.mood = 'dead';
+    prop.searched = !prop.carries;
+    this.gore.pool(prop.x, prop.y, '#7a1f1c', 1.1);
+    const cost = this.run.score.addPenalty(500 + this.level.depth * 60,
+      prop.mood === 'raving' ? 'the one that was screaming' : 'someone who did not ask');
+    this.particles.text(prop.x, prop.y - 1, 'MURDER  -' + Math.round(cost), '#e05a3c', 15, 2.4);
+    this.playSfx('curse', { x: prop.x, y: prop.y });
+    this.emit('captive', { prop, action: 'murdered', cost });
+    return true;
+  }
+
+  // Hands over whatever a captive was carrying, wherever it came from.
+  grantFrom(prop, kind) {
+    if (kind === 'potion') {
+      const healed = this.run.heal(30 + this.level.depth);
+      this.particles.text(prop.x, prop.y - 1, '+' + healed + ' vigour', '#6fce87', 14, 1.6);
+      this.emit('health', { hp: this.run.hp, maxHp: this.run.maxHp });
+    } else if (kind === 'arrows' && this.run.hasCrossbow) {
+      const got = this.run.giveArrows(2);
+      if (got > 0) this.particles.text(prop.x, prop.y - 1, '+' + got + ' bolts', '#e8b45c', 14, 1.6);
+    } else {
+      const pts = this.run.score.addBonus(180 + this.level.depth * 30, this.run.mods);
+      this.particles.text(prop.x, prop.y - 1, '+' + Math.round(pts), '#e8b45c', 14, 1.6);
+      this.playSfx('coins', { x: prop.x, y: prop.y });
+    }
+  }
+
+  // --- altars ---------------------------------------------------------------
+  //
+  // The world owns applying an offer, because the map, the monsters and the
+  // score all live here. What is on offer, and whether the player can pay for
+  // it, is worked out in altars.js.
+  altarOffers(prop) {
+    if (!prop.offers) {
+      prop.offers = buildOffers(this.run, this,
+        new RNG(this.level.seed + ':altar:' + prop.id));
+    }
+    return prop.offers;
+  }
+
+  takeOffer(prop, offer) {
+    if (!prop || prop.used || !offer) return false;
+    prop.used = true;
+    this.playSfx('curse', { x: prop.x, y: prop.y });
+    this.shake(9);
+    ring(this.particles, prop.x, prop.y, '#c46ad8', 26, 1.4, 0.9);
+    // Paid first, then answered. An ambush that arrives before the reward
+    // reads as a betrayal; after it, as a price.
+    const paid = this.paySacrifice(offer);
+    const gave = this.grantReward(offer);
+    this.emit('altarUsed', { prop, offer, paid, gave });
+    // Paying in blood can kill. It is allowed to: the price was stated.
+    this.checkPlayerDeath();
+    return true;
+  }
+
+  paySacrifice(offer) {
+    const id = offer.sacrifice.id;
+    const depth = this.level.depth;
+    if (id === 'hpFixed' || id === 'hpPercent' || id === 'hpDrop') {
+      const dealt = Math.max(0, Math.min(this.run.hp, Math.round(offer.amount)));
+      this.run.hp -= dealt;
+      this.damageTakenThisLevel += dealt;
+      this.player.onDamaged(dealt);
+      this.particles.text(this.player.x, this.player.y, '-' + dealt, '#e05a3c', 17, 1.4);
+      this.gore.pool(this.player.x, this.player.y, '#8e2320', 0.9);
+      this.emit('health', { hp: this.run.hp, maxHp: this.run.maxHp });
+      return dealt + ' vitality';
+    }
+    if (id === 'scoreFixed') {
+      const cost = this.run.score.addPenalty(offer.amount, 'given to an altar');
+      this.particles.text(this.player.x, this.player.y - 1, '-' + Math.round(cost), '#e05a3c', 15, 1.4);
+      return Math.round(cost) + ' points';
+    }
+    if (id === 'scoreLevel') {
+      const had = this.run.score.levelSubtotal;
+      this.run.score.resetLevel();
+      this.particles.text(this.player.x, this.player.y - 1,
+        'THIS DEPTH IS FORGOTTEN', '#e05a3c', 14, 2.2);
+      return Math.round(had) + ' points';
+    }
+    if (id === 'ambushSmall' || id === 'ambush') {
+      const n = id === 'ambush'
+        ? 3 + this.rng.int(0, 2) + Math.floor(depth / 3)
+        : 1 + this.rng.int(0, 1) + Math.floor(depth / 6);
+      const came = this.spawnAmbushAround(this.player.x, this.player.y, n);
+      if (came > 0) {
+        this.particles.text(this.player.x, this.player.y - 1.4, 'THEY HEARD', '#e05a3c', 15, 2.0);
+        return came + ' of them';
+      }
+      // Standing somewhere with nowhere for them to come from does not make
+      // the offering free. The altar takes the only other thing to hand, in
+      // points rather than blood -- a surprise price should never be lethal.
+      const toll = this.run.score.addPenalty(
+        (id === 'ambush' ? 900 : 400) * (1 + depth * 0.1), 'owed to an altar');
+      this.particles.text(this.player.x, this.player.y - 1.4,
+        'NOTHING CAME  -' + Math.round(toll), '#e05a3c', 14, 2.2);
+      return Math.round(toll) + ' points, since nothing came';
+    }
+    if (id === 'amnesia') {
+      this.forgetEverything();
+      return 'everything you had seen';
+    }
+    return '';
+  }
+
+  // Wipes the chart back to the moment the player stepped off the stair. The
+  // tile underfoot is left known so the next frame does not read as a bug.
+  forgetEverything() {
+    this.vis.seen.fill(0);
+    this.vis.memory.fill(0);
+    this.vis.discoveredCount = 0;
+    this.hints.length = 0;
+    this.revealedProps.clear();
+    for (const s of this.level.secrets) if (!s.broken) s.discovered = false;
+    this.refreshVisibility(0);
+    this.particles.text(this.player.x, this.player.y - 2,
+      'YOU HAVE NEVER BEEN HERE', '#c46ad8', 15, 2.6);
+    this.playSfx('reveal');
+    this.emit('forgot', {});
+  }
+
+  grantReward(offer) {
+    const id = offer.reward.id;
+    const boost = (this.run.mods && this.run.mods.rewardScale) || 1;
+    if (id === 'arrows') {
+      const got = this.run.giveArrows(this.run.maxArrows);
+      this.particles.text(this.player.x, this.player.y - 1, '+' + got + ' bolts', '#e8b45c', 15, 1.6);
+      this.emit('ammo', { arrows: this.run.arrows });
+      return got + ' bolts';
+    }
+    if (id === 'mend' || id === 'heal' || id === 'restored') {
+      const share = id === 'mend' ? 0.34 : id === 'heal' ? 0.67 : 1;
+      const missing = this.run.maxHp - this.run.hp;
+      const healed = this.run.heal(missing * Math.min(1, share * boost), true);
+      if (id === 'restored') this.run.giveArrows(this.run.maxArrows);
+      this.particles.text(this.player.x, this.player.y - 1.4, '+' + healed, '#6fce87', 17, 1.6);
+      this.emit('health', { hp: this.run.hp, maxHp: this.run.maxHp });
+      return '+' + healed + ' vitality';
+    }
+    if (id === 'key' || id === 'exit') {
+      const hint = this.revealHint(id, 'altar');
+      if (hint && boost > 1) this.revealHint('treasure', 'altar');
+      return hint ? hint.label : 'nothing it did not know';
+    }
+    if (id === 'chart') {
+      const tiles = this.revealLayout(boost > 1);
+      return tiles + ' tiles of passage';
+    }
+    return '';
+  }
+
+  // The layout, and only the layout. Every walkable tile becomes known and
+  // faintly remembered -- so the chart fills in -- but nothing standing in it
+  // is marked, and the memory is low enough that the world itself still has
+  // to be walked to be seen properly.
+  revealLayout(withMarks) {
+    const grid = this.grid;
+    const band = this.level.mazeHeight;
+    const layer = this.playerLayer;
+    let count = 0;
+    for (let y = 0; y < grid.h; y++) {
+      if (band !== undefined && (y >= band) !== (layer === 1)) continue;
+      for (let x = 0; x < grid.w; x++) {
+        const i = grid.idx(x, y);
+        if (this.vis.seen[i]) continue;
+        if (!isWalkableTile(grid.cells[i]) && grid.cells[i] !== T.WALL) continue;
+        // Walls are charted only where they border something walkable, so
+        // the reveal draws rooms and passages rather than a solid rectangle.
+        if (grid.cells[i] === T.WALL) {
+          let touches = false;
+          for (const [dx, dy] of N4) {
+            if (isWalkableTile(grid.get(x + dx, y + dy))) { touches = true; break; }
+          }
+          if (!touches) continue;
+        }
+        this.vis.seen[i] = 1;
+        this.vis.discoveredCount++;
+        this.vis.memory[i] = Math.max(this.vis.memory[i], 0.28);
+        count++;
+      }
+    }
+    if (withMarks) for (const g of this.level.gates) this.revealHint('key', 'altar');
+    this.emit('charted', { tiles: count });
+    return count;
+  }
+
+  // --- map scraps -----------------------------------------------------------
+  readMap(prop) {
+    if (prop.read) return false;
+    prop.read = true;
+    prop.consumed = true;
+    this.playSfx('reveal', { x: prop.x, y: prop.y });
+    const hint = this.revealHint(prop.shows, 'map');
+    if (hint) {
+      ring(this.particles, prop.x, prop.y, hint.colour, 18, 1.1, 0.8);
+      this.particles.text(prop.x, prop.y - 0.8, 'A MAP', hint.colour, 15, 1.8);
+    } else {
+      this.particles.text(prop.x, prop.y - 0.8, 'Nothing you did not know', '#8fa0b8', 12, 2);
+    }
+    this.emit('mapRead', { prop, hint });
+    return true;
   }
 
   // --- contextual action --------------------------------------------------
@@ -890,6 +1516,21 @@ export class World {
               : 'Return to the labyrinth',
             enabled: true, hx: prop.x, hy: prop.y,
           };
+        } else if (prop.type === 'prisoner') {
+          const c = this.captiveLabel(prop);
+          target = { type: 'captive', prop, label: c.label, hint: c.hint || '',
+            enabled: c.enabled, hx: prop.x, hy: prop.y };
+        } else if (prop.type === 'altar') {
+          const offers = this.altarOffers(prop);
+          target = {
+            type: 'altar', prop,
+            label: prop.used ? 'The altar is spent' : 'Make an offering',
+            hint: prop.used ? '' : (offers.length ? '' : 'It wants nothing you have'),
+            enabled: !prop.used && offers.length > 0,
+            hx: prop.x, hy: prop.y,
+          };
+        } else if (prop.type === 'mapScrap' && !prop.read) {
+          target = { type: 'map', prop, label: 'Read the map', enabled: true, hx: prop.x, hy: prop.y };
         } else if ((prop.type === 'shrine' || prop.type === 'shrineSmall') && !prop.used) {
           const heal = prop.flavour === 'heal' || prop.type === 'shrineSmall';
           target = {
@@ -899,6 +1540,21 @@ export class World {
           };
         }
         if (target) break;
+      }
+    }
+
+    // Cold fires come last: they are everywhere, and should never stand
+    // between the player and a chest they are also standing on.
+    if (!target) {
+      const fire = this.fireAt(p.x, p.y, 1.35);
+      if (fire) {
+        target = {
+          type: 'fire', fire,
+          label: 'Light the ' + (FIRE_NAMES[fire.kind] || 'fire'),
+          hint: this.torchLit ? '' : 'Your torch is out',
+          enabled: this.torchLit,
+          hx: fire.x, hy: fire.y,
+        };
       }
     }
     this.interactTarget = target;
@@ -920,8 +1576,79 @@ export class World {
       case 'chest': return this.openChest(target.prop);
       case 'shrine': return this.useShrine(target.prop);
       case 'ladder': return this.useLadder(target.prop);
+      case 'fire': return this.lightFire(target.fire);
+      case 'captive': return this.useCaptive(target.prop);
+      case 'map': return this.readMap(target.prop);
+      case 'altar':
+        // The choice itself is an interface question, so the world only says
+        // that one is being asked. Nothing happens until takeOffer is called.
+        this.emit('altarOpen', { prop: target.prop, offers: this.altarOffers(target.prop) });
+        return true;
       default: return false;
     }
+  }
+
+  // Douse or relight. Free either way: the cost of the dark is the dark, and
+  // making the player hunt for a flame to get their sight back would turn a
+  // tactical choice into a punishment.
+  toggleTorch() {
+    if (this.torchToggleCooldown > 0 || this.playerDead || this.finished) return false;
+    this.torchToggleCooldown = 0.45;
+    this.torchLit = !this.torchLit;
+    if (this.torchLit) {
+      this.playSfx('torchLight');
+      burstSparks(this.particles, this.player.x, this.player.y - 0.2, '#ffb35c', 8, 2.2);
+      this.particles.text(this.player.x, this.player.y - 1.1, 'TORCH LIT', '#ffb35c', 12, 1.0);
+    } else {
+      this.playSfx('torchDouse');
+      for (let i = 0; i < 7; i++) {
+        this.particles.spawn({
+          x: this.player.x, y: this.player.y, z: 0.9,
+          vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4,
+          vz: 0.5 + Math.random() * 0.5, gravity: -0.2, drag: 0.8,
+          life: 1.4, size: 2.4, colour: '#59524a', fade: 1.6,
+        });
+      }
+      this.particles.text(this.player.x, this.player.y - 1.1, 'TORCH OUT', '#8fa0b8', 12, 1.0);
+    }
+    this.updateHazard();
+    this.refreshVisibility(0);
+    this.emit('torch', { lit: this.torchLit });
+    return true;
+  }
+
+  // How much better sound carries to the player right now. The ears sharpen
+  // when the eyes have nothing to do.
+  get hearingScale() {
+    const relic = (this.run.mods && this.run.mods.hearing) || 1;
+    return relic * (this.torchLit ? 1 : DOUSED_HEARING);
+  }
+
+  // The nearest cold fire the player could set alight, if they are standing
+  // over it and still carrying a flame.
+  fireAt(x, y, r = 1.3) {
+    let best = null, bestD = r;
+    for (const f of this.level.sconces) {
+      if (f.lit !== false) continue;
+      if (this.layerAt(Math.floor(f.y)) !== this.playerLayer) continue;
+      const d = Math.hypot(f.x - x, f.y - y);
+      if (d < bestD) { bestD = d; best = f; }
+    }
+    return best;
+  }
+
+  lightFire(fire) {
+    if (!fire || fire.lit || !this.torchLit) return false;
+    fire.lit = true;
+    this.playSfx('torchLight', { x: fire.x, y: fire.y });
+    ring(this.particles, fire.x, fire.y, '#ff9a3a', 16, 0.9, 0.6);
+    burstSparks(this.particles, fire.x, fire.y, '#ffd27a', 14, 3);
+    const points = this.run.score.addBonus(40, this.run.mods);
+    this.particles.text(fire.x, fire.y - 0.8,
+      'LIT  +' + Math.round(points), '#ffb35c', 13, 1.4);
+    this.refreshVisibility(0);
+    this.emit('fireLit', { fire });
+    return true;
   }
 
   unlockGate(gate) {
@@ -1030,6 +1757,7 @@ export class World {
       burstStone(this.particles, sx, sy, '#3a3a3a');
       placed++;
     }
+    return placed;
   }
 
   // --- encounters ---------------------------------------------------------
@@ -1262,6 +1990,13 @@ export class World {
   }
 
   onBossKilled(boss) {
+    const blood = boss.def.blood || DEFAULT_BLOOD;
+    this.gore.pool(boss.x, boss.y, blood, 2.4);
+    this.gore.corpse({
+      defId: boss.def.id, x: boss.x, y: boss.y,
+      faceX: boss.faceX, faceY: boss.faceY,
+      elite: true, scale: 2.2, seed: 0.5, palette: boss.def.palette, blood, boss: true,
+    });
     const pts = this.run.score.addBoss(boss.def.score || 3000, this.run.mods);
     this.particles.text(boss.x, boss.y - 1, '+' + Math.round(pts), '#e8b45c', 22, 2.4);
     // Killing a great foe mends you. Without this a boss is followed by a
@@ -1305,5 +2040,6 @@ export class World {
     this.particles.clear();
     this.enemies.length = 0;
     this.projectiles.length = 0;
+    this.gore.clear();
   }
 }

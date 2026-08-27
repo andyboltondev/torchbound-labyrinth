@@ -2,6 +2,8 @@
 // settings. Deliberately small -- the run itself keeps roguelite consequences.
 
 import { load, save } from '../core/storage.js';
+import { readHall, writeAll, submitEntry, importCsv, exportCsv, rank, HALL_SIZE }
+  from './hall.js';
 
 const SEED_BOARD = [
   { name: 'Ragnvald', score: 48200, depth: 17, bosses: 3, build: 'Berserker', diff: 'ashenvow' },
@@ -34,7 +36,16 @@ export const DEFAULT_SETTINGS = {
 
 export class Profile {
   constructor() {
-    this.board = load('hallOfFame', null) || SEED_BOARD.slice();
+    // The hall is a CSV table now. A profile from before that reads its old
+    // JSON list once and is written straight back out in the new format, so
+    // nobody loses the names they had.
+    const stored = readHall();
+    if (stored) {
+      this.board = stored;
+    } else {
+      const legacy = load('hallOfFame', null);
+      this.board = writeAll(legacy && legacy.length ? legacy : SEED_BOARD.slice());
+    }
     this.bestiary = new Set(load('bestiary', []));
     this.bosses = new Set(load('bestiaryBosses', []));
     this.settings = { ...DEFAULT_SETTINGS, ...(load('settings', {}) || {}) };
@@ -57,29 +68,43 @@ export class Profile {
     return true;
   }
 
-  // Where would this score land? Returns 1-based rank, or null if outside the top ten.
+  // Where would this score land? Returns a 1-based rank, or null if it does
+  // not make the hall at all.
   rankFor(score) {
-    const sorted = this.board.slice().sort((a, b) => b.score - a.score);
+    const sorted = rank(this.board);
     for (let i = 0; i < sorted.length; i++) if (score > sorted[i].score) return i + 1;
-    return sorted.length < 10 ? sorted.length + 1 : null;
+    return sorted.length < HALL_SIZE ? sorted.length + 1 : null;
   }
 
   // How far short a non-qualifying run fell, so the near-miss still lands.
   shortfall(score) {
-    const sorted = this.board.slice().sort((a, b) => b.score - a.score);
-    const tenth = sorted[9] || sorted[sorted.length - 1];
-    if (!tenth) return { place: 1, gap: 0 };
+    const sorted = rank(this.board);
+    const last = sorted[HALL_SIZE - 1] || sorted[sorted.length - 1];
+    if (!last) return { place: 1, gap: 0 };
     const place = sorted.filter((e) => e.score >= score).length + 1;
-    return { place, gap: Math.max(0, tenth.score - score + 1) };
+    return { place, gap: Math.max(0, last.score - score + 1) };
   }
 
-  submit(entry) {
-    this.board.push(entry);
-    this.board.sort((a, b) => b.score - a.score);
-    this.board = this.board.slice(0, 10);
-    save('hallOfFame', this.board);
-    return this.board.findIndex((e) => e === entry) + 1;
+  // Carving a name re-reads the stored table and merges into it, so a run
+  // finished in one tab cannot wipe out one finished in another.
+  async submit(entry) {
+    const result = await submitEntry(entry, this.board);
+    if (result) {
+      this.board = result.rows;
+      return result.rank;
+    }
+    return null;
   }
+
+  async importHall(text) {
+    const result = await importCsv(text);
+    if (result && result.rows) this.board = result.rows;
+    return result;
+  }
+
+  exportHall() { return exportCsv(this.board); }
+
+  clearHall() { this.board = writeAll([]); return this.board; }
 
   // An unranked run still happened -- it just does not set records. Letting
   // Hearthlight write "deepest" or "best score" would leave the home screen

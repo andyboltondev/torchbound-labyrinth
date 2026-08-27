@@ -3,12 +3,17 @@
 
 import { inCone } from './physics.js';
 import { GridMover } from './gridmove.js';
-import { clamp, damp } from '../core/util.js';
 
 const BASE_SPEED = 3.7;
 const BASE_SWORD_DAMAGE = 18;
 const SWORD_RANGE = 1.45;
 const SWORD_HALF_ANGLE_COS = Math.cos(1.05); // ~120 degree arc
+
+// How fast the body comes round, as an exponential rate. At 26 a complete
+// about-face is done inside a sixth of a second -- under half a tile at
+// walking speed -- which is fast enough to feel answered and slow enough to
+// still read as a turn rather than a snap.
+const TURN_RATE = 26;
 
 export class Player {
   constructor(run) {
@@ -31,6 +36,7 @@ export class Player {
     this.slowTimer = 0;
     this.burnTimer = 0;
     this.torchFlicker = 1;
+    this.torchLit = true;
     this.hasCrossbow = false;
     this.hasShieldRelic = false;
     this.tileX = 0;
@@ -85,6 +91,9 @@ export class Player {
       speed,
       ice,
       strict: world.strictMovement,
+      // Pressing into a wall beside a doorway steps you into the doorway.
+      // Strict movement means exactly what was pressed, so it opts out.
+      doorAssist: !world.strictMovement,
       onEnterTile: (x, y) => world.onPlayerEnterTile(x, y),
     });
 
@@ -93,18 +102,35 @@ export class Player {
     this.tileX = this.mover.tileX;
     this.tileY = this.mover.tileY;
 
-    // Face where you are travelling; if a wall stops you, face the wall you
-    // are pushing against, so a cracked wall can be squared up to and struck.
-    // A swing in progress locks the facing, so the arc lands where it was
-    // aimed rather than sweeping round with the feet.
+    // Face where you are *asking* to go, not where the current step happens to
+    // be carrying you. Steps are tile-to-tile and take about a quarter of a
+    // second, so following the step in progress meant a change of direction
+    // could not begin to show until it landed -- which read as the character
+    // taking a tile or more to notice you had turned. The feet still finish
+    // the step they are committed to; the body turns immediately, which is
+    // what a person does.
+    //
+    // When there is no input, fall back to the step in progress, and if a wall
+    // stops you, face the wall you are pushing against so a cracked wall can
+    // be squared up to and struck. A swing in progress locks the facing, so
+    // the arc lands where it was aimed rather than sweeping round with the
+    // feet.
     const heading = this.mover.moving ? this.mover.heading : null;
-    const target = this.attack ? null : (heading || (hasInput ? { x: intent.moveX, y: intent.moveY } : null));
-    if (target) {
-      const m = Math.hypot(target.x, target.y) || 1;
-      this.faceX = damp(this.faceX, target.x / m, 20, dt);
-      this.faceY = damp(this.faceY, target.y / m, 20, dt);
-      const fm = Math.hypot(this.faceX, this.faceY) || 1;
-      this.faceX /= fm; this.faceY /= fm;
+    const target = this.attack ? null
+      : (hasInput ? { x: intent.moveX, y: intent.moveY } : heading);
+    if (target && (target.x !== 0 || target.y !== 0)) {
+      // Turned as an angle along the shortest arc rather than by damping the
+      // two components. Damping components sends a near-reversal through a
+      // vector of almost no length, where normalising is both slow and
+      // unstable -- which is the other half of why an about-face crawled.
+      const want = Math.atan2(target.y, target.x);
+      const now = Math.atan2(this.faceY, this.faceX);
+      let delta = want - now;
+      while (delta > Math.PI) delta -= Math.PI * 2;
+      while (delta < -Math.PI) delta += Math.PI * 2;
+      const a = now + delta * (1 - Math.exp(-TURN_RATE * dt));
+      this.faceX = Math.cos(a);
+      this.faceY = Math.sin(a);
     }
   }
 
@@ -129,7 +155,9 @@ export class Player {
                this.run.hasCrossbow && this.run.arrows > 0) {
       const duration = 0.3;
       this.attack = { type: 'fire', t: 0, duration, hitAt: 0.1, resolved: false };
-      this.fireCooldown = 0.7;
+      // How long until the next bolt can be drawn. A heavier bow is a slower
+      // one, which is the price Extended Limbs charges for its reach.
+      this.fireCooldown = 0.7 / (mods.boltRate || 1);
       this.attackCooldown = 0.24;
     }
   }
