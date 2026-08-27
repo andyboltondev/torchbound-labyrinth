@@ -231,6 +231,7 @@ export function drawProp(ctx, prop, t) {
     case 'crossbow': drawCrossbowPickup(ctx, sx, sy, t); break;
     case 'treasure': drawTreasure(ctx, sx, sy, t); break;
     case 'ladder': drawLadder(ctx, sx, sy, t, prop); break;
+    case 'altar': drawAltar(ctx, sx, sy, t, prop); break;
     case 'prisoner': drawPrisoner(ctx, sx, sy, t, prop); break;
     case 'mapScrap': drawMapScrap(ctx, sx, sy, t, prop); break;
     default: break;
@@ -361,6 +362,68 @@ function drawMapScrap(ctx, sx, sy, t, prop) {
   ctx.fillStyle = rgba('#e8d9a8', 0.1 + Math.sin(t * 2.1 + prop.y) * 0.05);
   ctx.beginPath();
   ctx.ellipse(sx, sy - 5, 13, 7, 0, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+}
+
+// A sacrifice altar: a bowl on a block, with a runed slab behind it. Lit from
+// inside while it still has something to offer, and cold stone once it does
+// not, so a spent one is obviously spent from across the room.
+function drawAltar(ctx, sx, sy, t, prop) {
+  const spent = !!prop.used;
+  const pulse = spent ? 0 : 0.55 + Math.sin(t * 1.5 + prop.seed * 8) * 0.3
+    + Math.sin(t * 3.7 + prop.seed * 3) * 0.12;
+  pedestalShadow(ctx, sx, sy, 20);
+
+  // The slab behind, carved with a rune that only reads when it is live.
+  ctx.fillStyle = spent ? '#3c3a3a' : '#4a4046';
+  ctx.beginPath();
+  ctx.moveTo(sx - 11, sy - 12);
+  ctx.lineTo(sx + 11, sy - 12);
+  ctx.lineTo(sx + 9, sy - 46);
+  ctx.lineTo(sx - 9, sy - 46);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = rgba('#000000', 0.3);
+  ctx.fillRect(sx - 11, sy - 14, 22, 2);
+  ctx.strokeStyle = rgba(spent ? '#5a5560' : '#c46ad8', spent ? 0.4 : 0.5 + pulse * 0.4);
+  ctx.lineWidth = 1.6;
+  drawRune(ctx, sx, sy - 32, 'berkano', 7);
+
+  // The block and the bowl.
+  ctx.fillStyle = '#585049';
+  ctx.fillRect(sx - 14, sy - 14, 28, 12);
+  ctx.fillStyle = shade('#585049', 0.12);
+  ctx.beginPath();
+  ctx.ellipse(sx, sy - 14, 14, 5.4, 0, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = '#2a2220';
+  ctx.beginPath();
+  ctx.ellipse(sx, sy - 15, 9, 3.4, 0, 0, TAU);
+  ctx.fill();
+
+  if (spent) {
+    ctx.fillStyle = rgba('#3c2a2a', 0.8);
+    ctx.beginPath();
+    ctx.ellipse(sx, sy - 15, 7.4, 2.6, 0, 0, TAU);
+    ctx.fill();
+    return;
+  }
+
+  // What is in the bowl. A cold violet light, and it breathes.
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const g = ctx.createRadialGradient(sx, sy - 18, 0, sx, sy - 18, 34 * (0.7 + pulse * 0.5));
+  g.addColorStop(0, rgba('#c46ad8', 0.3 * pulse));
+  g.addColorStop(0.5, rgba('#8b4ad8', 0.11 * pulse));
+  g.addColorStop(1, rgba('#8b4ad8', 0));
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(sx, sy - 18, 34 * (0.7 + pulse * 0.5), 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = rgba('#e0a8f0', 0.5 + pulse * 0.35);
+  ctx.beginPath();
+  ctx.ellipse(sx, sy - 15, 7 + pulse, 2.6 + pulse * 0.6, 0, 0, TAU);
   ctx.fill();
   ctx.restore();
 }

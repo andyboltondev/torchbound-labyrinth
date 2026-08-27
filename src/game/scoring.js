@@ -46,6 +46,14 @@ export class ScoreTracker {
     }
   }
 
+  // What this depth is worth so far, before it is banked on the stair. The
+  // altars charge against this, so it has to be readable mid-level.
+  get levelSubtotal() {
+    return Math.round(
+      this.level.combat + this.level.streak + this.level.flawless
+      + this.level.secrets + this.level.boss + this.level.penalty);
+  }
+
   get streakFraction() {
     return this.streak > 0 ? Math.max(0, this.streakTimer / this.streakWindow) : 0;
   }

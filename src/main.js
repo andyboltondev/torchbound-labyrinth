@@ -39,6 +39,8 @@ class Game {
       resume: () => this.resume(),
       quit: (reason) => this.endRun(reason || 'quit'),
       chooseRelic: (relic) => this.chooseRelic(relic),
+      takeOffer: (offer) => this.takeOffer(offer),
+      leaveAltar: () => this.leaveAltar(),
       afterSummary: () => this.showRelicChoice(),
       onTouchModeChange: () => this.refreshTouchMode(),
       onSettingChanged: (key) => this.applySettings(key),
@@ -238,6 +240,35 @@ class Game {
     this.loadLevel();
   }
 
+  // An altar stops the world while the choice is being made. It is the same
+  // shape as a pause: the simulation is untouched, and resuming puts the
+  // player back exactly where they were standing.
+  openAltar(prop, offers) {
+    if (this.state !== STATE.PLAYING) return;
+    this.state = STATE.PAUSED;
+    this.altarProp = prop;
+    this.input.releaseAll();
+    this.touch.setVisible(false);
+    if (this.audio.ready) this.audio.master.gain.value = profile.settings.master * 0.55;
+    this.screens.show('altar', { offers });
+  }
+
+  takeOffer(offer) {
+    const prop = this.altarProp;
+    this.leaveAltar();
+    if (prop && this.world) this.world.takeOffer(prop, offer);
+  }
+
+  leaveAltar() {
+    this.altarProp = null;
+    if (this.state !== STATE.PAUSED) return;
+    this.screens.hide();
+    this.state = STATE.PLAYING;
+    this.input.clearEdges();
+    this.refreshTouchMode();
+    if (this.audio.ready) this.audio.master.gain.value = profile.settings.master;
+  }
+
   // Hearthlight only. The run total survives; this depth's earnings do not.
   retryDepth() {
     if (this.audio.ready) this.audio.master.gain.value = profile.settings.master;
@@ -307,6 +338,18 @@ class Game {
           data.lit ? 'good' : '');
         break;
       case 'fireLit': this.hud.toast('The fire catches', 'good'); break;
+      case 'altarOpen': this.openAltar(data.prop, data.offers); break;
+      case 'altarUsed':
+        this.hud.toast(data.gave ? 'The altar answers: ' + data.gave : 'The altar takes and says nothing',
+          data.gave ? 'good' : 'bad');
+        break;
+      case 'forgot':
+        // The chart is painted once per tile and never rubbed out, so it has
+        // to be told when there is suddenly nothing to remember.
+        this.minimap.bind(this.world.level);
+        this.hud.toast('You do not remember any of this', 'bad');
+        break;
+      case 'charted': this.hud.toast('The passages draw themselves', 'good'); break;
       case 'hint':
         this.hud.toast('You are shown ' + data.hint.label, 'good');
         break;

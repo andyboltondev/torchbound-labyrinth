@@ -12,6 +12,7 @@ import { Enemy } from './enemies.js';
 import { Boss } from './boss.js';
 import { ENEMIES, enemyPoolFor, DEFAULT_BLOOD, HEARING_REACH } from './enemyData.js';
 import { SoundField } from './soundfield.js';
+import { buildOffers } from './altars.js';
 import { Gore } from './gore.js';
 import { hasLineOfSight, tileBlocks } from './physics.js';
 import { probeAcoustics, spaceProfile, blendSpace, DEFAULT_SPACE } from '../audio/space.js';
@@ -1250,6 +1251,156 @@ export class World {
     }
   }
 
+  // --- altars ---------------------------------------------------------------
+  //
+  // The world owns applying an offer, because the map, the monsters and the
+  // score all live here. What is on offer, and whether the player can pay for
+  // it, is worked out in altars.js.
+  altarOffers(prop) {
+    if (!prop.offers) {
+      prop.offers = buildOffers(this.run, this,
+        new RNG(this.level.seed + ':altar:' + prop.id));
+    }
+    return prop.offers;
+  }
+
+  takeOffer(prop, offer) {
+    if (!prop || prop.used || !offer) return false;
+    prop.used = true;
+    this.playSfx('curse', { x: prop.x, y: prop.y });
+    this.shake(9);
+    ring(this.particles, prop.x, prop.y, '#c46ad8', 26, 1.4, 0.9);
+    // Paid first, then answered. An ambush that arrives before the reward
+    // reads as a betrayal; after it, as a price.
+    const paid = this.paySacrifice(offer);
+    const gave = this.grantReward(offer);
+    this.emit('altarUsed', { prop, offer, paid, gave });
+    // Paying in blood can kill. It is allowed to: the price was stated.
+    this.checkPlayerDeath();
+    return true;
+  }
+
+  paySacrifice(offer) {
+    const id = offer.sacrifice.id;
+    const depth = this.level.depth;
+    if (id === 'hpFixed' || id === 'hpPercent' || id === 'hpDrop') {
+      const dealt = Math.max(0, Math.min(this.run.hp, Math.round(offer.amount)));
+      this.run.hp -= dealt;
+      this.damageTakenThisLevel += dealt;
+      this.player.onDamaged(dealt);
+      this.particles.text(this.player.x, this.player.y, '-' + dealt, '#e05a3c', 17, 1.4);
+      this.gore.pool(this.player.x, this.player.y, '#8e2320', 0.9);
+      this.emit('health', { hp: this.run.hp, maxHp: this.run.maxHp });
+      return dealt + ' vitality';
+    }
+    if (id === 'scoreFixed') {
+      const cost = this.run.score.addPenalty(offer.amount, 'given to an altar');
+      this.particles.text(this.player.x, this.player.y - 1, '-' + Math.round(cost), '#e05a3c', 15, 1.4);
+      return Math.round(cost) + ' points';
+    }
+    if (id === 'scoreLevel') {
+      const had = this.run.score.levelSubtotal;
+      this.run.score.resetLevel();
+      this.particles.text(this.player.x, this.player.y - 1,
+        'THIS DEPTH IS FORGOTTEN', '#e05a3c', 14, 2.2);
+      return Math.round(had) + ' points';
+    }
+    if (id === 'ambushSmall' || id === 'ambush') {
+      const n = id === 'ambush'
+        ? 3 + this.rng.int(0, 2) + Math.floor(depth / 3)
+        : 1 + this.rng.int(0, 1) + Math.floor(depth / 6);
+      this.spawnAmbushAround(this.player.x, this.player.y, n);
+      this.particles.text(this.player.x, this.player.y - 1.4, 'THEY HEARD', '#e05a3c', 15, 2.0);
+      return 'they came';
+    }
+    if (id === 'amnesia') {
+      this.forgetEverything();
+      return 'everything you had seen';
+    }
+    return '';
+  }
+
+  // Wipes the chart back to the moment the player stepped off the stair. The
+  // tile underfoot is left known so the next frame does not read as a bug.
+  forgetEverything() {
+    this.vis.seen.fill(0);
+    this.vis.memory.fill(0);
+    this.vis.discoveredCount = 0;
+    this.hints.length = 0;
+    this.revealedProps.clear();
+    for (const s of this.level.secrets) if (!s.broken) s.discovered = false;
+    this.refreshVisibility(0);
+    this.particles.text(this.player.x, this.player.y - 2,
+      'YOU HAVE NEVER BEEN HERE', '#c46ad8', 15, 2.6);
+    this.playSfx('reveal');
+    this.emit('forgot', {});
+  }
+
+  grantReward(offer) {
+    const id = offer.reward.id;
+    const boost = (this.run.mods && this.run.mods.rewardScale) || 1;
+    if (id === 'arrows') {
+      const got = this.run.giveArrows(this.run.maxArrows);
+      this.particles.text(this.player.x, this.player.y - 1, '+' + got + ' bolts', '#e8b45c', 15, 1.6);
+      this.emit('ammo', { arrows: this.run.arrows });
+      return got + ' bolts';
+    }
+    if (id === 'mend' || id === 'heal' || id === 'restored') {
+      const share = id === 'mend' ? 0.34 : id === 'heal' ? 0.67 : 1;
+      const missing = this.run.maxHp - this.run.hp;
+      const healed = this.run.heal(missing * Math.min(1, share * boost), true);
+      if (id === 'restored') this.run.giveArrows(this.run.maxArrows);
+      this.particles.text(this.player.x, this.player.y - 1.4, '+' + healed, '#6fce87', 17, 1.6);
+      this.emit('health', { hp: this.run.hp, maxHp: this.run.maxHp });
+      return '+' + healed + ' vitality';
+    }
+    if (id === 'key' || id === 'exit') {
+      const hint = this.revealHint(id, 'altar');
+      if (hint && boost > 1) this.revealHint('treasure', 'altar');
+      return hint ? hint.label : 'nothing it did not know';
+    }
+    if (id === 'chart') {
+      const tiles = this.revealLayout(boost > 1);
+      return tiles + ' tiles of passage';
+    }
+    return '';
+  }
+
+  // The layout, and only the layout. Every walkable tile becomes known and
+  // faintly remembered -- so the chart fills in -- but nothing standing in it
+  // is marked, and the memory is low enough that the world itself still has
+  // to be walked to be seen properly.
+  revealLayout(withMarks) {
+    const grid = this.grid;
+    const band = this.level.mazeHeight;
+    const layer = this.playerLayer;
+    let count = 0;
+    for (let y = 0; y < grid.h; y++) {
+      if (band !== undefined && (y >= band) !== (layer === 1)) continue;
+      for (let x = 0; x < grid.w; x++) {
+        const i = grid.idx(x, y);
+        if (this.vis.seen[i]) continue;
+        if (!isWalkableTile(grid.cells[i]) && grid.cells[i] !== T.WALL) continue;
+        // Walls are charted only where they border something walkable, so
+        // the reveal draws rooms and passages rather than a solid rectangle.
+        if (grid.cells[i] === T.WALL) {
+          let touches = false;
+          for (const [dx, dy] of N4) {
+            if (isWalkableTile(grid.get(x + dx, y + dy))) { touches = true; break; }
+          }
+          if (!touches) continue;
+        }
+        this.vis.seen[i] = 1;
+        this.vis.discoveredCount++;
+        this.vis.memory[i] = Math.max(this.vis.memory[i], 0.28);
+        count++;
+      }
+    }
+    if (withMarks) for (const g of this.level.gates) this.revealHint('key', 'altar');
+    this.emit('charted', { tiles: count });
+    return count;
+  }
+
   // --- map scraps -----------------------------------------------------------
   readMap(prop) {
     if (prop.read) return false;
@@ -1327,6 +1478,15 @@ export class World {
           const c = this.captiveLabel(prop);
           target = { type: 'captive', prop, label: c.label, hint: c.hint || '',
             enabled: c.enabled, hx: prop.x, hy: prop.y };
+        } else if (prop.type === 'altar') {
+          const offers = this.altarOffers(prop);
+          target = {
+            type: 'altar', prop,
+            label: prop.used ? 'The altar is spent' : 'Make an offering',
+            hint: prop.used ? '' : (offers.length ? '' : 'It wants nothing you have'),
+            enabled: !prop.used && offers.length > 0,
+            hx: prop.x, hy: prop.y,
+          };
         } else if (prop.type === 'mapScrap' && !prop.read) {
           target = { type: 'map', prop, label: 'Read the map', enabled: true, hx: prop.x, hy: prop.y };
         } else if ((prop.type === 'shrine' || prop.type === 'shrineSmall') && !prop.used) {
@@ -1377,6 +1537,11 @@ export class World {
       case 'fire': return this.lightFire(target.fire);
       case 'captive': return this.useCaptive(target.prop);
       case 'map': return this.readMap(target.prop);
+      case 'altar':
+        // The choice itself is an interface question, so the world only says
+        // that one is being asked. Nothing happens until takeOffer is called.
+        this.emit('altarOpen', { prop: target.prop, offers: this.altarOffers(target.prop) });
+        return true;
       default: return false;
     }
   }

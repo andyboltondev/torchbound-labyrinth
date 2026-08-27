@@ -21,12 +21,15 @@ export function baseMods() {
     // How far the player's ears reach, how far their own noise carries, and
     // whether they can see what they hear.
     hearing: 1, playerNoise: 1, sonar: false,
+    // How steeply an altar charges, and how much it gives back.
+    sacrificeScale: 1, rewardScale: 1,
   };
 }
 
 const T = {
   TORCH: 'Torch', SWORD: 'Sword', BOW: 'Crossbow', SHIELD: 'Defence',
   EXPLORE: 'Exploration', SCORE: 'Score', BODY: 'Body', SOUND: 'Hearing',
+  ALTAR: 'Bargains',
 };
 
 export const RELICS = [
@@ -35,6 +38,20 @@ export const RELICS = [
     text: 'Your torch burns wider and further.',
     cost: 'The dead notice it from further away too.',
     mod: (m, n) => { m.torchRadius *= 1 + 0.3 * n; m.enemyAggro *= 1 + 0.22 * n; },
+  },
+  {
+    id: 'bloodless_bargain', name: 'Bloodless Bargain', tag: T.ALTAR, rarity: 2, max: 1,
+    text: 'Altars ask a good deal less of you.',
+    cost: 'A cheap offering is remembered. You recover far less on the stair, '
+      + 'so what the altar spared you is taken back on the way down.',
+    mod: (m) => { m.sacrificeScale *= 0.6; m.levelHeal *= 0.5; },
+  },
+  {
+    id: 'gilded_debt', name: 'Gilded Debt', tag: T.ALTAR, rarity: 3, max: 1,
+    text: 'What an altar gives you, it gives generously: healing runs deeper, '
+      + 'a chart comes with its keys, and the way down comes with the treasure.',
+    cost: 'And it charges accordingly.',
+    mod: (m) => { m.rewardScale *= 1.5; m.sacrificeScale *= 1.3; },
   },
   {
     id: 'deep_ear', name: 'Ear of the Deep', tag: T.SOUND, rarity: 2, max: 2,

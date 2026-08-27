@@ -675,6 +675,12 @@ function addProps(level, rng, depth, ctx) {
   }
   if (staged && rng.bool(0.5)) place('shrine', { flavour: 'blessing', used: false });
 
+  // Altars. Never on depth one -- the first descent is for learning what the
+  // buttons do, not for being asked what a third of your blood is worth --
+  // and never more than one on a level, so the choice stays a moment.
+  if (depth >= 2 && rng.bool(depth >= 4 ? 0.62 : 0.4)) {
+    place('altar', { used: false, seed: rng.next() }, false);
+  }
   addCaptives(level, rng, depth, busy, mark);
   addMaps(level, rng, depth, place);
   addFires(level, rng, depth, candidates, mark);

@@ -15,6 +15,7 @@ import { inputDirToGrid, screenDirToGrid, screenX, screenY } from '../src/render
 import { bfsField, N4 } from '../src/gen/grid.js';
 import { RNG } from '../src/core/rng.js';
 import { SoundField } from '../src/game/soundfield.js';
+import { HP_FLOOR, REWARD_BY_ID, SACRIFICE_BY_ID } from '../src/game/altars.js';
 import { hazardBudget, HAZARDS } from '../src/gen/biomes.js';
 import { DIFFICULTIES, DIFFICULTY_LIST } from '../src/game/difficulty.js';
 
@@ -582,6 +583,102 @@ test('a raving captive brings company', () => {
   step(world, 12);
   assert(watcher.state === 'seeking',
     `screaming did not draw anything (state ${watcher.state})`);
+});
+
+// --- altars ----------------------------------------------------------------
+
+function altarAt(world, x, y, id = 'test_altar') {
+  const prop = { type: 'altar', x: x + 0.5, y: y + 0.5, used: false, seed: 0.42, id };
+  world.level.props.push(prop);
+  return prop;
+}
+
+test('an altar never asks for something the player cannot pay', () => {
+  // Swept across a wide range of states, because the whole promise of the
+  // system is that every offer on the slab is payable when it is shown.
+  for (const hp of [14, 30, 49, 60, 120]) {
+    for (const levelScore of [0, 600, 3000]) {
+      const { world, run } = makeWorld(6, 'altar-afford-' + hp + '-' + levelScore);
+      run.hp = hp;
+      run.score.level.combat = levelScore;
+      const prop = altarAt(world, Math.floor(world.player.x), Math.floor(world.player.y));
+      for (const offer of world.altarOffers(prop)) {
+        const id = offer.sacrifice.id;
+        if (id === 'hpFixed' || id === 'hpPercent' || id === 'hpDrop') {
+          assert(run.hp - offer.amount >= HP_FLOOR,
+            `${id} at ${hp}hp would leave ${run.hp - offer.amount}`);
+        }
+        // Losing a whole percentage of nothing is not a sacrifice.
+        if (id === 'hpPercent') assert(hp >= 50, `a percentage was asked at ${hp}hp`);
+        // Dropping to a number is only ever offered from real strength.
+        if (id === 'hpDrop') {
+          assert(hp >= (run.hp - offer.amount) * 2,
+            `drop-to-a-number offered at ${hp}hp for a floor of ${run.hp - offer.amount}`);
+        }
+        if (id === 'scoreLevel') {
+          assert(levelScore >= 1200, `a level reset was asked for ${levelScore} points`);
+        }
+        if (id === 'scoreFixed') {
+          assert(levelScore >= 500, `a score payment was asked for ${levelScore} points`);
+        }
+      }
+    }
+  }
+});
+
+test('an altar never offers something the player has no use for', () => {
+  const { world, run } = makeWorld(6, 'altar-usable');
+  run.hasCrossbow = false;
+  run.hp = run.maxHp;
+  const prop = altarAt(world, Math.floor(world.player.x), Math.floor(world.player.y));
+  for (const offer of world.altarOffers(prop)) {
+    assert(offer.reward.id !== 'arrows', 'bolts were offered to somebody with no crossbow');
+    assert(offer.reward.id !== 'mend' && offer.reward.id !== 'heal' && offer.reward.id !== 'restored',
+      'healing was offered at full health');
+  }
+});
+
+test('an altar takes exactly what it said and gives exactly what it promised', () => {
+  const { world, run, level } = makeWorld(6, 'altar-trade');
+  run.hp = 90;
+  const prop = altarAt(world, Math.floor(world.player.x), Math.floor(world.player.y));
+  const offer = {
+    tier: 3,
+    reward: REWARD_BY_ID.exit,
+    sacrifice: SACRIFICE_BY_ID.hpFixed,
+    amount: 24,
+    costText: '24 vitality',
+  };
+  assert(world.takeOffer(prop, offer), 'the offer was refused');
+  assert(run.hp === 66, `paid ${90 - run.hp} instead of 24`);
+  assert(world.hints.some((h) => h.kind === 'exit'), 'the way down was not shown');
+  const st = level.stairs;
+  assert(world.vis.seen[level.grid.idx(st.x, st.y)], 'the stairs were not put on the chart');
+  // And it is spent: an altar answers once.
+  assert(prop.used, 'the altar is still live');
+  assert(!world.takeOffer(prop, offer), 'a spent altar answered a second time');
+});
+
+test('forgetting wipes the chart, and charting fills it without marking anything', () => {
+  const { world, level } = makeWorld(6, 'altar-chart');
+  step(world, 30);
+  const walked = world.vis.discoveredCount;
+  assert(walked > 0, 'nothing was discovered by standing still with a torch');
+
+  const charted = world.revealLayout(false);
+  assert(charted > walked * 3, `charting only added ${charted} tiles`);
+  // The layout, and nothing standing in it: props are not revealed by it.
+  const hidden = level.props.filter((p) => p.hidden);
+  for (const p of hidden) {
+    assert(!world.revealedProps.has(p.id), 'charting the layout uncovered a hidden prop');
+  }
+  assert(world.hints.length === 0, 'charting the layout marked things on it');
+
+  world.forgetEverything();
+  // Only what the torch is on right now survives, because it is being seen.
+  assert(world.vis.discoveredCount < walked + 40,
+    `forgetting left ${world.vis.discoveredCount} tiles charted`);
+  assert(world.hints.length === 0, 'forgetting left the hints behind');
 });
 
 // --- keys, gates and the exit ----------------------------------------------

@@ -9,6 +9,9 @@ import { formatScore, depthLabel } from '../core/util.js';
 import { drawEnemy, drawBoss } from '../render/actors.js';
 import { BUILD_STRING, BUILD_DETAIL } from '../core/version.js';
 
+// What each size of bargain is called. The player never sees the word "tier".
+const TIER_NAME = { 1: 'A small thing', 2: 'A real price', 3: 'Everything it can ask' };
+
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
@@ -521,6 +524,48 @@ export class Screens {
   }
 
   // ----------------------------------------------------------- pause
+  // ---------------------------------------------------------- altar
+  // Three offers at most, ordered smallest first so the eye reads up to the
+  // expensive one rather than being hit with it. Walking away is a button of
+  // the same size as the rest: it is a real answer, not a cancel.
+  screen_altar(data = {}) {
+    const panel = el('div', 'panel wide');
+    panel.appendChild(el('h2', 'screen-title', 'The altar wants paying'));
+    panel.appendChild(el('p', 'screen-sub',
+      'It will answer one question. It has already decided what each answer costs.'));
+
+    const grid = el('div', 'offer-grid');
+    const offers = (data.offers || []).slice().sort((a, b) => a.tier - b.tier);
+    for (const offer of offers) {
+      const card = el('button', 'offer-card tier' + offer.tier);
+      card.type = 'button';
+      card.appendChild(el('span', 'offer-tier', TIER_NAME[offer.tier] || ''));
+      card.appendChild(el('span', 'offer-name', offer.reward.name));
+      card.appendChild(el('span', 'offer-text', offer.reward.text));
+      const cost = el('span', 'offer-cost');
+      cost.appendChild(el('b', null, offer.sacrifice.name));
+      cost.appendChild(el('span', null, offer.costText));
+      card.appendChild(cost);
+      card.addEventListener('click', this.click(() => {
+        if (this.host.takeOffer) this.host.takeOffer(offer);
+      }));
+      grid.appendChild(card);
+    }
+    if (!offers.length) {
+      grid.appendChild(el('p', 'hint', 'It looks at you and finds nothing it wants.'));
+    }
+    panel.appendChild(grid);
+
+    const row = el('div', 'btn-row');
+    row.appendChild(button('Walk away', 'btn primary',
+      this.click(() => { if (this.host.leaveAltar) this.host.leaveAltar(); })));
+    panel.appendChild(row);
+    panel.appendChild(el('p', 'hint',
+      'Nothing here is a trick. What it says it will take, it takes; what it '
+      + 'says it will give, it gives. Whether that was worth it is your problem.'));
+    return panel;
+  }
+
   screen_pause(data = {}) {
     const run = this.host.run;
     const panel = el('div', 'panel');

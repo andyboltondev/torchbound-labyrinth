@@ -656,6 +656,31 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
 .relic-pill b { color: var(--gold); font-weight: 600; }
 .hint { font-size: 12px; color: var(--stone-dim); line-height: 1.6; }
 
+/* The altar's offers. Three cards, warmer and more expensive left to right,
+   so the price is legible before the reward is read. */
+.offer-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 4px 0 18px; }
+.offer-card {
+  display: flex; flex-direction: column; gap: 7px; text-align: left; cursor: pointer;
+  padding: 15px 16px 14px; border-radius: 6px; font-family: var(--ui);
+  background: rgba(14,12,20,.82); border: 1px solid var(--panel-edge);
+  transition: border-color .12s, transform .08s, background .12s;
+}
+.offer-card:hover, .offer-card:focus-visible {
+  border-color: rgba(196,106,216,.75); background: rgba(26,18,34,.9); transform: translateY(-2px);
+  outline: none;
+}
+.offer-tier { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--stone-dim); }
+.offer-name { font-family: var(--display); font-size: 19px; color: var(--parchment); }
+.offer-text { font-size: 12.5px; color: var(--stone); line-height: 1.55; flex: 1 1 auto; }
+.offer-cost {
+  display: flex; flex-direction: column; gap: 2px; margin-top: 4px; padding-top: 9px;
+  border-top: 1px solid rgba(196,106,216,.22); font-size: 12px; color: #d9a0e8;
+}
+.offer-cost b { font-family: var(--display); font-size: 13.5px; font-weight: 500; color: #e0a8f0; }
+.offer-card.tier1 { border-left: 3px solid rgba(143,183,255,.5); }
+.offer-card.tier2 { border-left: 3px solid rgba(232,180,92,.55); }
+.offer-card.tier3 { border-left: 3px solid rgba(224,90,60,.65); }
+
 /* The build stamp. Deliberately the quietest thing on the panel: it exists so
    a screenshot can be traced back to a commit, not to be read while playing. */
 .build-stamp {

@@ -428,4 +428,5 @@ const PROP_MARKS = {
   // left one is part of the point.
   prisoner: { colour: '#c9b9d8', shape: 'up', size: 2.2, keepWhenSpent: true },
   mapScrap: { colour: '#e8d9a8', shape: 'square', size: 2 },
+  altar: { colour: '#c46ad8', shape: 'diamond', size: 3, keepWhenSpent: true },
 };
