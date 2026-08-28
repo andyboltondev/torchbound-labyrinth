@@ -28,6 +28,7 @@ import { HP_FLOOR, REWARDS, SACRIFICES, REWARD_BY_ID, SACRIFICE_BY_ID } from '..
 import { toCsv, parseCsv, normalise, rank, merge, scramble, unscramble, HALL_SIZE }
   from '../src/game/hall.js';
 import { hazardBudget, HAZARDS } from '../src/gen/biomes.js';
+import { shoveOutcome } from '../src/gen/shove.js';
 import { DIFFICULTIES, DIFFICULTY_LIST } from '../src/game/difficulty.js';
 
 const tests = [];
@@ -675,12 +676,12 @@ test('killing a captive that did not ask for it costs, and mercy does not', () =
   const afraid = {
     type: 'prisoner', x: cx + 1.5, y: cy + 0.5, wallX: 0, wallY: -1, mood: 'afraid',
     seed: 0.3, spoken: false, searched: false, freed: false, knows: 'exit', carries: null,
-    id: 'captive_afraid',
+    pleadToDie: false, id: 'captive_afraid',
   };
   const begging = {
     type: 'prisoner', x: cx + 1.5, y: cy + 2.5, wallX: 0, wallY: -1, mood: 'begging',
     seed: 0.7, spoken: false, searched: false, freed: false, knows: 'nothing', carries: null,
-    id: 'captive_begging',
+    pleadToDie: true, id: 'captive_begging',
   };
   level.props.push(afraid, begging);
 
@@ -1875,10 +1876,10 @@ test('the cheapest tier gained no new work', () => {
 
 // --- the buried ------------------------------------------------------------
 
-function findBuried(prefix) {
+function findBuried(prefix, want = null) {
   for (let i = 0; i < 60; i++) {
     const made = makeWorld(6, prefix + '-' + i);
-    const buried = made.world.enemies.find((e) => e.entombed);
+    const buried = made.world.enemies.find((e) => e.entombed && (!want || want(e)));
     if (buried) return { ...made, buried };
   }
   return null;
@@ -1905,7 +1906,9 @@ test('a buried thing has no tell at all until it is stood on', () => {
 });
 
 test('walking onto one brings it up, and the floor keeps the hole', () => {
-  const found = findBuried('unearth');
+  // Not a sealed one: those are held for an encounter that has not fired yet,
+  // and staying under the floor is exactly what they are supposed to do.
+  const found = findBuried('unearth', (e) => !e.sealed);
   assert(found, 'nothing buried to stand on');
   const { world, buried } = found;
   const holesBefore = world.level.decals.filter((d) => d.kind === 'hole').length;
@@ -2049,6 +2052,43 @@ test('a pushable stone is never on the way to anything the depth requires', () =
   assert(seen > 0, 'sixty depths produced no pushable stones at all');
 });
 
+test('no sequence of shoves can strand a depth', () => {
+  // The containment rule above is about the tile a stone stands on. This is
+  // about every tile it can be driven onto, which is the question that costs
+  // runs: a stone only ever moves away from whoever is pushing it, so one
+  // walked into a one-tile doorway and jammed against the wall behind it
+  // closes that doorway for good, with the player on whichever side they
+  // happened to be standing.
+  //
+  // Found the hard way -- the autopilot wedged on a depth where three presses
+  // of one direction sealed the only way south.
+  let stones = 0;
+  let checked = 0;
+  for (let depth = 3; depth <= 15; depth += 3) {
+    for (let i = 0; i < 8; i++) {
+      const level = generateLevel({ depth, seed: 'strand-' + depth + '-' + i, context: {} });
+      if (!level.blocks.length) continue;
+      checked++;
+      stones += level.blocks.length;
+      const out = shoveOutcome(level.grid, {
+        entrance: level.entrance,
+        blocks: level.blocks,
+        pockets: level.blockPockets,
+        targets: [level.stairs].concat(level.keys).concat(level.gates),
+        passable: (x, y, t) =>
+          t === T.FLOOR || t === T.STAIRS || t === T.ENTRANCE || t === T.GATE,
+      });
+      // Unproven counts as a failure here for the same reason the generator
+      // declines it: a search that ran out of room has not shown anything.
+      assert(out.proven, `depth ${depth} seed ${i}: the shove search did not finish`);
+      assert(out.safe, `depth ${depth} seed ${i} can be stranded -- `
+        + (out.example ? out.example.steps.join('; ') : ''));
+    }
+  }
+  assert(checked > 0, 'no depth in the sample carried a stone');
+  return `${stones} stones over ${checked} depths`;
+});
+
 test('a stone shoves one tile, and never into what it is guarding', () => {
   const found = findBlockLevel('shove');
   assert(found, 'no depth with a stone on it');
@@ -2066,7 +2106,7 @@ test('a stone shoves one tile, and never into what it is guarding', () => {
   assert(lanes.length > 0, 'a stone that cannot be shoved anywhere at all');
 
   const from = { x: block.x, y: block.y };
-  world._shove(block, lanes[0]);
+  world._moveBlock(block, lanes[0]);
   assert(block.x === from.x + lanes[0].x && block.y === from.y + lanes[0].y,
     'a shove moved the stone somewhere other than one tile on');
   // Occupancy moves on the instant, because the player steps into the vacated
@@ -2074,6 +2114,76 @@ test('a stone shoves one tile, and never into what it is guarding', () => {
   assert(!world.blockAt(from.x, from.y), 'the stone is still occupying the tile it left');
   assert(world.blockAt(block.x, block.y) === block, 'the stone is not where it went');
   assert(tileOpen(world, from.x, from.y), 'the tile a stone left is still closed');
+});
+
+test('a stone comes with you once you have hold of it', () => {
+  const found = findBlockLevel('pull');
+  assert(found, 'no depth with a stone on it');
+  const { world } = found;
+  const block = world.blocks[0];
+
+  // A lane the stone can travel, with somewhere for the player to back away
+  // to on the far side of it: pull needs one more tile of room than shove.
+  const lane = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }]
+    .find((d) => tileOpen(world, block.x + d.x, block.y + d.y)
+      && !world.blockPockets.has(world.grid.idx(block.x + d.x, block.y + d.y))
+      && tileOpen(world, block.x + d.x * 2, block.y + d.y * 2));
+  if (!lane) return 'skipped -- no stone with room to be drawn along';
+
+  // Stand in front of it, facing back at it.
+  place(world, block.x + lane.x, block.y + lane.y);
+  world.player.faceX = -lane.x; world.player.faceY = -lane.y;
+  world.updateInteractTarget();
+  assert(world.interactTarget && world.interactTarget.type === 'stone',
+    'standing against a stone offered nothing');
+
+  // Backing away without hold of it leaves it exactly where it was.
+  const home = { x: block.x, y: block.y };
+  step(world, 20, { moveX: lane.x, moveY: lane.y, slash: false, fire: false });
+  assert(block.x === home.x && block.y === home.y,
+    'a stone nobody had hold of followed the player anyway');
+
+  // Take hold, and the same walk brings it.
+  place(world, home.x + lane.x, home.y + lane.y);
+  world.player.faceX = -lane.x; world.player.faceY = -lane.y;
+  world.updateInteractTarget();
+  world.interact();
+  assert(world.heldBlock === block, 'the stone was not taken hold of');
+  step(world, 20, { moveX: lane.x, moveY: lane.y, slash: false, fire: false });
+  assert(block.x === home.x + lane.x && block.y === home.y + lane.y,
+    'a held stone did not come along');
+  assert(!world.blockAt(home.x, home.y), 'the stone is still holding the tile it left');
+
+  // And it is the same discovery a shove is: counted once, on one tally.
+  assert(block.moved, 'drawing a stone off its alcove did not count as finding it');
+  assert(world.secretsFound === 1, 'a pulled stone paid out twice or not at all');
+});
+
+test('a stone is let go of the moment it is not against you', () => {
+  const found = findBlockLevel('letgo');
+  assert(found, 'no depth with a stone on it');
+  const { world } = found;
+  const block = world.blocks[0];
+  const side = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }]
+    .find((d) => tileOpen(world, block.x + d.x, block.y + d.y));
+  assert(side, 'a stone with nowhere to stand beside it');
+
+  place(world, block.x + side.x, block.y + side.y);
+  world.player.faceX = -side.x; world.player.faceY = -side.y;
+  world.updateInteractTarget();
+  world.interact();
+  assert(world.heldBlock === block, 'the stone was not taken hold of');
+
+  // Action again is letting go, and so is ending up anywhere that is not
+  // beside it -- a stone is held with a hand, not with a flag.
+  world.updateInteractTarget();
+  world.interact();
+  assert(!world.heldBlock, 'the stone could not be let go of');
+
+  world.takeHold(block);
+  place(world, block.x + side.x * 4, block.y + side.y * 4);
+  world.updateInteractTarget();
+  assert(!world.heldBlock, 'a stone was still held from across the room');
 });
 
 test('shoving a stone counts once, on the same tally as a cracked wall', () => {
@@ -2086,7 +2196,7 @@ test('shoving a stone counts once, on the same tally as a cracked wall', () => {
   assert(lane, 'nowhere to shove it');
 
   const before = run.score.level.secretsFound;
-  world._shove(block, lane);
+  world._moveBlock(block, lane);
   assert(run.score.level.secretsFound === before + 1, 'a shove scored no secret');
   assert(block.moved, 'a shoved stone was not marked as opened');
 
@@ -2094,7 +2204,7 @@ test('shoving a stone counts once, on the same tally as a cracked wall', () => {
   const again = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }]
     .find((d) => world._canShove(block, d));
   if (again) {
-    world._shove(block, again);
+    world._moveBlock(block, again);
     assert(run.score.level.secretsFound === before + 1, 'the same stone paid out twice');
   }
 });

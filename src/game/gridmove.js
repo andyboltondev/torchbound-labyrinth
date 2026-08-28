@@ -111,6 +111,11 @@ export function doorwayStep(world, tileX, tileY, want, heading, isBlocked) {
     // is not a door to be found -- shoving past bodies is a separate feature.
     const ax = tileX + dir.x, ay = tileY + dir.y;
     if (tileOpen(world, ax, ay)) continue;
+    // Neither is a stone that moves. It reads as solid to everything that
+    // walks, but pressing into one is a shove rather than a refusal, and the
+    // assist must not spend that press on a sidestep -- in a one-tile corridor
+    // that silently walks the player away from the only way through.
+    if (world.blockAt && world.blockAt(ax, ay)) continue;
 
     for (const side of [{ x: -dir.y, y: dir.x }, { x: dir.y, y: -dir.x }]) {
       const sx = tileX + side.x, sy = tileY + side.y;

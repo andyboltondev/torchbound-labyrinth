@@ -36,7 +36,7 @@ export const CONTROLS = [
   { id: 'fire', label: 'Loose a bolt', keys: 'F / K', touch: 'FIRE', group: 'fight',
     note: 'once you have found a crossbow' },
   { id: 'action', label: 'Act', keys: 'E / Enter', touch: 'ACT', group: 'fight',
-    note: 'gates, stairs, chests, shrines, fires, captives, altars' },
+    note: 'gates, stairs, chests, shrines, fires, captives, altars, stones' },
   { id: 'torch', label: 'Douse or relight your torch', keys: 'T / Q', touch: 'TORCH', group: 'fight' },
   { id: 'map', label: 'Open the map', keys: 'M', touch: 'map button', group: 'screens' },
   { id: 'bestiary', label: 'Bestiary', keys: 'B', touch: 'bestiary button', group: 'screens' },

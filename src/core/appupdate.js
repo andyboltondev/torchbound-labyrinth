@@ -132,3 +132,69 @@ export function markBuildSeen() { save(SEEN_KEY, VERSION.build); }
 export function noteFirstVisit() {
   if (load(SEEN_KEY, null) === null) markBuildSeen();
 }
+
+// --- keeping it -------------------------------------------------------------
+//
+// Whether the game can be installed is the browser's decision, not ours: it
+// wants a manifest, an icon big enough to draw a tile with, and a worker that
+// can serve the thing offline. When Chrome has satisfied itself of all three
+// it offers `beforeinstallprompt`, and holding on to that event is the only
+// way to ask later, at a moment the player chose.
+//
+// The event is caught at module load rather than from a screen, because it
+// fires once, early, and usually before any menu has been drawn. Taking it
+// means Chrome's own banner is not shown -- which is the trade: one offer, in
+// the game's own voice, in a place it can sit quietly until it is wanted.
+// Desktop keeps the install control in its address bar either way.
+
+let offer = null;
+const watchers = new Set();
+
+// A watcher that returns false has gone off screen with the panel it was drawn
+// on, and is dropped. Screens are rebuilt every time they are shown, so
+// without this the set would grow for the whole session.
+function tellWatchers(available) {
+  for (const watcher of watchers) {
+    if (watcher(available) === false) watchers.delete(watcher);
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeinstallprompt', (event) => {
+    event.preventDefault();
+    offer = event;
+    tellWatchers(true);
+  });
+  window.addEventListener('appinstalled', () => {
+    offer = null;
+    tellWatchers(false);
+  });
+}
+
+export function canInstall() { return !!offer; }
+
+export function onInstallOffer(watcher) {
+  watchers.add(watcher);
+  return () => watchers.delete(watcher);
+}
+
+// Already installed, or opened from the home screen: there is nothing to offer.
+export function runningInstalled() {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  return window.matchMedia('(display-mode: standalone)').matches
+    || window.matchMedia('(display-mode: fullscreen)').matches
+    || window.navigator.standalone === true;
+}
+
+// One shot: the event cannot be prompted with twice, so whatever the player
+// answers, the offer is spent and the control goes away.
+export function promptInstall() {
+  const event = offer;
+  if (!event) return Promise.resolve(false);
+  offer = null;
+  event.prompt();
+  return Promise.resolve(event.userChoice)
+    .then((choice) => !!choice && choice.outcome === 'accepted')
+    .catch(() => false)
+    .then((accepted) => { tellWatchers(false); return accepted; });
+}

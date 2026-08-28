@@ -8,8 +8,17 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <title>Torchbound Labyrinth</title>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Torchbound">
+<meta name="application-name" content="Torchbound">
 <link rel="stylesheet" href="src/ui/styles.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230b0d12'/><path d='M16 5l3 9h-6z' fill='%23ff8a3a'/><rect x='14.5' y='13' width='3' height='14' fill='%235b4128'/></svg>">
+<!-- The mark is drawn by tools/make_icons.py: a square spiral with the torch
+     at the heart of it. Two favicon sizes because a 16-pixel tab icon and a
+     512-pixel home-screen tile are different drawings, not one scaled. -->
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
 </head>
 <body>
 <div id="app">

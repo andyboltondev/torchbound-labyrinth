@@ -94,6 +94,34 @@ The first load after an update says so once, on the home screen, with a link to
 somebody without ever mentioning it is a game where every change reads as a bug
 they have found. A first-ever visit is not an update and is recorded silently.
 
+### Installing it
+
+`manifest.webmanifest` and the precaching worker together make the game a
+progressive web app, so Chrome offers to install it: its own icon, its own
+window, no address bar, and on a phone the same thing through *Add to Home
+Screen*. `display` is `standalone` with `display_override` reaching for
+`fullscreen` first, so a browser that understands the newer field gives a game
+the whole screen and one that does not still gets a sensible window.
+
+Whether it can be installed is the browser's decision, not the page's -- it
+wants the manifest, an icon big enough to draw a tile with, and a worker that
+can serve the thing offline. When Chrome has satisfied itself of all three it
+offers `beforeinstallprompt`, and `src/core/appupdate.js` catches that at
+module load, because it fires once and early, usually before a menu has been
+drawn. Holding the event is the only way to ask later, at a moment the player
+chose: the **Install** button beside the build number, which is hidden until
+there is something to offer and gone once it has been spent.
+
+The icons are drawn by `tools/make_icons.py` rather than kept as binaries
+nobody can edit -- a square spiral with the torch at the heart of it, in the
+palette the game already uses. Re-run it after changing the mark and commit
+what it writes. The small sizes are drawn with fewer turns and snapped to whole
+pixels rather than being the large one scaled down: at sixteen pixels across,
+antialiasing spends the gap between one turn of the spiral and the next on a
+grey edge, and the whole thing closes up into a blob. `icons/` and the manifest
+are precached like everything else, so an installed copy can draw its own tile
+with no connection.
+
 ### During development
 
 The worker is **off on localhost**, because `tools/serve.py` sends `no-store`
@@ -137,7 +165,9 @@ rather than doing nothing, so a doorway you are a tile short of does not have
 to be lined up with by hand. The tolerance is exactly one tile and the wall
 has to continue past the gap, so a lone pillar is still an obstacle to walk
 round; *Settings > Blocked direction > Stop* opts out of it along with the
-rest of the movement assist.
+rest of the movement assist. A pushable stone is explicitly not one of the
+walls this applies to: pressing into one is a shove, and letting the assist
+walk you round it silently spent the press that would have moved it.
 
 On a touch screen the default movement pad is a **diamond**: four buttons at the
 corners of a shape wider than it is tall, in the same 2:1 proportion as a floor
@@ -713,7 +743,14 @@ behind it and something worth having inside. The stone is solid to everything
 that walks; walking into it is a shove rather than a step, on the same press
 that walks you down a corridor, so there is no verb to learn.
 
-Two rules make this safe rather than a way to wedge a depth shut:
+A stone can also be **pulled**. Stand against one, press Action to take hold of
+it, and it follows into the tile you vacate whenever you step directly away.
+Any other step lets go, and so does ending up anywhere that is not beside it,
+so backing out of a dead end never drags one along behind you. Both verbs move
+the stone one tile along a cardinal; what differs is which side of it you are
+standing on, and in a one-tile corridor only one of them is available to you.
+
+Three rules make this safe rather than a way to wedge a depth shut:
 
 * **A stone is never on the route to anything the depth requires.** Checked at
   generation against the level as carved, and asserted again in `validate.js`
@@ -721,9 +758,21 @@ Two rules make this safe rather than a way to wedge a depth shut:
   ground beyond the stones themselves and the pockets they guard. Stated that
   way it also covers key ordering, gate bottlenecks and vault ladders without
   having to reason about each separately.
-* **A stone is never pushed into its own alcove.** That is the one move that
-  would seal the reward away for good, and it is refused at the moment of the
-  push.
+* **A stone is never pushed or pulled into its own alcove.** That is the one
+  move that would seal the reward away for good, and it is refused at the
+  moment of the push.
+* **No sequence of shoves and pulls can strand a depth.** The first rule is
+  about the tile a stone starts on; this one is about every tile it can be
+  driven onto, which is the question that actually costs runs. `gen/shove.js`
+  searches states of *(where every stone stands, which region the player is
+  in)* and asks whether any reachable state is one that no further move
+  recovers from. Placement declines anything it cannot prove safe, the
+  validator asserts the same, and unproven counts as unsafe in both.
+
+  This is not made redundant by pull. A push leaves you behind the stone and a
+  pull needs you in front of it, so in a one-tile passage a stone you have
+  walked to the end is still a door that closed once, and both verbs have to
+  be modelled rather than assuming one undoes the other.
 
 The orphan sweep runs with blocks *passable*, because a pocket behind a stone
 that moves is not stranded floor -- exactly the same two-model treatment

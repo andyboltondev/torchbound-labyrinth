@@ -14,6 +14,15 @@ SHOTS = os.path.join(ROOT, "shots")
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    # Stated rather than left to the platform: whether Python knows this
+    # extension depends on the machine's own mime registry, and a manifest
+    # served as a stream of bytes is a manifest Chrome will not offer to
+    # install from. Static hosts get it right on their own.
+    extensions_map = {
+        **http.server.SimpleHTTPRequestHandler.extensions_map,
+        ".webmanifest": "application/manifest+json",
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=ROOT, **kwargs)
 
