@@ -11,7 +11,8 @@ import { RELIC_BY_ID } from '../game/relics.js';
 import { formatScore, depthLabel } from '../core/util.js';
 import { drawEnemy, drawBoss } from '../render/actors.js';
 import { BUILD_STRING, BUILD_DETAIL, VERSION } from '../core/version.js';
-import { updatedSinceLastVisit, markBuildSeen } from '../core/appupdate.js';
+import { updatedSinceLastVisit, markBuildSeen, canInstall, onInstallOffer,
+  promptInstall, runningInstalled } from '../core/appupdate.js';
 import { RELEASES, REPO } from '../game/releases.js';
 
 // What each size of bargain is called. The player never sees the word "tier".
@@ -161,8 +162,25 @@ export class Screens {
     links.appendChild(button('What changed', 'btn ghost small',
       this.click(() => this.show('releases', { from }))));
     links.appendChild(this._bugReportButton(from === 'pause' ? this.host.run : null));
+    links.appendChild(this._installButton());
     wrap.appendChild(links);
     return wrap;
+  }
+
+  // Keep a copy on the device. Drawn hidden and shown only once the browser
+  // has said it would take one, which can be after this panel exists -- hence
+  // the watcher, which retires itself along with the panel it was drawn on.
+  _installButton() {
+    const install = button('Install', 'btn ghost small',
+      this.click(() => promptInstall()));
+    install.title = 'Keep Torchbound Labyrinth on this device, and play it offline';
+    install.hidden = !canInstall() || runningInstalled();
+    onInstallOffer((available) => {
+      if (!install.isConnected) return false;
+      install.hidden = !available || runningInstalled();
+      return true;
+    });
+    return install;
   }
 
   // The shortest honest statement of the controls, for the home screen: the

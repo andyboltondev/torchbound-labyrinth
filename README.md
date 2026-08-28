@@ -94,6 +94,34 @@ The first load after an update says so once, on the home screen, with a link to
 somebody without ever mentioning it is a game where every change reads as a bug
 they have found. A first-ever visit is not an update and is recorded silently.
 
+### Installing it
+
+`manifest.webmanifest` and the precaching worker together make the game a
+progressive web app, so Chrome offers to install it: its own icon, its own
+window, no address bar, and on a phone the same thing through *Add to Home
+Screen*. `display` is `standalone` with `display_override` reaching for
+`fullscreen` first, so a browser that understands the newer field gives a game
+the whole screen and one that does not still gets a sensible window.
+
+Whether it can be installed is the browser's decision, not the page's -- it
+wants the manifest, an icon big enough to draw a tile with, and a worker that
+can serve the thing offline. When Chrome has satisfied itself of all three it
+offers `beforeinstallprompt`, and `src/core/appupdate.js` catches that at
+module load, because it fires once and early, usually before a menu has been
+drawn. Holding the event is the only way to ask later, at a moment the player
+chose: the **Install** button beside the build number, which is hidden until
+there is something to offer and gone once it has been spent.
+
+The icons are drawn by `tools/make_icons.py` rather than kept as binaries
+nobody can edit -- a square spiral with the torch at the heart of it, in the
+palette the game already uses. Re-run it after changing the mark and commit
+what it writes. The small sizes are drawn with fewer turns and snapped to whole
+pixels rather than being the large one scaled down: at sixteen pixels across,
+antialiasing spends the gap between one turn of the spiral and the next on a
+grey edge, and the whole thing closes up into a blob. `icons/` and the manifest
+are precached like everything else, so an installed copy can draw its own tile
+with no connection.
+
 ### During development
 
 The worker is **off on localhost**, because `tools/serve.py` sends `no-store`

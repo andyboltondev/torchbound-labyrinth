@@ -1,8 +1,15 @@
 {
   "version": "1.3.0",
-  "build": "20260828-053403",
+  "build": "20260828-055024",
   "assets": [
+    "./icons/apple-touch-icon.png",
+    "./icons/favicon-16.png",
+    "./icons/favicon-32.png",
+    "./icons/icon-192.png",
+    "./icons/icon-512.png",
+    "./icons/icon-maskable-512.png",
     "./index.html",
+    "./manifest.webmanifest",
     "./src/audio/audio.js",
     "./src/audio/music.js",
     "./src/audio/reverb.js",
