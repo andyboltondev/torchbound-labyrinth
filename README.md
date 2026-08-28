@@ -178,6 +178,7 @@ game calls.
 | Slash | `Space` / `J` | SLASH |
 | Fire crossbow | `F` / `K` | FIRE (appears once you own one) |
 | Action (doors, gates, stairs, chests, shrines, fires, captives, altars) | `E` / `Enter` | ACT |
+| Keep hold of a stone or a slab | hold `E` / `Enter` | hold ACT |
 | Douse or relight your torch | `T` / `Q` | TORCH |
 | Open the map | `M` | Map button, or tap the minimap |
 | Bestiary | `B` | bestiary button |
@@ -196,6 +197,10 @@ the reason the home screen did not fit on a phone.
 
 Stairs never trigger by walking onto them -- they always require an explicit
 Action press, so you cannot fall into the next depth by accident.
+
+Action against a stone takes hold of it, and **holding the key keeps hold**: a
+tap latches the grip and holding it keeps the grip, so both habits work and
+neither had to become a setting. Letting the key go lets the stone go.
 
 Pressing into the stone beside a one-tile opening steps you into the opening
 rather than doing nothing, so a doorway you are a tile short of does not have
@@ -459,6 +464,21 @@ trade-off rather than a free upgrade: most creatures detect you further away
 when you are lit, while things that prefer the dark see you *better* when your
 flame is low.
 
+Shadows are cast from the **edges** of a blocker, which is right, but marking
+tiles from those same edges is not: a tile only clipped by the corner of the
+cone was being lit, so walking round a corner lit ground on the far side of the
+wall you had just come round. A tile is now shown only once **its own centre**
+is inside the cone. Masonry is the single exception -- a wall face fronting
+ground that is already lit is a wall you can see, whatever its centre says, and
+dropping those punches holes in the architecture -- so solid tiles are also
+shown when the tile one step nearer the light along that octant is lit and
+open.
+
+Measured over 25 vantage points on one depth, floor lit *through* a wall fell
+from 102 tiles to 5, while floor in plain sight that failed to light went from
+3 to 4. Both were checked against an independent ray cast (`hasLineOfSight`),
+not against the caster's own opinion.
+
 Tiles are baked once per biome in three versions -- lit, black silhouette and a
 cold, dimmed "memory" copy -- so the whole lighting and map-memory model costs
 at most two `drawImage` calls per tile. The whole set bakes in about 50ms.
@@ -612,6 +632,34 @@ Walls are cut away automatically when they would cover the player, an enemy, a
 key, a gate, a discovered cracked wall, a pickup or the exit. The test is a real
 screen-space overlap, so only what is genuinely in the way fades.
 
+### Large displays
+
+Zoom is chosen so the torch pool fits across the narrow axis with a little
+margin. Past the size the view was designed for that fit keeps growing, and
+spending all of it would fill a large monitor with a small bright pool in an
+ocean of black -- the extra pixels would go on darkness. So growth past `1.3` is
+taken at 42% of the rate and stops at `1.85`: a big display gets a noticeably
+bigger scene *and* still sees more of the labyrinth around it.
+
+| Display | Zoom | Chart |
+| --- | --- | --- |
+| 375x700 | 0.62 | 96px |
+| 1366x768 | 1.37 | 154px |
+| 1920x1080 | 1.63 | 216px |
+| 2560x1440 | 1.85 | 260px |
+
+The corner chart's ceiling used to be a flat 172px, which is a fifth of a phone
+screen and a postage stamp on a monitor. It scales with the display and stops at
+260px, which is still a corner rather than a second view.
+
+The interface widens with it: panels go to 920px past 1280 wide and 1040px past
+1680, the wide panels to 1240 and 1440, and the relic, difficulty and bestiary
+grids take another column. On a tall window the Hall of Fame shows most of the
+board at once rather than 46% of the viewport -- which is the whole difference
+between a leaderboard you read and one you scroll. Every width is still bounded,
+because a line of text that runs the whole width of a 27-inch display is
+unreadable however much room there was for it.
+
 ## Sound
 
 Nothing is downloaded. Every effect is built from oscillators and filtered
@@ -715,7 +763,7 @@ pattern generator, across five scenes:
 | Scene | Character | Shape |
 | --- | --- | --- |
 | Menu | Melancholy | Slow, minor, pad and drone, one distant horn line, no drum |
-| Hall of Fame | Sombre | Fuller, with a rising figure and a low swell under it |
+| Hall of Fame | A lament | One reed voice over a slow bell, played alone. See below |
 | The labyrinth | Atmospheric, adaptive | The layered score above, plus a rocky layer that fades in above 40% intensity |
 | Boss hall | Energetic action | The riff machinery with everything open, drum on every beat |
 | Relic table | Relaxed and upbeat | Swung sixteenths, a bouncing bass, a bright tune, snare on two and four |
@@ -727,6 +775,62 @@ guitar is something that happens to you.
 Walking into a room nobody has been into yet bends the drone up a whole tone,
 opens its filter and puts an unresolved suspended fourth over the pad for two
 seconds. Once per room.
+
+#### Movements
+
+The labyrinth's own score used to be one sixteen-step figure with the gains
+moved around it, which meant a twenty-minute descent heard the same bar all the
+way down -- the mix changed and the *music* did not. It now walks through five
+**movements**, each with its own chord walk, its own drum mask, its own bass
+placement and its own idea of how much melody is allowed:
+
+| Movement | Character | Comes up when |
+| --- | --- | --- |
+| hollow | Two chords and a drum you feel rather than hear | Calm |
+| walk | The figure the score has always played | Anywhere |
+| turning | A chord walk that keeps arriving somewhere it did not mean to | Anywhere |
+| pressing | Low, dense, minor second | The depth has noticed you |
+| vaulted | Open, melodic, long tails | A hall, and calm |
+
+A movement lasts two or three bars, is weighted by intensity and by how open
+the room is, is never chosen twice running, and can only change **on a bar
+line** -- so the score changes its mind without ever changing it mid-phrase. A
+fill announces the change one bar out.
+
+#### Reacting faster
+
+Intensity is filtered asymmetrically now: rising moves at `0.34` per tick,
+falling at `0.045`. Trouble arrives faster than it leaves, which is both how
+relief actually works and the fix for a score that was always describing the
+room you were in a moment ago.
+
+What feeds it also widened. Creatures *chasing* you count for twice what merely
+alerted ones do, the nearest hunter's distance is worth up to a fifth on its
+own, and low health, a sealed room and a doused torch all reach the music.
+Putting your torch out is the loudest thing you can do to the score without
+touching a creature, and it should sound like a decision.
+
+On top of that sits a **sting**: a short push spent by things that *happen*
+rather than by things that are true -- a kill, an alert, a scream, a breach --
+which decays on its own. The smoothing that keeps the music from twitching also
+made it deaf to anything shorter than a second, and most of what happens in this
+game happens in less than a second.
+
+#### The lament
+
+The Hall of Fame is the only screen in the game that is *about* something: a
+list of people who went down and did not come back. So it is the only piece of
+music with no randomness in it anywhere -- a written fourteen-note tune in
+`LAMENT`, played the same way every time you see it, over a slow bell that
+always strikes the tonic and a chord that arrives late.
+
+The voice is a single reed with air in it, slightly flat at the top of its
+breath, with a vibrato that only arrives once a note is held: a person playing,
+not an instrument sounding. The bell is a stack of inharmonic partials with a
+minor third in it, which is what makes it a funeral bell rather than a chime.
+The tune falls, answers itself a step lower each time, and never resolves
+upward. The debt is to the war memorial in Cannon Fodder, which understood that
+what makes a list of the dead land is playing something simple, alone.
 
 Room reverb can be turned off in Settings for a dry mix.
 
@@ -773,6 +877,75 @@ The run carries a **mercy** tally -- `freed − unjustified kills`, allowed to e
 below zero -- and it is written onto the Hall of Fame entry beside the score. It
 is the only number on that board that is not a measure of how good you were.
 
+**They are audible.** A raving one screams -- three shapes of it, a rising
+shriek, a cracked shout that gives out, and one that climbs and then breaks
+into sobbing -- and that is loud enough to bring company, which is the whole
+reason a raving captive is a problem and not just a sad thing to walk past.
+The other two are not problems at all, and that is exactly why they had to stop
+being silent: one that is begging weeps, one that is afraid whimpers, and both
+carry barely at all. You have to walk past one to hear it, which is what makes
+walking past one a decision.
+
+Dying sounds like a person. Mercy is the breath without the cry; a murder is
+the cry as well, and the whole depth hears it.
+
+## Breaches
+
+The labyrinth is not sealed. From the third depth down, a level may carry one
+or two **breaches**: a gap at the foot of a wall where the masonry has failed
+and something has been getting at it from the other side. A cleared corridor is
+not a corridor you own any more.
+
+Where one may be is the whole design of the feature, and it is narrow on
+purpose. The wall behind it has to be a **void** -- an external wall, or four
+tiles of unbroken rock -- because a hole that opened onto the corridor on the
+other side of a one-tile wall would mean the thing coming through it had walked
+round rather than in. It sits in a flat run of wall so it reads as a gap in the
+masonry rather than a dark corner, and never within six tiles of the entrance
+or the stair: arriving somewhere and leaving it are the two moments the player
+is in no position to answer anything.
+
+Only the small and the many come through one. `BREACH_POOL` is the archetypes
+flagged `breaches` -- thralls, hounds, slingers, lurkers, the Gravebound -- and
+never an elite. A hole the size of a dog is not a hole a Root Horror comes
+through, and a labyrinth that can quietly refill itself with elites is one
+where clearing a room means nothing.
+
+Three limits hold the line between *pressure* and *treadmill*:
+
+| Limit | Value | Why |
+| --- | --- | --- |
+| Alive at once, across the depth | `2 + depth/6`, capped at 4 | One short of what you can hold a corridor against |
+| Total per breach, per depth | 6 | Standing next to one is a finite problem; waiting can win |
+| Gap between spawns | ~34s, jittered ±25% | A breach is an event, not a tap left running |
+
+A spawn is also refused within 2.2 tiles of the player, beyond 26, and onto
+ground that is occupied.
+
+**You hear it before you see it.** Two seconds out, the stone starts giving way
+-- and the sound carries the creature's own voice underneath it, strained and
+pitched up, so a player who has met a Barrow Hound knows what is coming out of
+the wall before it is out. Then it spends **2.1 seconds squeezing through**:
+drawn from the mouth of the hole towards the ground it is claiming, clipped to
+whatever has cleared the masonry and pressed flat across the shoulders. For all
+of that it cannot move, cannot swing and cannot be steered, and it can be cut
+down where it hangs. That is the trade the feature rests on -- the labyrinth
+gets to refill a room, and you get several seconds of warning and a free hit.
+
+Measured against the balance harness with breaches on and off over twenty
+descents each, the curve did not move (median depth 5 against 6, deepest 9
+either way): the bot does not linger long enough on a depth for a second spawn.
+It is a pressure feature, not a difficulty one.
+
+## Everything dies out loud
+
+Every creature has a `voice` -- a timbre, a pitch and how often it speaks -- and
+death is now built from it. The material impact (`enemyDeath`) is the body
+hitting the floor and is the same for everything made of the same stuff;
+`deathCry` is the animal, and it is different for each of the ten timbres, with
+three shapes apiece picked at the moment of the kill. A corridor of thralls does
+not go down in unison.
+
 ## Pushable stones
 
 Some depths have a cut stone standing on the floor with a one-tile alcove
@@ -816,6 +989,64 @@ that moves is not stranded floor -- exactly the same two-model treatment
 cracked walls already get. Shoving one for the first time scores on the same
 "secrets found" tally a cracked wall pays into, so the number means one thing.
 The autopilot completes every depth without touching one.
+
+### Holding on, and what it costs
+
+Pressing Act takes hold; **holding Act keeps hold**, and letting the key go
+lets the stone go. A tap still latches the grip, so both habits work and
+neither had to become a setting.
+
+While you have hold of one:
+
+* **The stone sets your pace.** Your own speed is replaced rather than scaled,
+  because the stone does not care how fast you are. That is also what keeps it
+  under your hands instead of trailing a tile behind: the step and the slide
+  are the same length by construction.
+* **You face the stone.** Walking sideways or backing away from it does not
+  spin you round. Letting go to turn is a decision, not something the feet do
+  on their own.
+* **A shove is slower than a drag.** There is no purchase in a shoulder, only
+  weight, so walking into a stone moves it more grudgingly than taking hold of
+  it does -- and the step that shoves it runs at the stone's pace, so you never
+  walk clear of something still grinding across the tile behind you.
+
+Stone on stone makes the noise it should, for exactly as long as the stone is
+moving: a band of filtered noise with a judder in it where the stone catches
+and lets go, and real weight underneath.
+
+### Slabs
+
+From the third depth down, one of the stones on a level may be a **slab**: the
+same construction, held to the same three rules, but it is a piece of the
+labyrinth rather than something left in it. It is cut to the full width of its
+tile and to wall height, it is coloured cold like the masonry rather than warm
+like a dressed stone, and at the edge of the torchlight it reads as wall.
+
+What gives it away is the **grooves worn into the floor** either side of it --
+straight, parallel, the full length of the tile, which is not how anything
+alive scratches stone. Those are laid during carving rather than by the decal
+table, because they identify a mechanism and the table is forbidden to do that
+(see below); they live in `level.marks` and are drawn through the same painter,
+on every quality tier.
+
+A slab grinds rather than slides. It is roughly two and a half times slower per
+tile than a stone, it walks you at about a sixth of your ordinary pace, and it
+only travels **two tiles from where it was set** -- as far as its grooves go.
+Reach that limit and the hand comes off it. What it is standing over is worth
+the work: a chest or a hoard rather than a potion.
+
+## Stones stop light
+
+A stone the size of a person is as opaque as the wall it was cut from, and the
+field of view treats it that way: `Visibility.update` takes a set of tile
+indices that block sight without being masonry, and the world rebuilds that set
+only when a stone actually moves.
+
+This is what makes an alcove an alcove. The tile behind a stone is carved floor
+with something on it, and before this the torch simply lit it through the
+granite -- the reward was plainly visible from the corridor and the shove was a
+formality. Now it is dark until the stone is out of the way, the prop behind it
+is `hidden` until the stone first moves, and finding it is a discovery.
 
 ## Marks on the floor
 

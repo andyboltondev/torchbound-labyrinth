@@ -2,7 +2,7 @@
 // so animation is continuous (no sprite-sheet stepping) and every enemy can
 // have a genuinely different silhouette without an art pipeline.
 
-import { screenX, screenY } from './iso.js';
+import { screenX, screenY, TILE_W, HALF_W, HALF_H } from './iso.js';
 import { rgba, shade, mix } from './palette.js';
 
 const TAU = Math.PI * 2;
@@ -674,6 +674,27 @@ export function drawEnemy(ctx, e, t) {
 
   if (e.dormant) { drawDormant(ctx, e, sx, sy, t, s); return; }
 
+  // Squeezing out of a hole. The body is drawn from the gap in the wall
+  // towards the ground it is claiming, clipped to whatever has cleared the
+  // masonry so far and squashed flat across the shoulders -- which is what
+  // makes it read as being forced through something too small rather than as
+  // walking out of a doorway.
+  const emerge = e.emerging > 0 ? e.emergeProgress : 1;
+  let clipped = false;
+  if (emerge < 1) {
+    const from = e.emergeFrom || { x: ex, y: ey };
+    const hx = screenX(from.x, from.y);
+    const hy = screenY(from.x, from.y);
+    drawBreachMouth(ctx, hx, hy, emerge);
+    ctx.save();
+    clipped = true;
+    // The window it is coming through: everything above the lip of the hole.
+    ctx.beginPath();
+    ctx.rect(hx - HALF_W - 12, hy - 78, TILE_W + 24, 78 + HALF_H + 4);
+    ctx.rect(sx - HALF_W, sy - 78, TILE_W, 78 + HALF_H + 4);
+    ctx.clip();
+  }
+
   const f = facingInfo(e.faceX, e.faceY);
   const hurt = e.hurtFlash > 0;
   const pal = {
@@ -689,8 +710,18 @@ export function drawEnemy(ctx, e, t) {
   groundShadow(ctx, sx, sy + 1, 13 * s * def.radius * 2.6, 6 * s * def.radius * 2.6, 0.4);
 
   ctx.save();
-  ctx.translate(sx, sy - bob);
-  ctx.scale(f.flip * s, s);
+  if (emerge < 1) {
+    const from = e.emergeFrom || { x: ex, y: ey };
+    const k = emerge * emerge * (3 - 2 * emerge);
+    const hx = screenX(from.x, from.y), hy = screenY(from.x, from.y);
+    // Still mostly in the wall: drawn back at the hole, pressed thin, and
+    // only reaching its own ground as the last of it comes clear.
+    ctx.translate(hx + (sx - hx) * k, hy + (sy - hy) * k - bob * k);
+    ctx.scale(f.flip * s * (0.55 + 0.45 * k), s * (0.45 + 0.55 * k));
+  } else {
+    ctx.translate(sx, sy - bob);
+    ctx.scale(f.flip * s, s);
+  }
 
   switch (def.id) {
     case 'barrow_hound': drawHound(ctx, pal, walk, moving, wind, f); break;
@@ -718,8 +749,34 @@ export function drawEnemy(ctx, e, t) {
     ctx.fillRect(-6, -46, 12, 1.8);
   }
   ctx.restore();
+  if (clipped) ctx.restore();
 
   drawEnemyStatus(ctx, e, sx, sy, t);
+}
+
+// The gap itself, drawn behind whatever is coming through it: black, ragged
+// and with a lip of broken stone. Widens a little as the thing forces it.
+function drawBreachMouth(ctx, hx, hy, k) {
+  const w = 13 + k * 7;
+  const h = 16 + k * 6;
+  ctx.save();
+  ctx.fillStyle = rgba('#05060a', 0.94);
+  ctx.beginPath();
+  ctx.ellipse(hx, hy - 16, w, h, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = rgba('#8b8270', 0.4);
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  for (let i = 0; i <= 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    const r = 1 + ((i * 37) % 11) * 0.018;
+    const px = hx + Math.cos(a) * w * r;
+    const py = hy - 16 + Math.sin(a) * h * r;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawThrall(ctx, pal, walk, wind, f) {

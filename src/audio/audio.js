@@ -363,7 +363,8 @@ const THROTTLE = {
   hit: 0.03, step: 0.1, swing: 0.05, swingWall: 0.06,
   enemyDeath: 0.03, arrowHit: 0.03, alert: 0.18, windup: 0.08, enemyShot: 0.06,
   drip: 0.25, emberPop: 0.2, scurry: 0.8, flutter: 1.2,
-  creatureVoice: 0.35, clatterFar: 0.12, scream: 1.5,
+  stoneScrape: 0.15, slabGrind: 0.3, sob: 2.2, deathCry: 0.05, spawnHole: 0.5,
+  creatureVoice: 0.35, clatterFar: 0.12, scream: 1.5, whimper: 1.4,
 };
 
 const MAX_THROTTLE = Math.max(...Object.values(THROTTLE));
@@ -531,6 +532,87 @@ const EFFECTS = {
       a.ring([2600, 3900, 5400], { dur: 0.4, peak: 0.08, delay: 0.06 });
     }
   },
+  // The scrabble of something forcing itself through a gap.
+  //
+  // Two halves: the stone giving way, which is the same for everything, and
+  // the creature's own voice underneath it, which is not. A player who has
+  // met a Barrow Hound knows what is coming out of the wall before it is out.
+  spawnHole: (a, o) => {
+    const out = !!o.out;
+    a.noise({ dur: out ? 0.5 : 0.9, type: 'bandpass', f0: 760 * vary(0.2), f1: 320, q: 1, peak: 0.13, attack: out ? 0.02 : 0.25 });
+    for (let i = 0; i < (out ? 7 : 5); i++) {
+      a.noise({
+        dur: 0.05, type: 'bandpass', f0: 2000 * vary(0.5), q: 5,
+        peak: 0.07, delay: i * (out ? 0.06 : 0.13),
+      });
+    }
+    a.tone({ freq: 62 * vary(0.1), to: 44, type: 'sine', dur: out ? 0.7 : 1.0, peak: 0.16, attack: 0.1 });
+    // Its voice, strained: something being squeezed does not sound like
+    // itself, so the pitch is pushed up and the shape kept.
+    EFFECTS.creatureVoice(a, {
+      timbre: o.timbre, pitch: (o.pitch || 140) * (out ? 1.05 : 1.18),
+      variant: out ? 2 : 0,
+    });
+  },
+  // What a thing sounds like as it goes down.
+  //
+  // The material impact is the body hitting the floor and is handled by
+  // `enemyDeath`; this is the animal itself, and it is the half that makes one
+  // kill sound different from another. Built out of the creature's own voice
+  // so a Rune Shade dies like a Rune Shade -- pitched down, cut short, and
+  // falling away, because that is what happens to a voice when it stops.
+  deathCry: (a, o) => {
+    const base = (o.pitch || 140) * vary(0.09);
+    const long = 0.55 + (o.variant || 0) * 0.22;
+    switch (o.timbre) {
+      case 'snarl':
+        a.tone({ freq: base * 1.25, to: base * 0.42, type: 'sawtooth', dur: 0.42 * long + 0.2, peak: 0.19 });
+        a.noise({ dur: 0.34, type: 'bandpass', f0: base * 3.4, f1: base * 0.9, q: 1.1, peak: 0.15 });
+        break;
+      case 'whisper':
+        a.noise({ dur: 0.9 * long + 0.3, type: 'bandpass', f0: base * 1.4, f1: base * 0.5, q: 4, peak: 0.11, attack: 0.03 });
+        a.tone({ freq: base * 2, to: base * 0.6, type: 'sine', dur: 0.8, peak: 0.06 });
+        break;
+      case 'clank':
+        a.ring([base * 5.4 * vary(0.05), base * 8.1, base * 11.7], { dur: 0.7, peak: 0.11 });
+        for (let i = 0; i < 4; i++) {
+          a.noise({ dur: 0.08, type: 'bandpass', f0: 1900 * vary(0.4), q: 3, peak: 0.09, delay: 0.06 + i * 0.09 });
+        }
+        break;
+      case 'hiss':
+        a.noise({ dur: 0.7 * long + 0.2, type: 'highpass', f0: base * 4.4, peak: 0.12, attack: 0.02 });
+        a.tone({ freq: base * 0.9, to: base * 0.35, type: 'triangle', dur: 0.5, peak: 0.11 });
+        break;
+      case 'clatter':
+        for (let i = 0; i < 8; i++) {
+          a.noise({ dur: 0.06, type: 'bandpass', f0: base * (3 + i * 0.8) * vary(0.3), q: 5, peak: 0.085, delay: i * 0.055 });
+        }
+        a.tone({ freq: base * 0.8, to: base * 0.3, type: 'square', dur: 0.3, peak: 0.07 });
+        break;
+      case 'moan':
+        a.tone({ freq: base, to: base * 0.34, type: 'sine', dur: 1.1 * long + 0.3, peak: 0.2, attack: 0.02 });
+        a.tone({ freq: base * 1.5, to: base * 0.5, type: 'triangle', dur: 0.9, peak: 0.07 });
+        break;
+      case 'crackle':
+        for (let i = 0; i < 9; i++) {
+          a.noise({ dur: 0.07, type: 'bandpass', f0: 1600 * vary(0.6), q: 2.5, peak: 0.08, delay: i * 0.045 });
+        }
+        a.noise({ dur: 0.6, type: 'highpass', f0: 3200, f1: 900, peak: 0.1 });
+        break;
+      case 'creak':
+        a.tone({ freq: base * 1.3, to: base * 0.4, type: 'sawtooth', dur: 1.2 * long + 0.3, peak: 0.19, attack: 0.02 });
+        a.noise({ dur: 0.7, type: 'bandpass', f0: base * 7, f1: base * 2, q: 4, peak: 0.09 });
+        break;
+      case 'wail':
+        a.tone({ freq: base * 1.6, to: base * 0.45, type: 'triangle', dur: 1.1 * long + 0.3, peak: 0.18 });
+        a.tone({ freq: base * 2.4, to: base * 0.8, type: 'sine', dur: 0.9, peak: 0.08, delay: 0.03 });
+        break;
+      default:   // groan
+        a.tone({ freq: base * 1.1, to: base * 0.36, type: 'sawtooth', dur: 0.8 * long + 0.25, peak: 0.2, attack: 0.015 });
+        a.noise({ dur: 0.55, type: 'lowpass', f0: base * 6, f1: base * 1.6, peak: 0.11 });
+        break;
+    }
+  },
   eliteDeath: (a) => {
     a.tone({ freq: 160, to: 50, type: 'sawtooth', dur: 0.5, peak: 0.24 });
     a.noise({ dur: 0.45, type: 'lowpass', f0: 1800, f1: 140, peak: 0.2 });
@@ -603,6 +685,47 @@ const EFFECTS = {
   },
   lifesteal: (a) => a.tone({ freq: 420, to: 720, type: 'sine', dur: 0.26, peak: 0.14 }),
   // --- world and encounters
+  // Stone dragged over stone. A long band of filtered noise with a slow
+  // wobble on it, which is what a grinding edge is: not one scrape but a
+  // hundred small ones running into each other. `dur` is however long the
+  // stone is actually moving, so the sound stops when the stone does.
+  stoneScrape: (a, o) => {
+    const dur = Math.max(0.2, Math.min(3, o.dur || 0.6));
+    const heavy = !!o.heavy;
+    a.noise({
+      dur, type: 'bandpass', f0: (heavy ? 620 : 900) * vary(0.12),
+      f1: heavy ? 300 : 520, q: 0.8, peak: heavy ? 0.2 : 0.16, attack: 0.05,
+    });
+    a.noise({
+      dur: dur * 0.9, type: 'highpass', f0: 2600 * vary(0.2),
+      peak: heavy ? 0.05 : 0.075, attack: 0.08, delay: 0.02,
+    });
+    // The weight underneath it. Without this a scrape sounds like paper.
+    a.tone({ freq: 74 * vary(0.1), to: 52, type: 'sine', dur, peak: heavy ? 0.2 : 0.14, attack: 0.06 });
+    // Judder: the stone catches and lets go two or three times on its way.
+    const catches = heavy ? 4 : 3;
+    for (let i = 0; i < catches; i++) {
+      a.noise({
+        dur: 0.06, type: 'bandpass', f0: 1500 * vary(0.4), q: 3,
+        peak: 0.06, delay: dur * (0.15 + (i / catches) * 0.7),
+      });
+    }
+  },
+  // A slab of wall coming out of its bed. The same idea, an octave down and
+  // twice as long -- the labyrinth itself is being moved.
+  slabGrind: (a, o) => {
+    const dur = Math.max(0.4, Math.min(4, o.dur || 1.5));
+    a.noise({ dur, type: 'lowpass', f0: 520 * vary(0.12), f1: 190, peak: 0.24, attack: 0.12 });
+    a.noise({ dur: dur * 0.85, type: 'bandpass', f0: 1500 * vary(0.2), f1: 700, q: 1.2, peak: 0.09, attack: 0.15 });
+    a.tone({ freq: 48 * vary(0.08), to: 36, type: 'sine', dur: dur * 1.05, peak: 0.26, attack: 0.1 });
+    a.tone({ freq: 96 * vary(0.08), to: 70, type: 'triangle', dur, peak: 0.1, attack: 0.12 });
+    for (let i = 0; i < 6; i++) {
+      a.noise({
+        dur: 0.09, type: 'bandpass', f0: 900 * vary(0.5), q: 2.5,
+        peak: 0.07, delay: dur * (0.1 + (i / 6) * 0.8),
+      });
+    }
+  },
   stoneBreak: (a) => {
     a.noise({ dur: 0.45, type: 'lowpass', f0: 2400, f1: 200, peak: 0.34 });
     a.tone({ freq: 120, to: 45, type: 'triangle', dur: 0.5, peak: 0.26 });
@@ -721,10 +844,77 @@ const EFFECTS = {
     a.tone({ freq: 260 * vary(0.3), to: 120, type: 'triangle', dur: 0.16, peak: 0.06 });
   },
   // A human throat, which is a sound nothing else down here makes.
-  scream: (a) => {
-    a.tone({ freq: 420 * vary(0.2), to: 780, type: 'sawtooth', dur: 0.9, peak: 0.2, attack: 0.04 });
-    a.tone({ freq: 860 * vary(0.2), to: 640, type: 'triangle', dur: 0.8, peak: 0.09, attack: 0.06 });
+  //
+  // Three shapes, because a person left chained in the dark does not make the
+  // same noise twice: a rising shriek, a cracked shout that gives out, and one
+  // that climbs and then breaks into sobbing. `o.variant` picks; the caller
+  // rolls it, so the same captive is not the same recording all level.
+  scream: (a, o) => {
+    const v = (o && o.variant) || 0;
+    const f = (o && o.pitch ? o.pitch : 420) * vary(0.2);
+    if (v === 1) {
+      // Shouted rather than screamed, and it gives out halfway.
+      a.tone({ freq: f * 1.15, to: f * 0.7, type: 'sawtooth', dur: 0.55, peak: 0.2, attack: 0.02 });
+      a.noise({ dur: 0.5, type: 'bandpass', f0: 1300, f1: 600, q: 1.3, peak: 0.09, attack: 0.03 });
+      a.tone({ freq: f * 0.9, to: f * 0.45, type: 'triangle', dur: 0.45, peak: 0.08, delay: 0.3 });
+      return;
+    }
+    a.tone({ freq: f, to: f * 1.85, type: 'sawtooth', dur: 0.9, peak: 0.2, attack: 0.04 });
+    a.tone({ freq: f * 2.05, to: f * 1.5, type: 'triangle', dur: 0.8, peak: 0.09, attack: 0.06 });
     a.noise({ dur: 0.7, type: 'bandpass', f0: 1600, f1: 900, q: 1.6, peak: 0.07, attack: 0.05 });
+    if (v === 2) {
+      // ...and then it comes apart.
+      for (let i = 0; i < 4; i++) {
+        a.tone({
+          freq: f * (0.9 - i * 0.08), to: f * (0.62 - i * 0.06), type: 'triangle',
+          dur: 0.22, peak: 0.1 - i * 0.015, delay: 0.85 + i * 0.26, attack: 0.03,
+        });
+      }
+    }
+  },
+  // Crying. Not a scream: quieter, closer, and it does not carry -- which is
+  // the point of having both. A raving captive is a landmark you can hear from
+  // the next room; one that is only weeping has to be walked past to be heard,
+  // and that is what makes walking past one a decision.
+  sob: (a, o) => {
+    const f = ((o && o.pitch) || 300) * vary(0.14);
+    const breaths = 2 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < breaths; i++) {
+      const at = i * (0.34 + Math.random() * 0.12);
+      // The catch of the breath going in...
+      a.noise({ dur: 0.11, type: 'bandpass', f0: 900 * vary(0.3), q: 1.4, peak: 0.045, delay: at, attack: 0.05 });
+      // ...and the voice on the way out, falling.
+      a.tone({
+        freq: f * (1 + i * 0.04), to: f * 0.68, type: 'triangle',
+        dur: 0.26, peak: 0.075, delay: at + 0.08, attack: 0.025,
+      });
+      a.tone({
+        freq: f * 1.98, to: f * 1.3, type: 'sine',
+        dur: 0.2, peak: 0.028, delay: at + 0.09, attack: 0.03,
+      });
+    }
+  },
+  // The last one. A voice that starts and does not finish, and then air.
+  //
+  // Everything down here makes a noise when it goes down, and a person has to
+  // make a different one from a thing -- so this is the only death sound in
+  // the game with a throat in it, and it is deliberately quiet. `o.gentle` is
+  // the mercy stroke, which asks for the breath without the cry.
+  lastBreath: (a, o) => {
+    const f = ((o && o.pitch) || 320) * vary(0.16);
+    if (!(o && o.gentle)) {
+      a.tone({ freq: f * 1.5, to: f * 0.55, type: 'sawtooth', dur: 0.3, peak: 0.17, attack: 0.012 });
+      a.noise({ dur: 0.24, type: 'bandpass', f0: 1500, f1: 700, q: 1.5, peak: 0.08 });
+    }
+    a.tone({ freq: f * 0.7, to: f * 0.45, type: 'triangle', dur: 0.5, peak: 0.06, attack: 0.05, delay: 0.16 });
+    a.noise({ dur: 0.7, type: 'lowpass', f0: 900, f1: 240, peak: 0.055, attack: 0.1, delay: 0.2 });
+  },
+  // Barely a sound at all: a held breath, and someone trying not to be heard.
+  whimper: (a, o) => {
+    const f = ((o && o.pitch) || 330) * vary(0.16);
+    a.tone({ freq: f, to: f * 0.8, type: 'sine', dur: 0.4, peak: 0.05, attack: 0.09 });
+    a.tone({ freq: f * 1.5, to: f * 1.2, type: 'triangle', dur: 0.3, peak: 0.018, attack: 0.1 });
+    a.noise({ dur: 0.3, type: 'bandpass', f0: 1100, f1: 700, q: 2, peak: 0.022, attack: 0.08 });
   },
   // --- small things living in the walls
   scurry: (a) => {

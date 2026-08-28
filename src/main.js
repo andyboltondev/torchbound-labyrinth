@@ -445,8 +445,13 @@ class Game {
     const pad = 14;
     const topSafe = 118;              // clear of the vitals and the score block
     const reserve = this.mapReserve || 0;
-    let size = Math.round(clamp(Math.min(w, h) * 0.2, 96, 172));
-    size = Math.round(clamp(Math.min(size, h - reserve - pad * 2 - topSafe), 68, 172));
+    // The chart grows with the display. The ceiling used to be 172px, which on
+    // a phone is a fifth of the screen and on a large monitor is a stamp --
+    // the same number cannot serve both, so it scales and stops at a size that
+    // is still a corner rather than a second view.
+    const ceiling = clamp(Math.round(Math.min(w, h) * 0.24), 172, 260);
+    let size = Math.round(clamp(Math.min(w, h) * 0.2, 96, ceiling));
+    size = Math.round(clamp(Math.min(size, h - reserve - pad * 2 - topSafe), 68, ceiling));
     this._mapBoxKey = w + 'x' + h + ':' + this.mapReserve;
     this._mapBox = { x: w - size - pad, y: h - size - pad - reserve, size };
     return this._mapBox;
@@ -461,8 +466,35 @@ class Game {
         this.hud.announceHazard(data.hazard);
         if (this.audio.ready && data.biome) this.music.setBiome(data.biome.id, data.hazard.id);
         break;
-      case 'kill': this.combatHeat = Math.min(1, this.combatHeat + 0.32); break;
-      case 'alert': this.combatHeat = Math.min(1, this.combatHeat + 0.12); break;
+      case 'kill':
+        this.combatHeat = Math.min(1, this.combatHeat + 0.32);
+        this.musicPush(0.16);
+        break;
+      case 'alert':
+        this.combatHeat = Math.min(1, this.combatHeat + 0.12);
+        this.musicPush(0.22);
+        break;
+      case 'breach': {
+        // Something is coming through a wall. The score should say so before
+        // the player has worked out where the noise came from -- but the words
+        // only if it is close enough to matter, or every breach on the depth
+        // narrates itself from across the level.
+        this.musicPush(0.3);
+        const p = this.world.player;
+        const near = Math.hypot(data.enemy.x - p.x, data.enemy.y - p.y) < 13;
+        if (near) this.hud.toast('Something is forcing its way in', 'bad');
+        break;
+      }
+      case 'emerged': this.musicPush(0.18); break;
+      case 'blockHeld':
+        // Said out loud once, because the difference between having hold of a
+        // stone and standing next to one is invisible and changes how you walk.
+        this.hud.toast(data.held
+          ? (data.block.kind === 'slab'
+            ? 'You have hold of the slab  —  back away and it comes'
+            : 'You have hold of the stone  —  back away and it comes')
+          : 'You let go', data.held ? 'good' : '');
+        break;
       case 'secretFound': this.hud.toast('Cracked stone -- strike it', 'good'); break;
       case 'secretBroken':
         this.hud.toast('Secret discovered', 'good');
@@ -498,7 +530,10 @@ class Game {
       case 'mapRead':
         if (!data.hint) this.hud.toast('The map tells you nothing new');
         break;
-      case 'scream': this.combatHeat = Math.min(1, this.combatHeat + 0.2); break;
+      case 'scream':
+        this.combatHeat = Math.min(1, this.combatHeat + 0.2);
+        this.musicPush(0.26);
+        break;
       case 'captive':
         if (data.action === 'murdered') this.hud.toast('That will be answered for', 'bad');
         else if (data.action === 'mercy') this.hud.toast('You gave them what they asked for', 'good');
@@ -596,8 +631,13 @@ class Game {
       moveY: dir.y,
       slash: this.input.held('slash'),
       fire: this.input.held('fire'),
+      // Held rather than edge-triggered, because a grip on a stone lasts as
+      // long as the key does.
+      action: this.input.held('action'),
     };
-    if (this.input.consume('action')) this.world.interact();
+    if (this.input.consume('action')) {
+      this.world.interact({ held: this.input.held('action') });
+    }
     if (this.input.consume('torch')) this.world.toggleTorch();
     if (this.input.consume('map')) { this.openMap(); return; }
 
@@ -610,6 +650,14 @@ class Game {
     this.combatHeat = Math.max(0, this.combatHeat - dt * 0.22);
     this.updateAudioSpace(dt);
     this.updateMusic(dt);
+  }
+
+  // A brief push on the score, spent by an event rather than by a state. The
+  // smoothing that keeps the music from twitching also makes it deaf to
+  // anything that happens in less than a second, and most of what happens in
+  // this game happens in less than a second.
+  musicPush(amount) {
+    if (this.audio.ready && this.music.running) this.music.push(amount);
   }
 
   // Tells the mixer where the listener is and what shape of room they are
@@ -633,15 +681,38 @@ class Game {
     this.musicTimer = 0.5;
 
     const world = this.world;
-    let aware = 0;
+    const px = world.player.x, py = world.player.y;
+    // How much of the labyrinth is currently interested in you, and how close
+    // the nearest of it is. Counting alone was too flat: three creatures
+    // milling about a room away and three closing on you are the same number
+    // and very much not the same situation.
+    let aware = 0, chasing = 0, nearest = Infinity;
     for (const e of world.enemies) {
       if (e.dead || e.dormant) continue;
-      if (e.state !== 'idle' && Math.hypot(e.x - world.player.x, e.y - world.player.y) < 12) aware++;
+      if (e.state === 'idle') continue;
+      const d = Math.hypot(e.x - px, e.y - py);
+      if (d > 14) continue;
+      aware++;
+      if (e.state === 'chase' || e.state === 'strike') { chasing++; nearest = Math.min(nearest, d); }
     }
     const bossFight = !!(world.boss && world.boss.awake && !world.boss.dead);
     const hpFrac = this.run.hp / Math.max(1, this.run.maxHp);
-    let intensity = 0.12 + Math.min(0.45, aware * 0.13) + this.combatHeat * 0.34;
-    if (hpFrac < 0.3) intensity += 0.14;
+
+    let intensity = 0.1;
+    intensity += Math.min(0.3, aware * 0.07);
+    intensity += Math.min(0.34, chasing * 0.14);
+    // Proximity: something eight tiles away and coming is worth more than the
+    // same thing at the edge of hearing.
+    if (nearest < 10) intensity += (1 - nearest / 10) * 0.22;
+    intensity += this.combatHeat * 0.3;
+    // Being hurt, being nearly dead, and being in the dark all belong in the
+    // score. Dousing the torch is the loudest thing the player can do to the
+    // music without touching a creature, and it should sound like a decision.
+    if (hpFrac < 0.45) intensity += (0.45 - hpFrac) * 0.5;
+    if (!world.torchLit) intensity += 0.1;
+    // A room that has sealed itself around a fight.
+    if (world.sealBlocks.size > 0) intensity += 0.12;
+    if (world.hazardMods && world.hazardMods.enemyAggro > 1) intensity += 0.04;
     if (bossFight) intensity = Math.max(intensity, 0.9);
     this.music.setIntensity(clamp(intensity, 0, 1), bossFight);
   }

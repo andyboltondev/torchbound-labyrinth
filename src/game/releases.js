@@ -12,12 +12,51 @@
 
 export const RELEASES = [
   {
-    version: '1.3.0',
-    codename: 'Wayfinding',
+    version: '1.4.0',
+    codename: 'Grindstone',
     // No stamp of its own yet: this is the version being played, so the
     // screen fills these in from the running build rather than guessing.
     build: null,
     date: null,
+    pr: 12,
+    headline: 'Walls that move, walls that let things in, and a score that is listening.',
+    sections: [
+      {
+        title: 'Added',
+        notes: [
+          'Slabs. A piece of the wall that is not one, given away by the grooves worn into the floor beside it. Take hold and back away and it grinds out of its bed a tile at a time -- slowly, only as far as the grooves go, and what it was standing over is worth the work.',
+          'Breaches. Holes in external walls, and in walls with nothing but rock behind them, that small things come through. A cleared corridor is not a corridor you own any more.',
+          'You hear a breach before you see it: a scrabbling at the stone, pitched off the voice of whatever is forcing itself through, and then several seconds of it squeezing out of the gap while it can do nothing about you and you can do everything about it.',
+          'Everything that dies now says so, in its own voice. Ten timbres, three shapes apiece, so a corridor of thralls does not go down in unison.',
+          'Captives who are not raving are no longer silent. One that is afraid whimpers; one that is begging weeps, quietly enough that you have to walk past it to hear it.',
+          'A person killed in the labyrinth sounds like a person, and the whole depth hears it.',
+          'Stone dragged over stone makes the noise it should, for exactly as long as it is moving.',
+        ],
+      },
+      {
+        title: 'Changed',
+        notes: [
+          'Walking round a corner no longer lights the ground on the far side of the wall you just came round. The field of view casts its shadows from the edges of the stone, as it always did, but only shows a tile once its own centre is inside the light.',
+          'A stone the size of a person is now as opaque as the wall it was cut from. What one is guarding is dark until it is out of the way, rather than plainly visible through a block of granite.',
+          'Holding Act keeps your grip on a stone or a slab; a tap still latches it. A held stone no longer slips out of your hands after a single tile.',
+          'With a stone in your hands you face the stone. Walking sideways or backing away from it does not spin you round any more.',
+          'You walk at the stone’s pace while you have hold of it, and a slab is slower again. Shouldering one along without taking hold is slower still: there is no purchase in that, only weight.',
+          'The score moves. It walks through movements with their own harmony and their own drum rather than looping one figure, it hears trouble arriving several times faster than it hears it leaving, and being chased, being hurt and putting your torch out all reach it.',
+          'The Hall of Fame has a tune of its own now: one reed voice over a slow bell, played alone, and it does not resolve.',
+          'Large displays get a bigger view of the labyrinth rather than a wider field of dark, a chart in the corner that scales with them, and panels that use the width they have.',
+        ],
+      },
+    ],
+  },
+  {
+    version: '1.3.0',
+    codename: 'Wayfinding',
+    // Stamped from the build that shipped it, now that it is no longer the
+    // version being played. This is the second stamp 1.3.0 carried: the
+    // self-updating build re-shipped it rather than taking a number of its
+    // own, so that is the one a screenshot of it would show.
+    build: '20260828-062938',
+    date: '2026-08-28',
     pr: 8,
     headline: 'Things you could not find, reach or read.',
     sections: [

@@ -1116,6 +1116,47 @@ table.board tr:nth-child(1) td.rank { color: var(--gold); font-size: 17px; }
   .tbtn { width: 62px; height: 62px; }
   .buttons { grid-template-columns: repeat(2, 62px); }
 }
+/* -------------------------------------------------- large displays
+   The panels were sized for a laptop and then simply centred, so a big
+   monitor showed the same 760px column with a field of dark either side of
+   it. Nothing here changes the design; it lets the design have the room it
+   is already asking for -- wider panels, more of the hall visible at once,
+   and the cards laid out across rather than stacked down. Every width is
+   still bounded, because a line of text that runs the whole width of a
+   27-inch display is unreadable however much space there was for it. */
+@media (min-width: 1280px) {
+  .panel { width: min(920px, 100%); }
+  .panel.wide { width: min(1240px, 100%); }
+  .home-split { grid-template-columns: 1fr minmax(300px, 380px); gap: 30px; }
+  .relic-grid { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 18px; }
+  .difficulty-grid { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .beast-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+  table.board { font-size: 15px; }
+  table.board td { padding: 10px 14px; }
+}
+@media (min-width: 1680px) {
+  .panel { width: min(1040px, 100%); }
+  .panel.wide { width: min(1440px, 100%); }
+  .beast-grid { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+}
+
+/* A tall display can show most of the hall at once, which is the whole
+   difference between a leaderboard you read and one you scroll. */
+@media (min-height: 900px) {
+  .board-wrap.tall { max-height: min(62vh, 720px); }
+  .home-split { margin-top: 26px; }
+}
+@media (min-height: 1100px) {
+  .board-wrap.tall { max-height: min(70vh, 980px); }
+}
+
+/* Five names beside the menu is what fits on a laptop. A tall window has room
+   for the rest of the board's shape, and the home screen is the only place
+   most players ever see it. */
+@media (min-width: 1280px) and (min-height: 900px) {
+  .hall-preview-list li { padding-top: 8px; padding-bottom: 8px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }

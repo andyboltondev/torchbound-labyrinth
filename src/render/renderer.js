@@ -64,7 +64,16 @@ export class Renderer {
     // Zoom is chosen so the whole torch pool fits across the narrow axis with
     // a little margin: any further out and a phone screen stops being
     // readable, any further in and the pool no longer fits.
-    this.zoom = clamp(Math.min(w / 640, h / 520), 0.62, 1.3);
+    //
+    // Past the size the view was designed for the fit keeps growing, and
+    // spending all of it would fill a large monitor with a small bright pool
+    // in an ocean of black -- the extra pixels would go on darkness. So
+    // growth past that point is taken at a fraction of the rate: a big
+    // display gets a noticeably bigger scene *and* still sees more of the
+    // labyrinth around it, which is what having the space is for.
+    const fit = Math.min(w / 640, h / 520);
+    const grown = fit <= 1.3 ? fit : 1.3 + (fit - 1.3) * 0.42;
+    this.zoom = clamp(grown, 0.62, 1.85);
   }
 
   addShake(amount) { this.shake = Math.min(18, this.shake + amount); }
@@ -388,6 +397,17 @@ export class Renderer {
         list.push({ d: decal.x + decal.y + 0.001, kind: 'decal', item: decal, lit: v.lit, mem: v.mem });
       }
     }
+    // Structural marks -- grooves in front of a slab, the mouth of a breach --
+    // are drawn on every tier. They are not atmosphere: they are the only
+    // thing that says what a wall is, so a machine shedding effects must not
+    // shed them, and they are drawn a shade stronger than decoration for the
+    // same reason.
+    for (const mark of level.marks || []) {
+      if (!onLayer(mark.y)) continue;
+      const v = seenAt(Math.floor(mark.x), Math.floor(mark.y));
+      if (v.lit <= 0.02 && v.mem <= MEMORY_MIN) continue;
+      list.push({ d: mark.x + mark.y + 0.002, kind: 'mark', item: mark, lit: v.lit, mem: v.mem });
+    }
     for (const d of level.decor) {
       if (!onLayer(d.y)) continue;
       const s = seenAt(Math.floor(d.x), Math.floor(d.y));
@@ -461,6 +481,11 @@ export class Renderer {
           // memory: a scratch you are only remembering is not evidence, it is
           // a suggestion that there was some.
           ctx.globalAlpha = entry.lit > 0.02 ? 0.3 + entry.lit * 0.5 : 0.1 + entry.mem * 0.12;
+          drawDecal(ctx, entry.item, t);
+          ctx.globalAlpha = 1;
+          break;
+        case 'mark':
+          ctx.globalAlpha = entry.lit > 0.02 ? 0.5 + entry.lit * 0.5 : 0.2 + entry.mem * 0.25;
           drawDecal(ctx, entry.item, t);
           ctx.globalAlpha = 1;
           break;

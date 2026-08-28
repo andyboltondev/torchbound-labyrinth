@@ -62,6 +62,15 @@ export class Enemy {
     // stands on it, and from then on it is an ordinary creature in every way.
     this.entombed = !!(spawn.dormant && this.def.entombed);
     this.digging = 0;
+    // Forcing itself through a gap in the wall. While this is running the
+    // creature is present but helpless: it cannot move, cannot swing and
+    // cannot be steered, and it can be cut down where it hangs. That is the
+    // trade the whole feature rests on -- the labyrinth gets to refill a
+    // room, and the player gets several seconds of warning and a free hit.
+    this.emerging = 0;
+    this.emergeTotal = 0;
+    this.emergeFrom = null;
+    this.fromBreach = null;
     this.sealed = false;      // held in place until its encounter triggers
     this.faceX = 1; this.faceY = 0;
     this.speedNow = 0;
@@ -92,6 +101,13 @@ export class Enemy {
   }
 
   get behaviour() { return this.def.behaviour; }
+
+  // 0 while still in the wall, 1 once fully out. Used by the renderer to
+  // clip the body and by anything that wants to know it is not yet a threat.
+  get emergeProgress() {
+    if (this.emerging <= 0 || !this.emergeTotal) return 1;
+    return 1 - this.emerging / this.emergeTotal;
+  }
 
   // --- perception ---------------------------------------------------------
   detectionRange(world) {
@@ -267,6 +283,17 @@ export class Enemy {
       const near = dist < reach
         && (this.entombed || hasLineOfSight(world, this.x, this.y, p.x, p.y));
       if (!this.sealed && near) this.alert(world, this.entombed ? 'unearthed' : 'ambush');
+    } else if (this.emerging > 0) {
+      if (!this.emergeTotal) this.emergeTotal = this.emerging;
+      this.emerging = Math.max(0, this.emerging - dt);
+      // It is looking where it is going before it gets there.
+      const fx = world.player.x - this.x, fy = world.player.y - this.y;
+      this._face(fx, fy, dt, 3);
+      if (this.emerging <= 0) {
+        this.emergeFrom = null;
+        world.onEmerged(this);
+      }
+      return;
     } else if (this.digging > 0) {
       // Coming up out of the floor. It cannot swing and cannot be steered
       // until it is out, which is the whole of the warning anybody gets.
