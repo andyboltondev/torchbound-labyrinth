@@ -5,11 +5,11 @@
 // enough to find the commit it came from.
 
 export const VERSION = {
-  number: '1.3.0',
-  codename: 'Wayfinding',
-  build: '20260828-055024',
-  commit: '74d0595',
-  branch: 'release-notes-and-bug-reports',
+  number: '1.4.0',
+  codename: 'Grindstone',
+  build: '20260828-212650',
+  commit: 'a2bb133',
+  branch: 'master',
   pr: null,
 };
 

@@ -721,8 +721,70 @@ export function drawDecal(ctx, decal, t) {
     case 'tracks': return drawTracks(ctx, sx, sy, ux, uy, px, py, decal);
     case 'dust': return drawDust(ctx, sx, sy, ux, uy, px, py, decal);
     case 'hole': return drawHole(ctx, sx, sy, decal);
+    case 'scratch': return drawScratch(ctx, sx, sy, ux, uy, px, py, decal);
+    case 'breach': return drawBreach(ctx, sx, sy, ux, uy, px, py, decal);
     default: return undefined;
   }
+}
+
+// A gap at the foot of the wall where the masonry has failed and the rock
+// behind it -- or the open dark behind that -- has been got at from the other
+// side. Drawn as spilled rubble and a black mouth pushed up against the wall,
+// so it reads as a hole in the world rather than as a hole in the floor.
+function drawBreach(ctx, sx, sy, ux, uy, px, py, decal) {
+  const bx = sx + ux * 9, by = sy + uy * 9;
+  ctx.fillStyle = rgba('#05060a', 0.8);
+  ctx.beginPath();
+  ctx.ellipse(bx, by, 13, 7, Math.atan2(uy, ux), 0, Math.PI * 2);
+  ctx.fill();
+  // Spoil, thrown out towards the room. Something has been through here.
+  ctx.fillStyle = rgba('#3a352c', 0.55);
+  for (let i = 0; i < 7; i++) {
+    const r = ((i * 53 + decal.seed * 97) % 11) - 5;
+    const along = -3 - ((i * 29 + decal.seed * 41) % 9);
+    ctx.beginPath();
+    ctx.ellipse(bx + ux * along + px * r * 0.8, by + uy * along + py * r * 0.8,
+      1.6 + (i % 3) * 0.7, 1.1 + (i % 2) * 0.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.strokeStyle = rgba('#7d7565', 0.35);
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.ellipse(bx, by, 13, 7, Math.atan2(uy, ux), Math.PI, Math.PI * 2);
+  ctx.stroke();
+}
+
+// Grooves worn into the floor by something heavy being dragged over it.
+//
+// Unlike claw marks these run the *whole* length of the tile and are dead
+// straight and parallel: nothing alive scratches like that. That is the tell.
+// A trail of them leading up to a slab of wall is the only warning the player
+// gets that the wall is not one, and it has to be legible at the edge of the
+// torchlight without a marker floating over it.
+function drawScratch(ctx, sx, sy, ux, uy, px, py, decal) {
+  const heavy = !!decal.heavy;
+  const lanes = heavy ? 5 : 3;
+  const len = (heavy ? 30 : 22) + decal.seed * 5;
+  const gap = heavy ? 3.1 : 3.6;
+  ctx.lineCap = 'butt';
+  for (let i = 0; i < lanes; i++) {
+    const off = (i - (lanes - 1) / 2) * gap;
+    // Each groove is a shadow with a bright lip on its upper edge, which is
+    // what makes it read as cut into the stone rather than drawn on it.
+    ctx.strokeStyle = rgba('#15110c', heavy ? 0.5 : 0.38);
+    ctx.lineWidth = heavy ? 2 : 1.5;
+    ctx.beginPath();
+    ctx.moveTo(sx + px * off - ux * len * 0.5, sy + py * off - uy * len * 0.5);
+    ctx.lineTo(sx + px * off + ux * len * 0.5, sy + py * off + uy * len * 0.5);
+    ctx.stroke();
+    ctx.strokeStyle = rgba('#b3a288', heavy ? 0.16 : 0.11);
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(sx + px * off - ux * len * 0.5, sy + py * off - uy * len * 0.5 - 1);
+    ctx.lineTo(sx + px * off + ux * len * 0.5, sy + py * off + uy * len * 0.5 - 1);
+    ctx.stroke();
+  }
+  ctx.lineCap = 'round';
 }
 
 // Three gouges, dragged the way the thing that made them was going.
@@ -813,10 +875,24 @@ function drawDust(ctx, sx, sy, ux, uy, px, py, decal) {
 export function drawPushBlock(ctx, block, at, t) {
   const sx = screenX(at.x, at.y);
   const sy = screenY(at.x, at.y);
-  const h = 26;                       // waist height: a thing you shoulder
-  const w = HALF_W * 0.78;
-  const d = HALF_H * 0.78;
-  const jitter = block.sliding ? Math.sin(block.slide * Math.PI * 6) * 0.7 : 0;
+  // A slab is a piece of the wall, so it stands to the same height as one and
+  // is cut to fill its tile. A stone is waist-high and clearly a thing that
+  // was put there.
+  const slab = block.kind === 'slab';
+  const h = slab ? 34 : 26;
+  const w = HALF_W * (slab ? 0.99 : 0.78);
+  const d = HALF_H * (slab ? 0.99 : 0.78);
+  // A slab judders rather than slides -- it is being levered, not shoved.
+  const jitter = block.sliding
+    ? Math.sin(block.slide * Math.PI * (slab ? 14 : 6)) * (slab ? 0.5 : 0.7)
+    : 0;
+  // A slab is cut from the wall and reads cold like the wall; a stone was
+  // shaped and dressed by somebody and reads warm. That difference is most of
+  // what tells them apart at the edge of the torchlight, and it also keeps a
+  // slab from being mistaken for the chest it is standing over.
+  const face = slab
+    ? { top: '#585c5c', left: '#383b3c', right: '#464a4a', edge: '#7c8386', band: '#1f2223' }
+    : { top: '#6d6355', left: '#4b433a', right: '#59503f', edge: '#8d8064', band: '#2a2620' };
 
   // Drag scuffs. Drawn under the stone and offset back along the way it came,
   // so a stone that has been moved says so and one that has not looks settled.
@@ -827,7 +903,7 @@ export function drawPushBlock(ctx, block, at, t) {
   ctx.fill();
 
   // Top face.
-  ctx.fillStyle = '#6d6355';
+  ctx.fillStyle = face.top;
   ctx.beginPath();
   ctx.moveTo(sx, sy - h - d + jitter);
   ctx.lineTo(sx + w, sy - h + jitter);
@@ -837,7 +913,7 @@ export function drawPushBlock(ctx, block, at, t) {
   ctx.fill();
 
   // The two visible sides, the left one darker so the block has a light on it.
-  ctx.fillStyle = '#4b433a';
+  ctx.fillStyle = face.left;
   ctx.beginPath();
   ctx.moveTo(sx - w, sy - h + jitter);
   ctx.lineTo(sx, sy - h + d + jitter);
@@ -846,7 +922,7 @@ export function drawPushBlock(ctx, block, at, t) {
   ctx.closePath();
   ctx.fill();
 
-  ctx.fillStyle = '#59503f';
+  ctx.fillStyle = face.right;
   ctx.beginPath();
   ctx.moveTo(sx + w, sy - h + jitter);
   ctx.lineTo(sx, sy - h + d + jitter);
@@ -858,7 +934,7 @@ export function drawPushBlock(ctx, block, at, t) {
   // A chiselled edge along the top, and a worn band round the middle where
   // hands and shoulders have been. Both are what separate a cut stone from
   // the rubble the walls are made of.
-  ctx.strokeStyle = rgba('#8d8064', 0.55);
+  ctx.strokeStyle = rgba(face.edge, slab ? 0.35 : 0.55);
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(sx - w, sy - h + jitter);
@@ -866,12 +942,26 @@ export function drawPushBlock(ctx, block, at, t) {
   ctx.lineTo(sx + w, sy - h + jitter);
   ctx.stroke();
 
-  ctx.strokeStyle = rgba('#2a2620', 0.4);
+  ctx.strokeStyle = rgba(face.band, 0.4);
   ctx.beginPath();
   ctx.moveTo(sx - w, sy - h * 0.45 + jitter);
   ctx.lineTo(sx, sy - h * 0.45 + d + jitter);
   ctx.lineTo(sx + w, sy - h * 0.45 + jitter);
   ctx.stroke();
+
+  // A slab that has been drawn out of its bed shows the raw rock it was
+  // seated against down one side, which is the only thing that distinguishes
+  // a moved one from the wall it used to be part of.
+  if (slab && block.moved) {
+    ctx.fillStyle = rgba('#1a1712', 0.42);
+    ctx.beginPath();
+    ctx.moveTo(sx - w, sy - h + jitter);
+    ctx.lineTo(sx, sy - h - d + jitter);
+    ctx.lineTo(sx, sy - h + 4 + jitter);
+    ctx.lineTo(sx - w, sy - h + 6 + jitter);
+    ctx.closePath();
+    ctx.fill();
+  }
 }
 
 export function drawDecor(ctx, d, t) {

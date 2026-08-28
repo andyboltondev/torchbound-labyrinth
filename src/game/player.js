@@ -84,7 +84,14 @@ export class Player {
     const mud = mods.hazardFooting ? 1 : (hz.playerSpeed || 1);
     const attacking = this.attack ? 0.55 : 1;
     const chilled = this.slowTimer > 0 ? 0.7 : 1;
-    const speed = BASE_SPEED * mods.moveSpeed * mud * attacking * chilled;
+    // A stone in your hands sets the pace. It is not a multiplier on your own
+    // speed -- the stone does not care how fast you are -- so it replaces it
+    // outright, which is also what keeps the stone under your hands rather
+    // than trailing a tile behind.
+    const drag = world.dragSpeed ? world.dragSpeed() : 0;
+    const speed = drag > 0
+      ? drag * Math.min(1.15, mods.moveSpeed) * mud
+      : BASE_SPEED * mods.moveSpeed * mud * attacking * chilled;
 
     const hasInput = intent.moveX !== 0 || intent.moveY !== 0;
     this.mover.update(dt, world, hasInput ? { x: intent.moveX, y: intent.moveY } : null, {
@@ -123,8 +130,15 @@ export class Player {
     // the arc lands where it was aimed rather than sweeping round with the
     // feet.
     const heading = this.mover.moving ? this.mover.heading : null;
-    const target = this.attack ? null
-      : (hasInput ? { x: intent.moveX, y: intent.moveY } : heading);
+    // With a stone in your hands you are always facing the stone. Walking
+    // sideways or backing away from it must not spin the body round -- you
+    // are holding it, and letting go to turn is the player's decision, not
+    // something the feet do on their own.
+    const held = world.heldBlock;
+    const target = held
+      ? { x: held.x + 0.5 - this.x, y: held.y + 0.5 - this.y }
+      : (this.attack ? null
+        : (hasInput ? { x: intent.moveX, y: intent.moveY } : heading));
     if (target && (target.x !== 0 || target.y !== 0)) {
       // Turned as an angle along the shortest arc rather than by damping the
       // two components. Damping components sends a near-reversal through a

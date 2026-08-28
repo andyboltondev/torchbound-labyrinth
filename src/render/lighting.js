@@ -18,6 +18,14 @@ const MULT = [
   [1, 0, 0, 1, -1, 0, 0, -1],
 ];
 
+// Tile -> does it stop light, as a flat lookup so the inner cast loop is an
+// array read rather than a Set probe. Mirrors BLOCKS_SIGHT in gen/tiles.js.
+const BLOCKS = (() => {
+  const a = new Uint8Array(16);
+  for (let t = 0; t < a.length; t++) a[t] = blocksSight(t) ? 1 : 0;
+  return a;
+})();
+
 export class Torch {
   constructor() {
     this.baseRadius = 7.5;
@@ -63,6 +71,17 @@ export class Visibility {
     this.visGen = new Uint32Array(n);
     this.gen = 1;
     this.discoveredCount = 0;
+    // Tile indices that block sight without being masonry in the grid: the
+    // pushable stones and the grinding slabs. A stone the size of a person is
+    // as opaque as the wall it was cut from, which is what makes what it is
+    // guarding a secret rather than a thing you can already see.
+    this.opaque = null;
+  }
+
+  blocksAt(x, y) {
+    const i = this.grid.idx(x, y);
+    if (BLOCKS[this.grid.cells[i]]) return true;
+    return this.opaque !== null && this.opaque.has(i);
   }
 
   isVisible(x, y) {
@@ -85,7 +104,8 @@ export class Visibility {
   // Secondary sources (wall sconces) only contribute once the player can
   // actually see them -- otherwise a brazier would reveal rooms through solid
   // rock, and unexplored terrain must stay unexplored (design rule 8).
-  update(sources, dt, memoryDecay = 0.05) {
+  update(sources, dt, memoryDecay = 0.05, opaque = null) {
+    this.opaque = opaque && opaque.size ? opaque : null;
     this.gen++;
     if (sources.length) this._cast(sources[0]);
     for (let i = 1; i < sources.length; i++) {
@@ -126,6 +146,25 @@ export class Visibility {
     }
   }
 
+  // Was the tile one step nearer the light, along this octant, both lit this
+  // pass and open? Used to decide whether a piece of masonry is a wall the
+  // player is looking at or a wall they are looking *past*.
+  _facesLight(cx, cy, dx, dy, xx, xy, yx, yy) {
+    for (let k = 0; k < 2; k++) {
+      const ldx = k === 0 ? dx : dx + 1;
+      const ldy = k === 0 ? dy + 1 : dy;
+      if (ldx > 0) continue;                      // belongs to the next octant
+      const nx = cx + ldx * xx + ldy * xy;
+      const ny = cy + ldx * yx + ldy * yy;
+      if (!this.grid.inBounds(nx, ny)) continue;
+      const i = this.grid.idx(nx, ny);
+      if (this.visGen[i] !== this.gen) continue;
+      if (this.blocksAt(nx, ny)) continue;
+      return true;
+    }
+    return false;
+  }
+
   _castOctant(cx, cy, row, start, end, radius, xx, xy, yx, yy, src) {
     if (start < end) return;
     const r2 = radius * radius;
@@ -141,10 +180,23 @@ export class Visibility {
         if (!this.grid.inBounds(currentX, currentY) || start < rightSlope) continue;
         if (end > leftSlope) break;
 
+        const solid = this.blocksAt(currentX, currentY);
         const d2 = dx * dx + dy * dy;
-        if (d2 <= r2) this._mark(currentX, currentY, Math.sqrt(d2), src);
+        if (d2 <= r2) {
+          // Shadows are cast from the *edges* of a blocker, which is right --
+          // but marking from the edges too is what made walking round a corner
+          // light up ground on the far side of the wall you just came round.
+          // A tile is only shown when its own centre is inside the cone.
+          const centre = dx / dy;
+          // Masonry is the exception: a wall face fronting ground that is lit
+          // is a wall the player can see, whatever its centre says, and
+          // dropping those punches holes in the architecture.
+          if ((centre <= start && centre >= end)
+              || (solid && this._facesLight(cx, cy, dx, dy, xx, xy, yx, yy))) {
+            this._mark(currentX, currentY, Math.sqrt(d2), src);
+          }
+        }
 
-        const solid = blocksSight(this.grid.get(currentX, currentY));
         if (blocked) {
           if (solid) { newStart = rightSlope; continue; }
           blocked = false;

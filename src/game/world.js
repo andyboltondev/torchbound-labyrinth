@@ -10,7 +10,7 @@ import { Particles, burstSparks, burstBlood, burstStone, ring, footDust } from '
 import { Player } from './player.js';
 import { Enemy } from './enemies.js';
 import { Boss } from './boss.js';
-import { ENEMIES, enemyPoolFor, DEFAULT_BLOOD, HEARING_REACH, VOICE_REACH }
+import { ENEMIES, enemyPoolFor, DEFAULT_BLOOD, DEFAULT_VOICE, HEARING_REACH, VOICE_REACH, breachSound }
   from './enemyData.js';
 import { tileOpen, GRID_DIRS } from './gridmove.js';
 import { SoundField } from './soundfield.js';
@@ -71,7 +71,53 @@ const SPURNED_DAMAGE = 8;
 
 // How long a shoved stone takes to travel its tile. Slower than a footstep on
 // purpose: the weight of it is the whole character of the thing.
-const BLOCK_SLIDE_SECONDS = 0.34;
+// How long a stone takes to travel one tile, and how fast the player walks
+// while they have hold of one.
+//
+// Two numbers per kind, because a shoulder and a grip are not the same thing.
+// Dragging is slow but deliberate: you have hold of it, and it comes with you.
+// Nudging it with your shoulder as you walk into it is slower still -- there
+// is no purchase in that, only weight -- which is what makes taking hold of
+// one worth the press.
+const BLOCK_KINDS = {
+  stone: { pull: 0.62, push: 1.05, walk: 1.55, scrape: 'stoneScrape' },
+  // A slab is a piece of the wall. It grinds rather than slides, it only
+  // comes out as far as the grooves it has worn in the floor, and it takes
+  // most of a breath per tile.
+  slab: { pull: 1.55, push: 2.4, walk: 0.62, scrape: 'slabGrind' },
+};
+
+function blockKind(block) {
+  return BLOCK_KINDS[block && block.kind] || BLOCK_KINDS.stone;
+}
+
+// --- breaches ---------------------------------------------------------------
+//
+// A hole in the wall or the floor, backing onto rock or onto nothing at all,
+// through which small things come. See addBreaches in gen/dungeon.js for where
+// one may be; the numbers below are the whole of the answer to "how much".
+//
+// The point of the feature is that a corridor you cleared is not a corridor
+// you own -- but a labyrinth that refills itself faster than it can be crossed
+// is not a labyrinth, it is a treadmill. Three limits hold that line:
+//
+//   * At most a couple alive at a time, across every breach on the depth.
+//   * A ceiling per breach for the whole depth, so standing next to one is a
+//     finite problem rather than an infinite one, and a player who wants the
+//     ground can have it by waiting.
+//   * A long, jittered gap between one and the next, so a breach is an event
+//     rather than a tap left running.
+const BREACH_FIRST_DELAY = 25;
+const BREACH_GAP = 34;
+const BREACH_TOTAL = 6;
+// How long the thing takes to force itself out. Long: it is the warning, and
+// a warning you cannot act on is only a jump scare.
+const BREACH_EMERGE = 2.1;
+// How far off a spawn can be heard starting. Deliberately wider than the
+// torch, because the sound is the point -- the player should be able to turn
+// round before the thing is out rather than after.
+const BREACH_HEARD = 1.4;
+
 
 // What each size of fire is called when the player is standing over a cold one.
 const FIRE_NAMES = {
@@ -136,7 +182,22 @@ export class World {
     // whether a tile is open in the same frame the shove happens.
     this.blocks = (level.blocks || []).map((b) => ({
       ...b, x: b.homeX, y: b.homeY, moved: false, sliding: false, slide: 1,
+      slideSeconds: BLOCK_KINDS.stone.pull,
     }));
+    // Bumped whenever a stone starts or finishes moving, so the sight-blocker
+    // set is rebuilt then and not once a frame.
+    this._blockMoveCount = 0;
+    this._blockerGen = -1;
+    this._blockers = new Set();
+    // True while the grip is being held open by the Action key rather than
+    // latched by a press of it. Releasing the key then lets go.
+    this.gripByKey = false;
+
+    // Holes in the world that things come through. See updateBreaches.
+    this.breaches = (level.breaches || []).map((b) => ({
+      ...b, timer: BREACH_FIRST_DELAY + this.rng.float(0, 14), sent: 0, warned: 0,
+    }));
+    this.breachAlive = 0;
     this.blockIndex = new Map();
     for (const b of this.blocks) this.blockIndex.set(this.grid.idx(b.x, b.y), b);
     this.blockPockets = new Set(
@@ -321,6 +382,8 @@ export class World {
     this.player.torchLit = this.torchLit;
 
     this._refreshOccupancy();
+    // A grip opened by holding the key closes when the key does.
+    if (this.heldBlock && this.gripByKey && !intent.action) this.letGo();
     this.player.update(dt, this, intent);
     // Burning is applied inside the player's own update, so this is the tick
     // where a damage-over-time death has to be noticed.
@@ -338,6 +401,7 @@ export class World {
     this.updateSecretAwareness();
     this.updateHints(dt);
     this.updateBlocks(dt);
+    this.updateBreaches(dt);
     this.updateCaptives(dt);
     this.updateInteractTarget();
     this.updateAmbience(dt);
@@ -617,7 +681,11 @@ export class World {
       sources.push({ x: s.x, y: s.y, radius: s.radius || 3.6, intensity: s.intensity || 0.6 });
     }
     const decay = 0.05 * this.run.mods.memoryDecay * (this.hazardMods.memoryDecay || 1);
-    this.vis.update(sources, dt, decay);
+    // Stones and slabs stop light the way the rock they were cut from does.
+    // That is what keeps an alcove an alcove: what a stone is guarding is
+    // dark until the stone is out of the way, rather than plainly visible
+    // through a block of granite the moment the torch reaches it.
+    this.vis.update(sources, dt, decay, this._sightBlockers());
   }
 
   // Shared BFS field from the player, used by every chasing enemy.
@@ -965,6 +1033,17 @@ export class World {
     });
     this.playSfx(enemy.elite ? 'eliteDeath' : 'enemyDeath',
       { x: enemy.x, y: enemy.y, material: enemy.def.material || 'flesh' });
+    // The body hitting the floor is the material sound above; this is the
+    // animal. Three shapes per timbre, picked off the creature's own seed and
+    // the moment, so a corridor of thralls does not die in unison.
+    const voice = enemy.def.voice || DEFAULT_VOICE;
+    this.playSfx('deathCry', {
+      x: enemy.x, y: enemy.y,
+      timbre: voice.timbre,
+      pitch: voice.pitch * (enemy.elite ? 0.82 : 1),
+      variant: Math.floor(this.rng.next() * 3),
+      key: 'death' + enemy.id,
+    });
     this.run.discover(enemy.def.id);
 
     if (source === 'sword' && mods.lifesteal > 0 && this.rng.next() < mods.lifesteal) {
@@ -1216,6 +1295,22 @@ export class World {
     return this.blockIndex.get(this.grid.idx(x, y)) || null;
   }
 
+  // Tiles that stop sight without being masonry. Rebuilt only when a stone
+  // actually moves -- there are never more than a handful, and the field of
+  // view asks for this every frame.
+  _sightBlockers() {
+    if (this._blockerGen === this._blockMoveCount) return this._blockers;
+    this._blockerGen = this._blockMoveCount;
+    this._blockers = new Set();
+    for (const b of this.blocks) {
+      this._blockers.add(this.grid.idx(b.x, b.y));
+      // Mid-slide it is standing across two tiles, and neither of them is
+      // somewhere you can see through.
+      if (b.sliding) this._blockers.add(this.grid.idx(b.fromX, b.fromY));
+    }
+    return this._blockers;
+  }
+
   // Called by the mover once every ordinary way through has been ruled out.
   // Returns the direction to walk if a shove happened, or null.
   tryPush(tileX, tileY, want, heading) {
@@ -1241,7 +1336,11 @@ export class World {
     }
     if (!best) return null;
     this._moveBlock(best.block, best.dir, 'pushed');
-    return best.dir;
+    // The step that shoves a stone runs at the stone's pace, not the player's.
+    // Without this the player walks clear of a slab while it is still grinding
+    // its way across the tile behind them.
+    const seconds = blockKind(best.block).push;
+    return { x: best.dir.x, y: best.dir.y, speed: 1 / seconds };
   }
 
   // Whichever stone the player is standing against and facing, or null.
@@ -1260,8 +1359,12 @@ export class World {
     return best;
   }
 
-  takeHold(block) {
+  takeHold(block, byKey = false) {
     this.heldBlock = block;
+    // Holding the Action key down keeps the grip; a tap latches it. Both work,
+    // and which one the player used is decided here rather than being a
+    // setting, because a grip is a thing you feel rather than configure.
+    this.gripByKey = !!byKey;
     this.playSfx('step', { surface: this.surfaceAt() });
     this.emit('blockHeld', { block, held: true });
     return true;
@@ -1271,8 +1374,15 @@ export class World {
     if (!this.heldBlock) return false;
     const block = this.heldBlock;
     this.heldBlock = null;
+    this.gripByKey = false;
     this.emit('blockHeld', { block, held: false });
     return true;
+  }
+
+  // How fast the player may walk right now. A stone in your hands is the one
+  // thing in the labyrinth that slows you down without hurting you.
+  dragSpeed() {
+    return this.heldBlock ? blockKind(this.heldBlock).walk : 0;
   }
 
   // Called by the mover the instant a step is committed, while the player is
@@ -1292,11 +1402,29 @@ export class World {
     // Never into the pocket it is guarding -- the same refusal a shove makes,
     // and for the same reason: there is no move that would get it out again.
     if (this.blockPockets.has(this.grid.idx(x, y))) { this.letGo(); return; }
+    // A slab that has come as far as its grooves go stays where it is, and
+    // the hand comes off it: the player walked, and it did not follow.
+    if (!this._withinRange(block, x, y)) {
+      this.playSfx('denied', { x: block.x + 0.5, y: block.y + 0.5 });
+      this.letGo();
+      return;
+    }
     this._moveBlock(block, dir, 'pulled');
+  }
+
+  // How far a stone may be moved from where it was set. Ordinary stones have
+  // no limit; a slab is bedded into the wall and only ever comes out as far
+  // as the grooves worn in the floor in front of it.
+  _withinRange(block, tx, ty) {
+    if (!block.range) return true;
+    // Measured as a lane distance, not a radius: a slab travels along the
+    // grooves it has worn, and the grooves run one way.
+    return Math.abs(tx - block.homeX) + Math.abs(ty - block.homeY) <= block.range;
   }
 
   _canShove(block, dir) {
     const tx = block.x + dir.x, ty = block.y + dir.y;
+    if (!this._withinRange(block, tx, ty)) return false;
     // Into its own pocket is the one direction that is never allowed: the
     // stone would come to rest on top of what it was guarding, and there is no
     // second shove that would get it out again.
@@ -1316,18 +1444,34 @@ export class World {
   // side of it the player was standing on.
   _moveBlock(block, dir, how = 'pushed') {
     const from = this.grid.idx(block.x, block.y);
+    const kind = blockKind(block);
     block.fromX = block.x; block.fromY = block.y;
     block.x += dir.x; block.y += dir.y;
     block.slide = 0;
     block.sliding = true;
+    block.slideSeconds = how === 'pulled' ? kind.pull : kind.push;
+    // The groove it just wore in the floor, laid down as an ordinary mark so
+    // it sorts and lights with everything else on that tile.
+    this.level.marks.push({
+      kind: 'scratch', x: block.fromX + 0.5, y: block.fromY + 0.5,
+      dx: dir.x, dy: dir.y, seed: (block.slide + this.time) % 1,
+      heavy: block.kind === 'slab',
+    });
+    this._blockMoveCount++;
     // Occupancy changes on the instant, not at the end of the slide. The
     // player is stepping onto the tile the stone is leaving in the same frame,
     // and a stone that was still notionally there would refuse them the step
     // it just granted.
     this.blockIndex.delete(from);
     this.blockIndex.set(this.grid.idx(block.x, block.y), block);
-    this.playSfx('stoneBreak', { x: block.x + 0.5, y: block.y + 0.5 });
-    this.shake(3);
+    // Stone on stone, for as long as the stone is moving. A drag is a long
+    // even scrape; a shoulder-shove is the same sound, heavier and grudging.
+    this.playSfx(kind.scrape, {
+      x: block.x + 0.5, y: block.y + 0.5,
+      dur: block.slideSeconds, heavy: how !== 'pulled',
+      key: kind.scrape + ':' + block.id,
+    });
+    this.shake(block.kind === 'slab' ? 2 : 3);
     // The whole depth hears a stone move. It is not a quiet thing to do, and
     // that is part of the price of what is behind it.
     this.makeNoise(block.x + 0.5, block.y + 0.5, 1.2, { playerHears: false });
@@ -1340,6 +1484,13 @@ export class World {
   // means one thing rather than two.
   _revealBehindBlock(block) {
     block.moved = true;
+    // Whatever it was standing over is only a find once the stone is off it.
+    for (const prop of this.level.props) {
+      if (prop.behindBlock === block.id) {
+        prop.hidden = false;
+        this.revealedProps.add(prop.id);
+      }
+    }
     this.secretsFound++;
     const points = this.run.score.addSecret(180 + this.level.depth * 30, this.run.mods);
     this.particles.text(block.alcove.x + 0.5, block.alcove.y + 0.5,
@@ -1350,10 +1501,14 @@ export class World {
   updateBlocks(dt) {
     for (const block of this.blocks) {
       if (!block.sliding) continue;
-      block.slide += dt / BLOCK_SLIDE_SECONDS;
+      block.slide += dt / (block.slideSeconds || 0.34);
       if (block.slide < 1) continue;
       block.slide = 1;
       block.sliding = false;
+      this._blockMoveCount++;
+      // Dust settling out of the groove: the stone has stopped, and the last
+      // thing it does is say so.
+      burstStone(this.particles, block.x + 0.5, block.y + 0.5, '#3a3630');
     }
   }
 
@@ -1367,6 +1522,15 @@ export class World {
       x: block.fromX + (block.x - block.fromX) * k + 0.5,
       y: block.fromY + (block.y - block.fromY) * k + 0.5,
     };
+  }
+
+  // Out. From here it is a creature like any other -- coming through a wall
+  // was a way of arriving, not a second set of rules to carry about.
+  onEmerged(enemy) {
+    burstStone(this.particles, enemy.x, enemy.y, '#3a3630');
+    this.shake(2);
+    enemy.alert(this, 'breach');
+    this.emit('emerged', { enemy });
   }
 
   // Something has come up out of the floor. The hole it left stays for the
@@ -1408,6 +1572,93 @@ export class World {
     this.emit('secretBroken', { secret });
   }
 
+
+  // --- breaches ------------------------------------------------------------
+  //
+  // Each breach counts down on its own clock. When it comes up, it needs a
+  // free ceiling, ground of its own to open onto, and the player not standing
+  // on the spot -- and then something starts squeezing through, slowly and
+  // audibly, and is an ordinary creature by the time it is out.
+  updateBreaches(dt) {
+    if (!this.breaches.length || this.playerDead || this.finished) return;
+    this.breachAlive = 0;
+    for (const e of this.enemies) if (e.fromBreach && !e.dead) this.breachAlive++;
+    const ceiling = this.breachCeiling();
+
+    for (const breach of this.breaches) {
+      breach.timer -= dt;
+      // The scrabbling starts before the thing does. Two seconds of warning,
+      // once per spawn, and only if there is going to be one.
+      if (breach.timer <= 2.2 && breach.timer > 0 && !breach.warned
+          && breach.sent < BREACH_TOTAL && this.breachAlive < ceiling) {
+        breach.warned = 1;
+        const def = ENEMIES[breach.defId];
+        this.hearSfx('spawnHole', breach.fx + 0.5, breach.fy + 0.5, 1.0, {
+          tail: BREACH_HEARD, key: 'breach' + breach.id,
+          ...breachSound(def),
+        });
+      }
+      if (breach.timer > 0) continue;
+      breach.warned = 0;
+      // Retried shortly rather than skipped: a full labyrinth should not cost
+      // a breach its turn for the rest of the depth.
+      if (breach.sent >= BREACH_TOTAL) { breach.timer = 1e6; continue; }
+      if (this.breachAlive >= ceiling) { breach.timer = 6; continue; }
+      if (!this._openBreach(breach)) { breach.timer = 6; continue; }
+      breach.timer = BREACH_GAP * (0.75 + this.rng.next() * 0.6);
+    }
+  }
+
+  // How many things a depth may have let in at once. Grows slowly with depth
+  // and never past four, which is one short of what the player can hold a
+  // corridor against.
+  breachCeiling() {
+    return Math.min(4, 2 + Math.floor(this.level.depth / 6));
+  }
+
+  _openBreach(breach) {
+    const gx = breach.fx, gy = breach.fy;
+    if (tileBlocks(this, gx, gy)) return false;
+    if (this.occupied.has(this.grid.idx(gx, gy))) return false;
+    if (this.blockAt(gx, gy)) return false;
+    const px = this.player.x, py = this.player.y;
+    // Never underneath the player, and never so far away that the player will
+    // never meet it -- a creature that spawns across the level and walks the
+    // whole way is a creature that arrives from nowhere.
+    const away = Math.hypot(gx + 0.5 - px, gy + 0.5 - py);
+    if (away < 2.2 || away > 26) return false;
+
+    const def = ENEMIES[breach.defId];
+    if (!def) return false;
+    const x = gx + 0.5, y = gy + 0.5;
+    const e = new Enemy({
+      defId: def.id, x, y, elite: false, dormant: false,
+      zone: this.zoneAt(x, y), anchor: { x, y },
+    }, this.level.depth, this.rng, this.run.mods);
+    // Coming through the wall, and not able to do anything else until it is.
+    e.fromBreach = breach.id;
+    e.emerging = BREACH_EMERGE;
+    e.emergeFrom = { x: breach.x + 0.5, y: breach.y + 0.5 };
+    this.enemies.push(e);
+    this.breachAlive++;
+    breach.sent++;
+    // Dust and grit out of the hole, and a sound the player can place.
+    burstStone(this.particles, x, y, '#3a3630');
+    this.level.marks.push({
+      kind: 'scratch', x, y, dx: -breach.dx, dy: -breach.dy,
+      seed: (this.time * 0.37) % 1,
+    });
+    this.hearSfx('spawnHole', x, y, 1.25, {
+      tail: BREACH_HEARD, key: 'breachOut' + breach.id, out: true,
+      ...breachSound(def),
+    });
+    // Loud enough to be worth investigating, but it is not a shout -- the
+    // thing is trying to get through a gap, not announcing itself.
+    this.makeNoise(x, y, 0.55, { playerHears: false });
+    this.emit('breach', { breach, enemy: e });
+    return true;
+  }
+
   // --- captives -------------------------------------------------------------
   //
   // The one part of the labyrinth that can be wronged. Everything else in it
@@ -1418,6 +1669,7 @@ export class World {
     for (const prop of this.level.props) {
       if (prop.type !== 'prisoner') continue;
       if (prop.mood === 'collapsing' || prop.mood === 'crawling') this._advanceFreed(prop, dt);
+      if (prop.mood === 'afraid' || prop.mood === 'begging') this._updateWeeping(prop, dt);
       if (prop.mood !== 'raving' || prop.freed) continue;
       prop.screamTimer = (prop.screamTimer === undefined ? 3 + prop.seed * 6 : prop.screamTimer) - dt;
       if (prop.screamTimer > 0) continue;
@@ -1437,11 +1689,40 @@ export class World {
       if (away <= SCREAM_DRAW_CULL) {
         this.makeNoise(prop.x, prop.y, SCREAM_DRAW, { sfx: 'scream', playerHears: false });
       }
-      const heard = this.hearSfx('scream', prop.x, prop.y, SCREAM_DRAW, { tail: SCREAM_REACH });
+      const heard = this.hearSfx('scream', prop.x, prop.y, SCREAM_DRAW, {
+        tail: SCREAM_REACH,
+        variant: Math.floor(this.rng.next() * 3),
+        pitch: 360 + prop.seed * 130,
+        key: 'scream' + prop.id,
+      });
       // Only count it as a scream if it actually arrived. A shut gate between
       // the two of you used to still tighten the music.
       if (heard) this.emit('scream', { prop, heard });
     }
+  }
+
+  // The ones who are not screaming.
+  //
+  // A raving captive is a landmark: it is loud, it brings company, and it is
+  // a problem to be solved. The other two are not problems at all, and that is
+  // exactly why they have to be audible -- somebody sobbing in the dark ten
+  // tiles away is the labyrinth reminding the player that the thing it is
+  // full of is people, and a silent one is a prop. It carries barely at all,
+  // so it never competes with a scream and never draws anything.
+  _updateWeeping(prop, dt) {
+    if (prop.freed || prop.spurned) return;
+    if (prop.weepTimer === undefined) prop.weepTimer = 2 + prop.seed * 7;
+    prop.weepTimer -= dt;
+    if (prop.weepTimer > 0) return;
+    const begging = prop.mood === 'begging';
+    prop.weepTimer = (begging ? 6 : 9) + Math.random() * (begging ? 6 : 10);
+    // Close range only. Working out whether it was heard costs a flood, and
+    // it can never be heard from further off than this.
+    if (Math.hypot(prop.x - this.player.x, prop.y - this.player.y) > 11) return;
+    this.hearSfx(begging ? 'sob' : 'whimper', prop.x, prop.y, begging ? 0.55 : 0.34, {
+      pitch: (begging ? 290 : 330) + prop.seed * 110,
+      key: 'weep' + prop.id,
+    });
   }
 
   // A freed captive does not simply stop existing. They have been chained to
@@ -1591,6 +1872,11 @@ export class World {
       prop.mood = 'dead';
       this.gore.pool(prop.x, prop.y, '#7a1f1c', 0.7);
       this.playSfx('shrineHeal', { x: prop.x, y: prop.y });
+      // The one thing they asked for, and it is not a cry -- just the breath.
+      this.playSfx('lastBreath', {
+        x: prop.x, y: prop.y, gentle: true, pitch: 280 + prop.seed * 90,
+        key: 'breath' + prop.id,
+      });
       const pts = this.run.score.addBonus(260 + this.level.depth * 30, this.run.mods);
       this.particles.text(prop.x, prop.y - 1, 'MERCY  +' + Math.round(pts), '#8fb7ff', 14, 2.2);
       // They had been saving it for whoever was willing.
@@ -1668,6 +1954,17 @@ export class World {
       raving ? 'the one that was screaming' : 'someone who did not ask');
     this.particles.text(prop.x, prop.y - 1, 'MURDER  -' + Math.round(cost), '#e05a3c', 15, 2.4);
     this.playSfx('curse', { x: prop.x, y: prop.y });
+    // A person, and it has to sound like one. The whole depth hears it, the
+    // same way it hears a raving captive -- what the player did is not a
+    // private thing.
+    this.playSfx('scream', {
+      x: prop.x, y: prop.y, variant: 1, pitch: 380 + prop.seed * 120,
+      key: 'murder' + prop.id,
+    });
+    this.playSfx('lastBreath', {
+      x: prop.x, y: prop.y, pitch: 300 + prop.seed * 100, key: 'breath' + prop.id,
+    });
+    this.makeNoise(prop.x, prop.y, 1.0, { playerHears: false });
     this.run.recordMercy(-1);
     this.emit('captive', { prop, action: 'murdered', cost });
     return true;
@@ -1872,8 +2169,15 @@ export class World {
     // Whatever else happens, a stone is only held while it is still against
     // you: a knockback, a ladder or a shove from a creature all let go of it.
     if (this.heldBlock) {
-      const d = Math.abs(this.heldBlock.x - p.mover.tileX)
-        + Math.abs(this.heldBlock.y - p.mover.tileY);
+      // Measured against the tile being stepped *into*, not the one being
+      // left. A stone moves the instant the step is committed while the
+      // player's own tile does not change until they land, so measuring from
+      // where they are standing puts the two of them briefly on the same tile
+      // and dropped the stone after exactly one tile of dragging -- which is
+      // fine for a shove and useless for a slab that has to travel two.
+      const px = p.mover.moving ? p.mover.toX : p.mover.tileX;
+      const py = p.mover.moving ? p.mover.toY : p.mover.tileY;
+      const d = Math.abs(this.heldBlock.x - px) + Math.abs(this.heldBlock.y - py);
       if (d !== 1) this.letGo();
     }
     const near = (x, y, r = 1.25) => Math.hypot(x - p.x, y - p.y) <= r;
@@ -1962,10 +2266,13 @@ export class World {
       const held = this.heldBlock;
       const block = held || this.blockInFront();
       if (block) {
+        const noun = block.kind === 'slab' ? 'slab' : 'stone';
         target = {
           type: 'stone', block,
-          label: held ? 'Let go of the stone' : 'Take hold of the stone',
-          hint: held ? 'Step back and it comes with you' : '',
+          label: (held ? 'Let go of the ' : 'Take hold of the ') + noun,
+          // Said as an instruction, because holding the key is the part
+          // nobody guesses: a tap latches the grip, and holding it keeps it.
+          hint: held ? 'Step back and it comes with you' : 'Hold to keep your grip',
           enabled: true, hx: block.x + 0.5, hy: block.y + 0.5,
         };
       }
@@ -1988,7 +2295,7 @@ export class World {
     this.interactTarget = target;
   }
 
-  interact() {
+  interact(opts = {}) {
     const target = this.interactTarget;
     if (!target || !target.enabled) {
       if (target) this.playSfx('denied');
@@ -2007,7 +2314,8 @@ export class World {
       case 'fire': return this.lightFire(target.fire);
       case 'captive': return this.useCaptive(target.prop);
       case 'map': return this.readMap(target.prop);
-      case 'stone': return this.heldBlock ? this.letGo() : this.takeHold(target.block);
+      case 'stone':
+        return this.heldBlock ? this.letGo() : this.takeHold(target.block, opts.held);
       case 'altar':
         // The choice itself is an interface question, so the world only says
         // that one is being asked. Nothing happens until takeOffer is called.

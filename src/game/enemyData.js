@@ -14,7 +14,7 @@ export const BEHAVIOUR = {
 
 export const ENEMIES = {
   draugr_thrall: {
-    id: 'draugr_thrall', name: 'Draugr Thrall', behaviour: BEHAVIOUR.CHARGER,
+    id: 'draugr_thrall', breaches: true, name: 'Draugr Thrall', behaviour: BEHAVIOUR.CHARGER,
     hp: 22, damage: 7, speed: 2.35, attackCooldown: 1.1, attackRange: 0.95,
     detect: 6.0, torchSensitivity: 1.55, prefersDark: false,
     fov: 130, // barrow-dead, and slow to turn its head
@@ -27,7 +27,7 @@ export const ENEMIES = {
     threat: 'Closes distance in a straight line and commits to a heavy overhead swing.',
   },
   barrow_hound: {
-    id: 'barrow_hound', name: 'Barrow Hound', behaviour: BEHAVIOUR.PURSUER,
+    id: 'barrow_hound', breaches: true, name: 'Barrow Hound', behaviour: BEHAVIOUR.PURSUER,
     hp: 14, damage: 5, speed: 3.35, attackCooldown: 0.75, attackRange: 0.85,
     detect: 7.5, torchSensitivity: 1.8, prefersDark: false,
     fov: 230, // it hunts by nose, so behind it is barely behind it
@@ -66,7 +66,7 @@ export const ENEMIES = {
     threat: 'Heavy armour and a wide guard. Rarely leaves the room it was set to hold.',
   },
   mire_lurker: {
-    id: 'mire_lurker', name: 'Mire Lurker', behaviour: BEHAVIOUR.AMBUSHER,
+    id: 'mire_lurker', breaches: true, name: 'Mire Lurker', behaviour: BEHAVIOUR.AMBUSHER,
     hp: 26, damage: 12, speed: 2.6, attackCooldown: 1.2, attackRange: 1.0,
     detect: 2.6, torchSensitivity: 1.0, prefersDark: true,
     fov: 360, // it reads the silt, not the light
@@ -79,7 +79,7 @@ export const ENEMIES = {
     threat: 'Invisible until you are almost on top of it. The opening strike hits hard.',
   },
   bone_slinger: {
-    id: 'bone_slinger', name: 'Bone Slinger', behaviour: BEHAVIOUR.RANGED,
+    id: 'bone_slinger', breaches: true, name: 'Bone Slinger', behaviour: BEHAVIOUR.RANGED,
     hp: 18, damage: 9, speed: 2.0, attackCooldown: 2.0, attackRange: 6.5,
     detect: 8.0, torchSensitivity: 1.7, prefersDark: false,
     fov: 120, // busy picking a target down its own arm
@@ -131,7 +131,7 @@ export const ENEMIES = {
     threat: 'Slow, enormously tough, and its reach is longer than it looks.',
   },
   gravebound: {
-    id: 'gravebound', name: 'Gravebound', behaviour: BEHAVIOUR.AMBUSHER,
+    id: 'gravebound', breaches: true, name: 'Gravebound', behaviour: BEHAVIOUR.AMBUSHER,
     // Buried, and it does not know it is buried. Nothing about it is visible
     // or audible until somebody walks close enough to be worth getting up for
     // -- see `entombed` in enemies.js, and the trigger radius there.
@@ -202,6 +202,21 @@ export const DEFAULT_VOICE = { timbre: 'groan', pitch: 140, loudness: 0.9, every
 // smearing added by each corner are worked out from the distance the sound
 // actually travelled through open ground and are untouched by this.
 export const VOICE_REACH = 1.5;
+
+// What a breach can let in. Deliberately only the small and the many: a hole
+// in the wall the size of a dog is not a hole a Root Horror comes through, and
+// a labyrinth that can quietly refill itself with elites is one where clearing
+// a room means nothing. See World.updateBreaches for the ceiling on how many
+// may be in the world at once.
+export const BREACH_POOL = ENEMY_LIST.filter((e) => e.breaches);
+
+// The scrabble of something forcing itself through a gap too small for it.
+// Pitched off the creature's own voice so a spawn is identifiable by ear
+// before it is out -- which is the whole point of it being audible at all.
+export function breachSound(def) {
+  const voice = def.voice || DEFAULT_VOICE;
+  return { timbre: voice.timbre, pitch: voice.pitch, loudness: voice.loudness };
+}
 
 export const ELITE_MOD = {
   hp: 2.15, damage: 1.4, speed: 1.08, score: 2.6, radius: 1.18,

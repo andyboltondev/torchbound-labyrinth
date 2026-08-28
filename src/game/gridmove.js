@@ -281,7 +281,9 @@ export class GridMover {
   _begin(world, dir, opts) {
     const tx = this.tileX + dir.x, ty = this.tileY + dir.y;
     const diagonal = dir.x !== 0 && dir.y !== 0;
-    const speed = Math.max(0.2, opts.speed || 3.5);
+    // A direction may carry its own pace. Shoving a stone is the case: the
+    // step takes as long as the stone does, so the two stay together.
+    const speed = Math.max(0.2, dir.speed || opts.speed || 3.5);
     this.fromX = this.tileX; this.fromY = this.tileY;
     this.toX = tx; this.toY = ty;
     this.duration = (diagonal ? SQRT2 : 1) / speed;

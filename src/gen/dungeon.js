@@ -684,6 +684,7 @@ function addProps(level, rng, depth, ctx) {
     place('altar', { used: false, seed: rng.next() }, false);
   }
   addBlocks(level, rng, depth, busy, mark);
+  addBreaches(level, rng, depth, busy, mark);
   addCaptives(level, rng, depth, busy, mark);
   addMaps(level, rng, depth, place);
   addFires(level, rng, depth, candidates, mark);
@@ -715,6 +716,11 @@ function addProps(level, rng, depth, ctx) {
 //
 // They are optional content in the same sense vaults and cracked walls are:
 // the autopilot completes every depth without touching one.
+// How far a slab travels. Two tiles either way: enough to clear the alcove it
+// is standing over, and not enough to be walked anywhere it was not meant to
+// go. Ordinary stones have no limit and never did.
+const SLAB_RANGE = 2;
+
 function addBlocks(level, rng, depth, busy, mark) {
   const { grid } = level;
   if (level.isBoss) return;
@@ -762,8 +768,23 @@ function addBlocks(level, rng, depth, busy, mark) {
 
   // Never a gallery of them: one is a curiosity, three is a chore.
   const want = Math.min(candidates.length, rng.int(0, 1) + (depth >= 5 ? 1 : 0));
+  // ...and, from the third depth down, one of them may be a slab instead.
+  //
+  // A slab is the same construction as a stone -- it stands on open ground
+  // with an alcove cut into the wall beside it, and it is held to the same
+  // three safety rules -- but it is a piece of the labyrinth rather than
+  // something left in it. It is cut to the full width of its tile and to wall
+  // height, so at the edge of the torchlight it reads as masonry and not as
+  // furniture. What gives it away is the grooves worn into the floor either
+  // side of it, and those are laid here rather than by the decal table
+  // because they are the only thing that identifies it.
+  //
+  // In play it is slow, it only travels as far as its grooves go, and what it
+  // is standing over is worth the work.
+  let wantSlabs = depth >= 3 && rng.bool(depth >= 6 ? 0.5 : 0.32) ? 1 : 0;
+  const total = Math.min(candidates.length, want + wantSlabs);
   for (const spot of candidates) {
-    if (level.blocks.length >= want) break;
+    if (level.blocks.length >= total) break;
     if (taken.has(grid.idx(spot.x, spot.y))) continue;
 
     // Provisionally place it, then prove the depth is no smaller for it.
@@ -804,9 +825,17 @@ function addBlocks(level, rng, depth, busy, mark) {
       continue;
     }
 
+    const slab = wantSlabs > 0;
+    if (slab) wantSlabs--;
+    const id = (slab ? 'slab_' : 'block_') + level.blocks.length;
     level.floorCells.push({ x: spot.alcove.x, y: spot.alcove.y });
     level.blocks.push({
-      id: 'block_' + level.blocks.length,
+      id,
+      kind: slab ? 'slab' : 'stone',
+      // Two tiles either way is enough to clear what it is standing over and
+      // not enough to walk it anywhere it was not meant to go. Ordinary stones
+      // are unlimited, as they always were.
+      range: slab ? SLAB_RANGE : 0,
       x: spot.x, y: spot.y,
       homeX: spot.x, homeY: spot.y,
       alcove: { x: spot.alcove.x, y: spot.alcove.y },
@@ -814,16 +843,138 @@ function addBlocks(level, rng, depth, busy, mark) {
       seed: rng.next(),
     });
     level.blockPockets.push({ x: spot.alcove.x, y: spot.alcove.y });
+    if (slab) {
+      // The grooves, along the lane it can travel. They run out from under it
+      // in both directions, because it has clearly been moved before.
+      for (const [px, py] of N4) {
+        if (px === spot.alcove.x - spot.x && py === spot.alcove.y - spot.y) continue;
+        if (px === spot.x - spot.alcove.x && py === spot.y - spot.alcove.y) continue;
+        if (grid.get(spot.x + px, spot.y + py) !== T.FLOOR) continue;
+        level.marks.push({
+          kind: 'scratch', x: spot.x + px + 0.5, y: spot.y + py + 0.5,
+          dx: px, dy: py, seed: rng.next(), heavy: true,
+        });
+      }
+    }
     // What is behind it. The same pool a cracked wall pays out, because a
     // stone that has to be shoved is the same size of secret as one that has
     // to be broken, and inventing a new reward tier for it would say otherwise.
     level.props.push({
-      type: rng.weighted(['treasure', 'potion', 'arrows'], (t) => (t === 'treasure' ? 2 : 1)),
+      // A slab is slower, better hidden and harder to shift, so it pays out at
+      // the top of the same pool rather than in a tier of its own.
+      type: slab
+        ? (rng.bool(0.5) ? 'chest' : 'treasure')
+        : rng.weighted(['treasure', 'potion', 'arrows'], (t) => (t === 'treasure' ? 2 : 1)),
+      opened: false,
       x: spot.alcove.x + 0.5, y: spot.alcove.y + 0.5,
-      behindBlock: level.blocks[level.blocks.length - 1].id,
+      behindBlock: id,
+      // Not on the chart and not drawn until the stone is off it: the stone is
+      // opaque, so what it is guarding is a discovery rather than a thing the
+      // player could already see through a block of granite.
+      hidden: true,
+      id: 'behind_' + id,
     });
     taken.add(grid.idx(spot.x, spot.y));
     mark(spot.x, spot.y, 1);
+  }
+}
+
+
+// Ways in that are not doors.
+//
+// The labyrinth is not sealed. There is rock on the other side of most of it
+// and open air on the other side of the rest, and things live in both -- so a
+// cleared room does not stay cleared for ever if there is a gap in it big
+// enough for a hound to force itself through.
+//
+// Where a breach may be is the whole design of the feature, and it is narrow
+// on purpose:
+//
+//   * The wall behind it has to be a *void* -- an external wall, or masonry
+//     with several tiles of unbroken rock behind it. A hole cannot open onto
+//     the corridor on the other side of a one-tile wall, because then the
+//     thing coming through it walked round rather than in, and the player
+//     would rightly ask why it bothered.
+//   * It sits in a flat run of wall, so it reads as a gap in the masonry
+//     rather than as a corner that happens to be dark.
+//   * Never at the entrance and never on the stair: arriving somewhere and
+//     leaving it are the two moments the player is not in a position to
+//     answer anything.
+//
+// The rest -- how often, how many at once, and the ceiling on the whole
+// depth -- is a runtime question and lives in World.updateBreaches.
+
+// How far the rock behind a breach has to run before it counts as a void.
+const VOID_DEPTH = 4;
+
+function addBreaches(level, rng, depth, busy, mark) {
+  const { grid } = level;
+  // Nothing on the first two descents. The labyrinth has to establish that a
+  // cleared room stays cleared before it is allowed to take that back.
+  if (level.isBoss || depth < 3) return;
+
+  const keepClear = (x, y) => {
+    const d1 = Math.abs(x - level.entrance.x) + Math.abs(y - level.entrance.y);
+    const d2 = Math.abs(x - level.stairs.x) + Math.abs(y - level.stairs.y);
+    return d1 < 6 || d2 < 6;
+  };
+
+  const candidates = [];
+  for (const { x, y } of level.floorCells) {
+    if (busy.has(grid.idx(x, y))) continue;
+    if (grid.get(x, y) !== T.FLOOR) continue;
+    if (keepClear(x, y)) continue;
+    for (const [dx, dy] of N4) {
+      const wx = x + dx, wy = y + dy;
+      if (grid.get(wx, wy) !== T.WALL) continue;
+      // Flush in a wall face, not a corner.
+      if (grid.get(wx - dy, wy + dx) !== T.WALL) continue;
+      if (grid.get(wx + dy, wy - dx) !== T.WALL) continue;
+      // Rock, or the edge of the world, all the way back.
+      let external = false, solid = true;
+      for (let k = 2; k <= VOID_DEPTH; k++) {
+        const bx = wx + dx * (k - 1), by = wy + dy * (k - 1);
+        if (!grid.inBounds(bx, by)) { external = true; break; }
+        if (grid.get(bx, by) !== T.WALL) { solid = false; break; }
+      }
+      if (!solid) continue;
+      candidates.push({ x: wx, y: wy, fx: x, fy: y, dx, dy, external });
+      break;
+    }
+  }
+  if (!candidates.length) return;
+  rng.shuffle(candidates);
+
+  // One on the shallow depths, two further down. More than that and the
+  // labyrinth stops having quiet stretches, which are what make the loud ones
+  // mean anything.
+  const want = Math.min(candidates.length, depth >= 9 ? 2 : 1);
+  const placed = [];
+  for (const spot of candidates) {
+    if (placed.length >= want) break;
+    // Spread them: two breaches in one room is a siege, not a labyrinth.
+    if (placed.some((b) => Math.abs(b.fx - spot.fx) + Math.abs(b.fy - spot.fy) < 14)) continue;
+    const pool = enemyPoolFor(depth).filter((p) => p.def.breaches);
+    if (!pool.length) return;
+    const def = rng.weighted(pool, (p) => p.weight).def;
+    level.breaches.push({
+      id: 'breach_' + level.breaches.length,
+      x: spot.x, y: spot.y,          // the masonry the hole is in
+      fx: spot.fx, fy: spot.fy,      // the ground it opens onto
+      dx: spot.dx, dy: spot.dy,
+      external: spot.external,
+      defId: def.id,
+      seed: rng.next(),
+    });
+    // The hole itself, drawn at the foot of the wall. It is a mark like any
+    // other, which is what lets a decoy hole in the floor and a real one look
+    // the same until something comes out of one.
+    level.marks.push({
+      kind: 'breach', x: spot.fx + 0.5, y: spot.fy + 0.5,
+      dx: spot.dx, dy: spot.dy, seed: rng.next(),
+    });
+    placed.push(spot);
+    mark(spot.fx, spot.fy, 1);
   }
 }
 
@@ -1279,7 +1430,14 @@ function emptyLevel(depth, seed, w, h) {
     zones: [], zoneInfo: [], rooms: [], gates: [], keys: [], secrets: [],
     props: [], decor: [], sconces: [], spawns: [], encounters: [],
     blocks: [], blockPockets: [],
+    breaches: [],
     decals: [],
+    // Marks that are structure rather than decoration: the grooves in front
+    // of a slab and the mouth of a breach. They are laid during carving
+    // because they identify a mechanism, which is the one thing the decal
+    // table in gen/decals.js is forbidden to do -- so they are kept in their
+    // own list and drawn through the same painter.
+    marks: [],
     entrance: null, stairs: null, floorCells: [], freeRooms: [],
     isBoss: false, boss: null, hasCrossbowPickup: false,
     ladders: [], vaults: [], mazeHeight: h,
