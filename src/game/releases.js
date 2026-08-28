@@ -34,7 +34,8 @@ export const RELEASES = [
           'It installs. Chrome, Edge and the like will offer to keep Torchbound Labyrinth on the device as an application of its own -- its own icon, its own window, no address bar -- and there is an Install button beside the build number for when the browser does not say so itself. On a phone, Add to Home Screen gives the same thing.',
           'An icon of its own, at every size a browser or a home screen asks for: a square spiral with the torch burning at the middle of it. The small ones are drawn with fewer turns rather than being the big one shrunk, because a sixteen-pixel tab icon has about four pixels of detail to spend.',
           'The game plays offline. The first visit keeps a copy of it on your device, and after that it starts with no connection at all -- on a train, on a plane, on a phone with one bar.',
-          'It updates itself. When a new build has shipped it is fetched quietly in the background, with nothing to agree to and nothing to wait for, and takes effect the next time you open the game. The first load afterwards says so once, with a link to what changed, and then never mentions it again.',
+          'It updates itself, and no longer waits until next time to do it. Opening the game asks what the current build is, and if yours is not it, the new one comes down and the game reloads onto it right there at the menu -- a second, once, and then you are playing the version that shipped. The first load afterwards says so, with a link to what changed, and then never mentions it again.',
+          'A Check for updates button beside the build number, for when you have heard something shipped and do not want to wait for the game to notice. It tells you what it found either way, including "this is the current build", which is usually the answer.',
           'A full map on M, or a tap on the minimap. Drag to pan, scroll or pinch to zoom, and a legend of everything found on the depth and how many of each.',
           'An illustrated guide before your first descent: the keys drawn as key caps with their compass bearings, or the touch pad with the diamond and stick offered side by side. It has a "do not show again" box, and Settings can bring it back.',
           'Seeds. Type or paste one in before you start and you get that labyrinth; copy yours from the pause screen and hand it to somebody else.',
@@ -48,6 +49,7 @@ export const RELEASES = [
       {
         title: 'Changed',
         notes: [
+          'An update will never reload the game out from under a descent. Mid-run it comes down and then waits, and the pause menu offers to spend the run on it -- which is your decision, not the version number\'s.',
           'Relic descriptions were running to three lines apiece. They are one line now, and blunter for it -- a paragraph between you and a choice made against the clock is a paragraph nobody reads.',
           'Shadows lean further and stretch longer the further you are from your torch, corners of stonework read as corners rather than as two shades of the same wall, and the masonry is cut with a deeper bevel. All of it is either baked once per depth or the same draw with different arithmetic in it, so the cheapest quality setting does no more work than it did.',
           'Creatures are heard from half again as far, and a screaming captive from most of a depth away. A groan used to reach about as far as your torch did, so the warning and the thing it warned about arrived together.',

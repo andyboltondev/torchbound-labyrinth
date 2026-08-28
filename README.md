@@ -81,13 +81,47 @@ the failure that turns a caching bug into a blank screen. Old caches are
 deleted on activate. `build.json` is the one file never served from cache: it
 is how the page finds out there is something newer.
 
-On load, `src/core/appupdate.js` asks `build.json` whether a newer build has
-shipped and, if so, tells the worker to fetch it. **Nothing is shown and
-nothing waits.** The check races a 2-second timer and loses, so a player on a
-bad connection is never held at a blank screen over a version they did not ask
-about; the download finishes in the background and the new build is what loads
-next time. Replacing modules under a page that has already imported them is not
-something to attempt mid-session.
+On load, `src/core/appupdate.js` asks `build.json` what build the host is
+serving and compares it against the one running. If they differ -- and only
+then, and only online -- the new build is fetched and the page **reloads onto
+it**, there and then, at the menu where a reload costs nothing. **Nothing is
+shown and nothing waits**: the check races a 2-second timer and loses, so a
+player on a bad connection is never held at a blank screen over a version they
+did not ask about.
+
+Three things make that reload safe, and none of them is optional:
+
+* **It never lands mid-descent.** A run lives in memory and nowhere else, so a
+  reload during one is a run destroyed by a version number. The caller passes
+  `canReload`, and it is asked *twice* -- once before the download and again
+  after it, because a player can press Begin the descent while a megabyte of
+  game is coming down behind the menu.
+* **The new files are down, and the old ones gone, before the page moves.**
+  The page asks the worker outright (`postMessage({ type: 'refresh' })`) and
+  waits for its answer. `registration.update()` cannot do this job alone: it
+  compares `sw.js` byte for byte, and `sw.js` is the same file from build to
+  build because the file list lives in `build.json` on purpose -- so the
+  browser's honest answer is "the worker has not changed" while the game it is
+  serving is a build behind. The worker precaches the new build, deletes every
+  older cache, *then* replies; `caches.match` searches every cache oldest
+  first, so reloading while the old one survived would land straight back on
+  the build being left. Where no worker is running at all -- plain http, a
+  browser without them -- there is nothing of ours in the way and the reload
+  revalidates against the host, which is the same outcome by a different road.
+* **A build that will not take is given up on.** A manifest naming a build the
+  device cannot actually end up running -- shipped ahead of its files, a proxy
+  pinning one of them -- would otherwise reload, find the same disagreement and
+  reload again, forever, on a game that never draws a menu. Two attempts per
+  build (`UPDATE_TRIES`), counted in storage against the build being aimed at,
+  and then it goes back to being fetched quietly to land on some later load.
+  The counter is cleared the moment the build it was aiming at is the one
+  running. `tests/integration.js` pins all of this arithmetic.
+
+Beside the build number, **Check for updates** asks the same question on
+demand, and says every answer out loud including the dull ones -- a button that
+does nothing visible on the likeliest outcome reads as broken. From the pause
+menu, mid-descent, it will not reload on its own: the build is fetched, the
+button becomes **Update now**, and spending the run on it is the player's call.
 
 The first load after an update says so once, on the home screen, with a link to
 **What changed** -- then never again for that build. A game that changes under
@@ -131,7 +165,10 @@ previous copy out of its own cache would quietly undo that. Load
 you are working on; loading without it again unregisters the worker and deletes
 its caches, so it cannot be left on by accident.
 
-`tests.html` never registers anything -- it does not load `src/main.js`.
+`tests.html` never registers anything -- it does not load `src/main.js`. It
+does import `appupdate.js` for the update arithmetic, which touches nothing:
+registering, downloading and reloading all happen behind functions only the
+game calls.
 
 ## Controls
 
@@ -923,6 +960,13 @@ that an altar never asks for something the player cannot pay, across a sweep
 of health and score states; and that the hall of fame round-trips through CSV
 without losing a name with a comma in it.
 
+It also pins the update check, which is the one piece of the game that can
+close the window on a player: that only a build plainly different from the
+running one is worth reloading for, that every unclear answer -- offline, no
+answer, an empty build string -- lands somewhere that does not reload, and
+that a build which will not take is given up on after two attempts rather than
+reloaded for forever.
+
 **Balance curve** -- plays whole descents and reports clear rate, health lost
 and time taken per depth. Not pass/fail: it is there to be looked at when
 tuning, and to catch a depth turning into a wall.
@@ -933,7 +977,7 @@ key, unlocking each gate, fighting its way out of rooms that seal behind it,
 and taking the stairs. It is the practical counterpart to the validator -- the
 validator proves a route exists, the bot walks it.
 
-Current status: 47/47 passing.
+Current status: 110/110 passing.
 
 ---
 
