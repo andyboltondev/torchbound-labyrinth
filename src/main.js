@@ -48,6 +48,7 @@ class Game {
       onTouchModeChange: () => this.refreshTouchMode(),
       onSettingChanged: (key) => this.applySettings(key),
       onScreen: (name) => this.scoreFor(name),
+      runInProgress: () => this.runInProgress(),
       get run() { return window.__game ? window.__game.run : null; },
     });
     this.state = STATE.MENU;
@@ -99,9 +100,14 @@ class Game {
     // Cache the game for offline play, and ask whether a newer build has
     // shipped. Fire-and-forget on purpose: the menu is drawn on the next line
     // whatever the network is doing, because a player with no signal is not
-    // waiting on us to finish a conversation they did not ask for. Anything
-    // found is downloaded quietly and takes effect on the next load.
-    startUpdateCheck();
+    // waiting on us to finish a conversation they did not ask for.
+    //
+    // If a newer build has shipped it is fetched and the page reloads onto it,
+    // here at the menu where a reload costs nothing but the second it takes.
+    // `canReload` is what keeps it that way: it is asked again once the files
+    // are down, and a descent begun in the meantime is a run that a version
+    // number does not get to end.
+    startUpdateCheck({ canReload: () => !this.runInProgress() });
     // Ordered before the menu is built, because the menu asks whether this
     // build is new to the device and a first visit has to have answered
     // "no, it is simply the first" before it is asked.
@@ -168,6 +174,15 @@ class Game {
   }
 
   // ---------------------------------------------------------- run flow
+
+  // Whether there is a descent underway that a reload would throw away. A run
+  // lives in memory and nowhere else, so this is the question the update check
+  // asks before it reloads onto a new build. A finished run is not one: it is
+  // a score screen, and the score is already banked in the profile.
+  runInProgress() {
+    return !!this.run && !this.runEnded;
+  }
+
   startRun(seed, difficultyId) {
     this.audio.init();
     this.audio.setReverbEnabled(profile.settings.reverb !== false);

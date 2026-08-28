@@ -12,7 +12,7 @@ import { formatScore, depthLabel } from '../core/util.js';
 import { drawEnemy, drawBoss } from '../render/actors.js';
 import { BUILD_STRING, BUILD_DETAIL, VERSION } from '../core/version.js';
 import { updatedSinceLastVisit, markBuildSeen, canInstall, onInstallOffer,
-  promptInstall, runningInstalled } from '../core/appupdate.js';
+  promptInstall, runningInstalled, runUpdateCheck, reloadForUpdate } from '../core/appupdate.js';
 import { RELEASES, REPO } from '../game/releases.js';
 
 // What each size of bargain is called. The player never sees the word "tier".
@@ -163,8 +163,83 @@ export class Screens {
       this.click(() => this.show('releases', { from }))));
     links.appendChild(this._bugReportButton(from === 'pause' ? this.host.run : null));
     links.appendChild(this._installButton());
+    // The status line sits under the row rather than in it, because it is a
+    // sentence and the row is buttons.
+    const status = el('p', 'update-check-status');
+    status.hidden = true;
+    // Read out as it changes: the player pressed a button and the only thing
+    // that answers is text appearing somewhere else on the screen.
+    status.setAttribute('role', 'status');
+    links.appendChild(this._updateCheckButton(status));
     wrap.appendChild(links);
+    wrap.appendChild(status);
     return wrap;
+  }
+
+  // Ask the host outright whether this is still the current build.
+  //
+  // The game already does this by itself on every load, so the button is not
+  // how updates are meant to arrive -- it is for the player who has heard
+  // something shipped and does not want to wait until next time, and for the
+  // one whose copy has somehow got stuck on an old build and wants to see the
+  // game say so. Every answer it can give is written out, including the dull
+  // ones, because a button that does nothing visible on the most likely
+  // outcome reads as broken.
+  //
+  // The one thing it will not do on its own is reload out from under a
+  // descent. Mid-run, the new build is fetched and then waits, and the button
+  // turns into the offer to spend the run on it -- which is the player's call
+  // to make and nobody else's.
+  _updateCheckButton(status) {
+    const btn = button('Check for updates', 'btn ghost small');
+    btn.title = 'Ask whether a newer build has shipped';
+    let waiting = null;      // the build that is down and ready, if any
+
+    const tell = (text, kind) => {
+      status.hidden = !text;
+      status.textContent = text || '';
+      status.className = 'update-check-status' + (kind ? ' ' + kind : '');
+    };
+    const said = {
+      checking: ['Asking what the current build is...'],
+      downloading: ['A newer build has shipped. Fetching it...'],
+      reloading: ['Reloading onto it...'],
+      // Careful with this one: where there is no worker there is nothing on the
+      // device yet, only a newer build known to exist. "Waiting" is true either
+      // way, and pressing again fetches whatever is not already down.
+      ready: ['A newer build is waiting. It takes effect when this run ends.', 'good'],
+      current: ['This is the current build.', 'good'],
+      offline: ['No connection. Finding an update takes one.'],
+      unknown: ['Could not reach the host to ask.'],
+      stuck: ['A newer build was found but would not take. It will be tried again later.'],
+    };
+
+    btn.addEventListener('click', this.click(() => {
+      if (btn.disabled) return;
+      // Second press, mid-run: the player has read what it costs and said yes.
+      if (waiting) { tell(...said.reloading); reloadForUpdate(waiting); return; }
+      btn.disabled = true;
+      runUpdateCheck({
+        force: true,
+        canReload: () => !(this.host.runInProgress && this.host.runInProgress()),
+        onState: (state, latest) => {
+          if (!status.isConnected) return;
+          if (state === 'ready' && latest) waiting = latest;
+          const line = said[state];
+          if (line) tell(...line);
+        },
+      }).then((plan) => {
+        if (!btn.isConnected) return;
+        // Nothing is enabled again on the way out: the page is leaving.
+        if (plan === 'reloading') return;
+        btn.disabled = false;
+        if (waiting) {
+          btn.textContent = 'Update now';
+          btn.title = 'Reload onto the new build. This ends the run in progress.';
+        }
+      });
+    }));
+    return btn;
   }
 
   // Keep a copy on the device. Drawn hidden and shown only once the browser
