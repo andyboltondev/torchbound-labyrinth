@@ -1,6 +1,6 @@
 {
   "version": "1.3.0",
-  "build": "20260827-203506",
+  "build": "20260828-052800",
   "assets": [
     "./index.html",
     "./src/audio/audio.js",
@@ -37,6 +37,7 @@
     "./src/gen/decals.js",
     "./src/gen/dungeon.js",
     "./src/gen/grid.js",
+    "./src/gen/shove.js",
     "./src/gen/tiles.js",
     "./src/gen/validate.js",
     "./src/main.js",

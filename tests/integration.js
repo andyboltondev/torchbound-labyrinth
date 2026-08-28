@@ -28,6 +28,7 @@ import { HP_FLOOR, REWARDS, SACRIFICES, REWARD_BY_ID, SACRIFICE_BY_ID } from '..
 import { toCsv, parseCsv, normalise, rank, merge, scramble, unscramble, HALL_SIZE }
   from '../src/game/hall.js';
 import { hazardBudget, HAZARDS } from '../src/gen/biomes.js';
+import { shoveOutcome } from '../src/gen/shove.js';
 import { DIFFICULTIES, DIFFICULTY_LIST } from '../src/game/difficulty.js';
 
 const tests = [];
@@ -2049,6 +2050,43 @@ test('a pushable stone is never on the way to anything the depth requires', () =
     }
   }
   assert(seen > 0, 'sixty depths produced no pushable stones at all');
+});
+
+test('no sequence of shoves can strand a depth', () => {
+  // The containment rule above is about the tile a stone stands on. This is
+  // about every tile it can be driven onto, which is the question that costs
+  // runs: a stone only ever moves away from whoever is pushing it, so one
+  // walked into a one-tile doorway and jammed against the wall behind it
+  // closes that doorway for good, with the player on whichever side they
+  // happened to be standing.
+  //
+  // Found the hard way -- the autopilot wedged on a depth where three presses
+  // of one direction sealed the only way south.
+  let stones = 0;
+  let checked = 0;
+  for (let depth = 3; depth <= 15; depth += 3) {
+    for (let i = 0; i < 8; i++) {
+      const level = generateLevel({ depth, seed: 'strand-' + depth + '-' + i, context: {} });
+      if (!level.blocks.length) continue;
+      checked++;
+      stones += level.blocks.length;
+      const out = shoveOutcome(level.grid, {
+        entrance: level.entrance,
+        blocks: level.blocks,
+        pockets: level.blockPockets,
+        targets: [level.stairs].concat(level.keys).concat(level.gates),
+        passable: (x, y, t) =>
+          t === T.FLOOR || t === T.STAIRS || t === T.ENTRANCE || t === T.GATE,
+      });
+      // Unproven counts as a failure here for the same reason the generator
+      // declines it: a search that ran out of room has not shown anything.
+      assert(out.proven, `depth ${depth} seed ${i}: the shove search did not finish`);
+      assert(out.safe, `depth ${depth} seed ${i} can be stranded -- `
+        + (out.example ? out.example.steps.join('; ') : ''));
+    }
+  }
+  assert(checked > 0, 'no depth in the sample carried a stone');
+  return `${stones} stones over ${checked} depths`;
 });
 
 test('a stone shoves one tile, and never into what it is guarding', () => {

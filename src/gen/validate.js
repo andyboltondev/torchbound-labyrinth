@@ -7,11 +7,13 @@
 //   * no mandatory route depends on breaking a secret wall
 //   * gates genuinely block the corridor they sit in
 //   * nothing important is stranded in unreachable geometry
+//   * no stone can be shoved somewhere that strands the depth
 //
 // It is also the assertion layer the seeded generation test-suite drives.
 
 import { T } from './tiles.js';
 import { bfsField, N4 } from './grid.js';
+import { shoveOutcome } from './shove.js';
 import { HAZARDS, hazardBudget, pairAllowed } from './biomes.js';
 
 function standableAt(grid, x, y) {
@@ -246,6 +248,23 @@ export function validateLevel(level) {
       lost++;
     }
     if (lost > 0) errors.push(`${lost} floor cells are cut off by a pushable block`);
+
+    // ...and no sequence of shoves can put one somewhere the depth never
+    // recovers from. The containment check above is about the tile a stone
+    // stands on; this is about every tile it can be driven onto, which is the
+    // one that actually costs runs, because a stone cannot be pulled back.
+    const shove = shoveOutcome(grid, {
+      entrance: level.entrance,
+      blocks,
+      pockets: level.blockPockets || [],
+      targets: [level.stairs].concat(level.keys).concat(level.gates),
+      passable: (x, y, t) =>
+        t === T.FLOOR || t === T.STAIRS || t === T.ENTRANCE || t === T.GATE,
+    });
+    if (!shove.safe) {
+      const how = shove.example.steps.join('; ') || 'where they stand';
+      errors.push(`a pushable block can strand the depth -- ${how}`);
+    }
 
     for (const b of blocks) {
       if (!standableAt(grid, b.x + 0.5, b.y + 0.5))

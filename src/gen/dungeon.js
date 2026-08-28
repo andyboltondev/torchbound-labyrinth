@@ -16,6 +16,7 @@ import { clamp } from '../core/util.js';
 import { T, keyColour } from './tiles.js';
 import { Grid, bfsField, N4, DisjointSet, rectCentre, rectContains } from './grid.js';
 import { placeDecals } from './decals.js';
+import { shoveOutcome } from './shove.js';
 import { HAZARDS, BIOME_HAZARDS, BIOMES, pairAllowed, hazardBudget, biomeForDepth } from './biomes.js';
 import { enemyPoolFor, bossForDepth, BEHAVIOUR } from '../game/enemyData.js';
 import { validateLevel } from './validate.js';
@@ -696,7 +697,7 @@ function addProps(level, rng, depth, ctx) {
 // the alcove cannot be walked into while it is there; walk into the block
 // instead and it slides a tile, and the way is open.
 //
-// Two rules make this safe rather than a way to wedge a depth shut:
+// Three rules make this safe rather than a way to wedge a depth shut:
 //
 //   * A block is never on the route to anything the depth requires. It stands
 //     where the floor is wide enough that treating the tile as wall changes
@@ -706,6 +707,11 @@ function addProps(level, rng, depth, ctx) {
 //   * A block is never pushed into its own alcove. That is enforced at the
 //     moment of the push (see World.tryPush), because it is the one move that
 //     would seal the reward away for good.
+//   * No sequence of shoves can strand the depth. The first rule is about the
+//     tile a stone starts on; this one is about every tile it can be driven
+//     to, which is a different question and the one that actually bites -- a
+//     stone walked into a one-tile doorway and jammed against the wall behind
+//     it closes that doorway for the rest of the run.
 //
 // They are optional content in the same sense vaults and cracked walls are:
 // the autopilot completes every depth without touching one.
@@ -777,6 +783,23 @@ function addBlocks(level, rng, depth, busy, mark) {
       break;
     }
     if (costsGround) {
+      grid.set(spot.alcove.x, spot.alcove.y, wasWall);
+      continue;
+    }
+
+    // Standing where it stands is not enough: a stone only ever moves away
+    // from whoever is pushing it, so it also has to be true that no sequence
+    // of shoves can put it somewhere the depth never recovers from. See
+    // gen/shove.js -- an unproven answer is declined the same as a bad one.
+    const shove = shoveOutcome(grid, {
+      entrance: level.entrance,
+      blocks: level.blocks.concat([{ x: spot.x, y: spot.y }]),
+      pockets: level.blockPockets.concat([spot.alcove]),
+      targets: [level.stairs].concat(level.keys).concat(level.gates),
+      passable: (x, y, t) =>
+        t === T.FLOOR || t === T.STAIRS || t === T.ENTRANCE || t === T.GATE,
+    });
+    if (!shove.safe || !shove.proven) {
       grid.set(spot.alcove.x, spot.alcove.y, wasWall);
       continue;
     }
