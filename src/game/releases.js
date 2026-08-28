@@ -27,7 +27,7 @@ export const RELEASES = [
           'Captives you cut loose no longer vanish. They come off the wall, fold up, and drag themselves to the nearest corner, and they are still there when you come back past.',
           'Some captives ask to die, and mean it. Granting it with the sword costs nothing. Freeing them instead is a decision, and once in a while it is answered.',
           'A mercy tally, carried onto the Hall of Fame: one up for every captive freed or given what they asked for, one down for every one killed who never asked. It is the only number on that board that is not a measure of how good you were.',
-          'Stones that move. Shoulder one aside and there is a pocket cut into the wall behind it. They are never on the way to anything the depth requires, and the generator proves that before you ever see one.',
+          'Stones that move. Shoulder one aside and there is a pocket cut into the wall behind it. Take hold of one with Act and it comes with you when you back away, so a stone shifted into a doorway is a stone you can shift back out of it.',
           'Claw marks, footprints and dragged dirt. The labyrinth was being used before you got here, and now it looks like it -- and the marks lean, very slightly, towards what is worth finding.',
           'The Gravebound: buried standing, facing the passage. No sound, no shape, nothing at all until you are almost on top of one, and then it is out of the floor and swinging. It leaves the hole behind it.',
           'Holes in the floor with nothing underneath them. Once you have met one Gravebound, every hole is a question, and most of the answers are nothing.',
@@ -59,6 +59,9 @@ export const RELEASES = [
         title: 'Fixed',
         notes: [
           'The depth summary printed a blood debt as "+-680". It shows -680, in red, like the thing it is.',
+          'Pressing into a stone standing in a one-tile passage walked you sideways instead of shoving it. The nudge that lines you up with a doorway you are standing one tile short of was treating the stone as the wall it was cut from, and quietly spending the press on a sidestep.',
+          'A stone could be walked into a doorway and jammed against the wall behind it, sealing off the rest of the depth with you on the wrong side and no way back. The generator now proves that no stone on a depth can be driven anywhere that strands it, by either verb, before the depth is ever handed to you.',
+          'Killing a captive who was screaming was written up on the score sheet as somebody who had said nothing.',
           'A scream from a captive behind a shut gate still tightened the music, as though you had heard it.',
           'The touch buttons were sitting on top of the minimap. It now measures what the pad has reserved and stays clear of it.',
           'The controls were listed by hand in three places and all three had drifted. There is one list now, and none of them had ever mentioned the torch.',

@@ -95,6 +95,10 @@ export class Player {
       // Strict movement means exactly what was pressed, so it opts out.
       doorAssist: !world.strictMovement,
       onEnterTile: (x, y) => world.onPlayerEnterTile(x, y),
+      // A held stone follows the step out of the tile being left. Called the
+      // instant the step is committed, so the stone and the player move
+      // together rather than the stone lurching a tile behind.
+      onLeaveTile: (x, y) => world.onPlayerLeaveTile(x, y),
       // Walking into a stone that moves is a shove, not a refusal. Offered
       // last, so it can only ever claim a press that had nowhere else to go.
       tryPush: (tx, ty, want, heading) => world.tryPush(tx, ty, want, heading),

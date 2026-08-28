@@ -2106,7 +2106,7 @@ test('a stone shoves one tile, and never into what it is guarding', () => {
   assert(lanes.length > 0, 'a stone that cannot be shoved anywhere at all');
 
   const from = { x: block.x, y: block.y };
-  world._shove(block, lanes[0]);
+  world._moveBlock(block, lanes[0]);
   assert(block.x === from.x + lanes[0].x && block.y === from.y + lanes[0].y,
     'a shove moved the stone somewhere other than one tile on');
   // Occupancy moves on the instant, because the player steps into the vacated
@@ -2114,6 +2114,76 @@ test('a stone shoves one tile, and never into what it is guarding', () => {
   assert(!world.blockAt(from.x, from.y), 'the stone is still occupying the tile it left');
   assert(world.blockAt(block.x, block.y) === block, 'the stone is not where it went');
   assert(tileOpen(world, from.x, from.y), 'the tile a stone left is still closed');
+});
+
+test('a stone comes with you once you have hold of it', () => {
+  const found = findBlockLevel('pull');
+  assert(found, 'no depth with a stone on it');
+  const { world } = found;
+  const block = world.blocks[0];
+
+  // A lane the stone can travel, with somewhere for the player to back away
+  // to on the far side of it: pull needs one more tile of room than shove.
+  const lane = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }]
+    .find((d) => tileOpen(world, block.x + d.x, block.y + d.y)
+      && !world.blockPockets.has(world.grid.idx(block.x + d.x, block.y + d.y))
+      && tileOpen(world, block.x + d.x * 2, block.y + d.y * 2));
+  if (!lane) return 'skipped -- no stone with room to be drawn along';
+
+  // Stand in front of it, facing back at it.
+  place(world, block.x + lane.x, block.y + lane.y);
+  world.player.faceX = -lane.x; world.player.faceY = -lane.y;
+  world.updateInteractTarget();
+  assert(world.interactTarget && world.interactTarget.type === 'stone',
+    'standing against a stone offered nothing');
+
+  // Backing away without hold of it leaves it exactly where it was.
+  const home = { x: block.x, y: block.y };
+  step(world, 20, { moveX: lane.x, moveY: lane.y, slash: false, fire: false });
+  assert(block.x === home.x && block.y === home.y,
+    'a stone nobody had hold of followed the player anyway');
+
+  // Take hold, and the same walk brings it.
+  place(world, home.x + lane.x, home.y + lane.y);
+  world.player.faceX = -lane.x; world.player.faceY = -lane.y;
+  world.updateInteractTarget();
+  world.interact();
+  assert(world.heldBlock === block, 'the stone was not taken hold of');
+  step(world, 20, { moveX: lane.x, moveY: lane.y, slash: false, fire: false });
+  assert(block.x === home.x + lane.x && block.y === home.y + lane.y,
+    'a held stone did not come along');
+  assert(!world.blockAt(home.x, home.y), 'the stone is still holding the tile it left');
+
+  // And it is the same discovery a shove is: counted once, on one tally.
+  assert(block.moved, 'drawing a stone off its alcove did not count as finding it');
+  assert(world.secretsFound === 1, 'a pulled stone paid out twice or not at all');
+});
+
+test('a stone is let go of the moment it is not against you', () => {
+  const found = findBlockLevel('letgo');
+  assert(found, 'no depth with a stone on it');
+  const { world } = found;
+  const block = world.blocks[0];
+  const side = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }]
+    .find((d) => tileOpen(world, block.x + d.x, block.y + d.y));
+  assert(side, 'a stone with nowhere to stand beside it');
+
+  place(world, block.x + side.x, block.y + side.y);
+  world.player.faceX = -side.x; world.player.faceY = -side.y;
+  world.updateInteractTarget();
+  world.interact();
+  assert(world.heldBlock === block, 'the stone was not taken hold of');
+
+  // Action again is letting go, and so is ending up anywhere that is not
+  // beside it -- a stone is held with a hand, not with a flag.
+  world.updateInteractTarget();
+  world.interact();
+  assert(!world.heldBlock, 'the stone could not be let go of');
+
+  world.takeHold(block);
+  place(world, block.x + side.x * 4, block.y + side.y * 4);
+  world.updateInteractTarget();
+  assert(!world.heldBlock, 'a stone was still held from across the room');
 });
 
 test('shoving a stone counts once, on the same tally as a cracked wall', () => {
@@ -2126,7 +2196,7 @@ test('shoving a stone counts once, on the same tally as a cracked wall', () => {
   assert(lane, 'nowhere to shove it');
 
   const before = run.score.level.secretsFound;
-  world._shove(block, lane);
+  world._moveBlock(block, lane);
   assert(run.score.level.secretsFound === before + 1, 'a shove scored no secret');
   assert(block.moved, 'a shoved stone was not marked as opened');
 
@@ -2134,7 +2204,7 @@ test('shoving a stone counts once, on the same tally as a cracked wall', () => {
   const again = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }]
     .find((d) => world._canShove(block, d));
   if (again) {
-    world._shove(block, again);
+    world._moveBlock(block, again);
     assert(run.score.level.secretsFound === before + 1, 'the same stone paid out twice');
   }
 });

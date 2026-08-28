@@ -141,6 +141,11 @@ export class World {
     for (const b of this.blocks) this.blockIndex.set(this.grid.idx(b.x, b.y), b);
     this.blockPockets = new Set(
       (level.blockPockets || []).map((p) => this.grid.idx(p.x, p.y)));
+    // The stone currently being held, or null. Holding is what separates a
+    // pull from walking away from something: a stone you have not taken hold
+    // of stays where it is, so backing out of a dead end never drags one
+    // along behind you by accident.
+    this.heldBlock = null;
     // Places the player has been told about but not yet reached. The chart
     // puts an arrow on its rim for each one; whatever adds a hint owns
     // clearing it, and reaching the spot resolves it automatically.
@@ -1235,8 +1240,59 @@ export class World {
       bestScore = score;
     }
     if (!best) return null;
-    this._shove(best.block, best.dir);
+    this._moveBlock(best.block, best.dir, 'pushed');
     return best.dir;
+  }
+
+  // Whichever stone the player is standing against and facing, or null.
+  blockInFront() {
+    const p = this.player;
+    const tx = p.mover.tileX, ty = p.mover.tileY;
+    let best = null, bestDot = 0.5;
+    for (const dir of GRID_DIRS) {
+      if (dir.x !== 0 && dir.y !== 0) continue;
+      const dot = dir.x * p.faceX + dir.y * p.faceY;
+      if (dot < bestDot) continue;
+      const block = this.blockAt(tx + dir.x, ty + dir.y);
+      if (!block) continue;
+      best = block; bestDot = dot;
+    }
+    return best;
+  }
+
+  takeHold(block) {
+    this.heldBlock = block;
+    this.playSfx('step', { surface: this.surfaceAt() });
+    this.emit('blockHeld', { block, held: true });
+    return true;
+  }
+
+  letGo() {
+    if (!this.heldBlock) return false;
+    const block = this.heldBlock;
+    this.heldBlock = null;
+    this.emit('blockHeld', { block, held: false });
+    return true;
+  }
+
+  // Called by the mover the instant a step is committed, while the player is
+  // still standing on the tile they are leaving. A held stone directly behind
+  // them comes with them, into the tile they are vacating.
+  onPlayerLeaveTile(x, y) {
+    const block = this.heldBlock;
+    if (!block) return;
+    const dir = this.player.mover.heading;
+    // Cardinals only, for the same reason a shove is: shoulders do not drag a
+    // block of stone diagonally.
+    if (!dir || (dir.x !== 0 && dir.y !== 0)) { this.letGo(); return; }
+    // It has to be directly behind, which is to say opposite the way we are
+    // going. Stepping any other way is letting go of it.
+    if (block.x !== x - dir.x || block.y !== y - dir.y) { this.letGo(); return; }
+    if (block.sliding) return;
+    // Never into the pocket it is guarding -- the same refusal a shove makes,
+    // and for the same reason: there is no move that would get it out again.
+    if (this.blockPockets.has(this.grid.idx(x, y))) { this.letGo(); return; }
+    this._moveBlock(block, dir, 'pulled');
   }
 
   _canShove(block, dir) {
@@ -1255,7 +1311,10 @@ export class World {
     return true;
   }
 
-  _shove(block, dir) {
+  // One stone, one tile. Shared by the shove and the pull, because from the
+  // stone's point of view they are the same move -- what differs is only which
+  // side of it the player was standing on.
+  _moveBlock(block, dir, how = 'pushed') {
     const from = this.grid.idx(block.x, block.y);
     block.fromX = block.x; block.fromY = block.y;
     block.x += dir.x; block.y += dir.y;
@@ -1273,7 +1332,7 @@ export class World {
     // that is part of the price of what is behind it.
     this.makeNoise(block.x + 0.5, block.y + 0.5, 1.2, { playerHears: false });
     if (!block.moved) this._revealBehindBlock(block);
-    this.emit('blockPushed', { block });
+    this.emit('blockPushed', { block, how });
   }
 
   // The first shove is the discovery, and it is scored like one -- the same
@@ -1810,6 +1869,13 @@ export class World {
   // --- contextual action --------------------------------------------------
   updateInteractTarget() {
     const p = this.player;
+    // Whatever else happens, a stone is only held while it is still against
+    // you: a knockback, a ladder or a shove from a creature all let go of it.
+    if (this.heldBlock) {
+      const d = Math.abs(this.heldBlock.x - p.mover.tileX)
+        + Math.abs(this.heldBlock.y - p.mover.tileY);
+      if (d !== 1) this.letGo();
+    }
     const near = (x, y, r = 1.25) => Math.hypot(x - p.x, y - p.y) <= r;
     let target = null;
 
@@ -1890,6 +1956,21 @@ export class World {
       }
     }
 
+    // A stone you are standing against. Offered after the props, so a chest or
+    // a captive beside one is still the thing Action means.
+    if (!target) {
+      const held = this.heldBlock;
+      const block = held || this.blockInFront();
+      if (block) {
+        target = {
+          type: 'stone', block,
+          label: held ? 'Let go of the stone' : 'Take hold of the stone',
+          hint: held ? 'Step back and it comes with you' : '',
+          enabled: true, hx: block.x + 0.5, hy: block.y + 0.5,
+        };
+      }
+    }
+
     // Cold fires come last: they are everywhere, and should never stand
     // between the player and a chest they are also standing on.
     if (!target) {
@@ -1926,6 +2007,7 @@ export class World {
       case 'fire': return this.lightFire(target.fire);
       case 'captive': return this.useCaptive(target.prop);
       case 'map': return this.readMap(target.prop);
+      case 'stone': return this.heldBlock ? this.letGo() : this.takeHold(target.block);
       case 'altar':
         // The choice itself is an interface question, so the world only says
         // that one is being asked. Nothing happens until takeOffer is called.

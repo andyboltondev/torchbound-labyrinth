@@ -1,8 +1,12 @@
 // Where a stone can end up, and whether the depth survives it.
 //
-// A pushable stone only ever moves away from whoever is pushing it: there is
-// no verb that draws one back towards you. Every shove is therefore one-way,
-// which makes a stone standing in a one-tile doorway a door that closes once.
+// A stone can be shoved from behind or, once taken hold of, pulled from in
+// front. Either way it travels one tile along a cardinal, so from the stone's
+// side the two verbs are the same move -- but they need the player on opposite
+// sides of it, and in a one-tile corridor only one of them is available. A
+// stone walked to the end of a passage is therefore still a door that closes
+// once, which is why both verbs have to be modelled here rather than assuming
+// pull undoes push.
 //
 // The generator already proves a stone is harmless *where it starts* -- treat
 // its tile as wall and the depth loses no ground. That says nothing about the
@@ -111,17 +115,34 @@ export function shoveOutcome(grid, { entrance, blocks, pockets, targets, passabl
         // the one World.tryPush makes, and it has to be modelled here or the
         // search would credit the player with a move the game forbids.
         if (!open[ti] || pocket[ti] || s.bl.indexOf(ti) >= 0) continue;
-        // ...and the player has to be able to stand behind it and press.
-        const pi = (by - dy) * grid.w + (bx - dx);
-        if (!grid.inBounds(bx - dx, by - dy) || !open[pi]) continue;
-        if (s.bl.indexOf(pi) >= 0 || seen[pi] !== mine) continue;
+
         const bl = s.bl.slice();
         bl[bi] = ti;
-        const next = add(bl, i);
-        next.prev.push(s);
-        if (!next.from && !next.root && next !== s) {
-          next.from = s;
-          next.via = { bx, by, dx, dy };
+        const land = (player, verb) => {
+          const next = add(bl.slice(), player);
+          next.prev.push(s);
+          if (!next.from && !next.root && next !== s) {
+            next.from = s;
+            next.via = { bx, by, dx, dy, verb };
+          }
+        };
+
+        // Shoved: the player stands behind it and walks into it, and ends up
+        // where it was.
+        const px = bx - dx, py = by - dy;
+        if (grid.inBounds(px, py)) {
+          const pi = py * grid.w + px;
+          if (open[pi] && s.bl.indexOf(pi) < 0 && seen[pi] === mine) land(i, 'shove');
+        }
+
+        // Pulled: the player stands in front of it, holds it and backs away,
+        // and it follows into the tile they have just left. The stone travels
+        // the same way either time -- what differs is which side of it the
+        // player was on, and where they end up.
+        const ux = tx + dx, uy = ty + dy;
+        if (grid.inBounds(ux, uy)) {
+          const ui = uy * grid.w + ux;
+          if (open[ui] && s.bl.indexOf(ui) < 0 && seen[ti] === mine) land(ui, 'pull');
         }
       }
     }
@@ -158,9 +179,11 @@ function describe(grid, state) {
   const steps = [];
   let hops = 0;
   for (let cur = state; cur && cur.from && hops++ < 64; cur = cur.from) {
-    const { bx, by, dx, dy } = cur.via;
+    const { bx, by, dx, dy, verb } = cur.via;
     const way = dx === 1 ? 'east' : dx === -1 ? 'west' : dy === 1 ? 'south' : 'north';
-    steps.unshift(`stand at ${bx - dx},${by - dy} and shove ${bx},${by} ${way}`);
+    const where = verb === 'pull'
+      ? `${bx + dx},${by + dy}` : `${bx - dx},${by - dy}`;
+    steps.unshift(`stand at ${where} and ${verb} ${bx},${by} ${way}`);
   }
   return { stones: state.bl.map(tile), player: tile(state.player), steps };
 }
