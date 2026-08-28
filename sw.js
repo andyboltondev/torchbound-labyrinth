@@ -22,6 +22,12 @@
 //     has to be able to say something new, because it is how the page finds
 //     out there is something new.
 //
+//   * The page can ask for the newest build outright, with a `refresh` message,
+//     and is told when it is down. The browser's own `registration.update()`
+//     cannot do that job here -- it compares this file byte for byte and this
+//     file does not change between builds -- and being told is what lets the
+//     page reload onto the new build rather than back onto the old one.
+//
 // This worker is registered from index.html only, via src/core/appupdate.js.
 // tests.html loads none of that, so the test page is never intercepted for
 // anything but files that happen to already be cached.
@@ -66,6 +72,18 @@ self.addEventListener('install', (event) => {
   }).catch(() => self.skipWaiting()));
 });
 
+// Everything but the build named. Ordering matters more than it looks:
+// `caches.match` searches every cache there is, oldest first, so while an old
+// cache survives it is the one that answers -- and a page reloaded at that
+// moment comes back on the build it was trying to leave.
+async function dropOtherCaches(keep) {
+  const names = await caches.keys();
+  await Promise.all(names.map((n) => {
+    if (n === keep || n.indexOf('torchbound-') !== 0) return null;
+    return caches.delete(n);
+  }));
+}
+
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     let keep = cacheName;
@@ -73,12 +91,41 @@ self.addEventListener('activate', (event) => {
       keep = 'torchbound-' + (await readManifest()).build;
     } catch (e) { /* offline on activate: keep whatever install settled on */ }
     cacheName = keep;
-    const names = await caches.keys();
-    await Promise.all(names.map((n) => {
-      if (n === keep || n.indexOf('torchbound-') !== 0) return null;
-      return caches.delete(n);
-    }));
+    await dropOtherCaches(keep);
     await self.clients.claim();
+  })());
+});
+
+// The page asking, in as many words, for the current build to be fetched now.
+//
+// `registration.update()` is the browser's own route to this and it is not
+// enough on its own: it compares sw.js byte for byte, and this file does not
+// change from one build to the next -- the file list lives in build.json, on
+// purpose. So the browser's honest answer is "the worker is unchanged", while
+// the game it is serving is a build behind. This is the same question asked of
+// the manifest instead, which is the file that does change.
+//
+// It answers when the new build is down and the old cache is gone, and that
+// answer is what makes a forced reload safe: reloading before it would land
+// the page straight back on the build it was leaving.
+self.addEventListener('message', (event) => {
+  const data = event.data || {};
+  if (data.type !== 'refresh') return;
+  const reply = (payload) => {
+    const port = event.ports && event.ports[0];
+    if (port) port.postMessage(payload);
+  };
+  event.waitUntil((async () => {
+    try {
+      const name = await precache();
+      cacheName = name;
+      await dropOtherCaches(name);
+      reply({ ok: true, build: name.slice('torchbound-'.length) });
+    } catch (e) {
+      // Offline, or the manifest could not be read. The cache is untouched and
+      // still whole, which is the point of doing the deleting last.
+      reply({ ok: false });
+    }
   })());
 });
 

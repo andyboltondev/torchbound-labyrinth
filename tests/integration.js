@@ -19,6 +19,7 @@ import { CONTROLS, DEFAULT_BINDINGS as BINDINGS } from '../src/core/input.js';
 import { makeSeed, normaliseSeed } from '../src/core/rng.js';
 import { RELEASES } from '../src/game/releases.js';
 import { VERSION } from '../src/core/version.js';
+import { updatePlan, nextTry, UPDATE_TRIES } from '../src/core/appupdate.js';
 import { bfsField, N4 } from '../src/gen/grid.js';
 import { RNG } from '../src/core/rng.js';
 import { SoundField } from '../src/game/soundfield.js';
@@ -1119,6 +1120,63 @@ test('every release says something, and says when it was', () => {
     assert(/^\d{4}-\d{2}-\d{2}$/.test(r.date || ''), `${r.version} has no date`);
     assert(Number.isInteger(r.pr) && r.pr > 0, `${r.version} names no pull request`);
   }
+});
+
+// --- checking for a newer build --------------------------------------------
+//
+// The arithmetic only. Nothing here touches the network, the cache or the
+// page: what is being pinned is the set of answers that end in a reload,
+// because a reload is the one thing in the game that can throw a descent away
+// or, got wrong in the other direction, loop a player out of the game
+// entirely.
+
+test('only a build that is plainly not this one is worth reloading for', () => {
+  const running = '20260828-055024';
+  const plan = (over) => updatePlan(Object.assign({ running, online: true }, over));
+
+  assert(plan({ latest: '20260901-120000' }) === 'stale',
+    'a different build on the host is an update');
+  assert(plan({ latest: running }) === 'current',
+    'the build being served is the build running: nothing to do');
+  // Every unclear answer has to land somewhere that does not reload. Offline
+  // is the player's own copy being the only one there is; a null latest is a
+  // host that would not say, which is not the same as saying "up to date".
+  assert(plan({ latest: '20260901-120000', online: false }) === 'offline',
+    'an update needs a connection, and the check should not pretend otherwise');
+  assert(plan({ latest: null }) === 'unknown', 'no answer is not an answer');
+  assert(plan({ latest: '' }) === 'unknown', 'an empty build string says nothing');
+});
+
+test('a build that will not take is given up on rather than reloaded for forever', () => {
+  const running = '20260828-055024';
+  const latest = '20260901-120000';
+  const plan = (tries) => updatePlan({ running, latest, online: true, tried: { build: latest, tries } });
+
+  // The trap this guards against: a manifest that names a build the device
+  // cannot actually end up running. Every reload comes back to the same
+  // disagreement, and without a counter the game never draws a menu again.
+  for (let i = 0; i < UPDATE_TRIES; i++) {
+    assert(plan(i) === 'stale', `attempt ${i + 1} of ${UPDATE_TRIES} should still be tried`);
+  }
+  assert(plan(UPDATE_TRIES) === 'stuck', 'the reload should be given up on, not repeated');
+  assert(plan(UPDATE_TRIES + 9) === 'stuck', 'and stay given up on');
+
+  // Given up on for that build only. A later build has done nothing wrong.
+  assert(updatePlan({ running, latest: '20261001-090000', online: true,
+    tried: { build: latest, tries: 99 } }) === 'stale',
+  'a newer build should not inherit an older one\'s failures');
+});
+
+test('the reload counter counts one build at a time', () => {
+  const a = '20260901-120000';
+  const b = '20261001-090000';
+  assert(nextTry(null, a).tries === 1, 'the first attempt is the first attempt');
+  assert(nextTry({ build: a, tries: 1 }, a).tries === 2, 'a second go at the same build counts');
+  assert(nextTry({ build: a, tries: 7 }, b).tries === 1, 'a different build starts over');
+  assert(nextTry({ build: a, tries: 7 }, b).build === b, 'and the counter follows the new build');
+  // A record written by an older version of the game, or half-written, should
+  // not read as a count of anything.
+  assert(nextTry({ build: a }, a).tries === 1, 'a record with no count is not a count');
 });
 
 // --- keys, gates and the exit ----------------------------------------------

@@ -7,9 +7,9 @@
 export const VERSION = {
   number: '1.4.0',
   codename: 'Grindstone',
-  build: '20260828-212650',
-  commit: 'a2bb133',
-  branch: 'master',
+  build: '20260828-215426',
+  commit: '08c551b',
+  branch: 'grinding-walls-and-breaches',
   pr: null,
 };
 
