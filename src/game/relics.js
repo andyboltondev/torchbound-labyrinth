@@ -122,9 +122,7 @@ export const RELICS = [
   {
     id: 'wolfs_hunger', name: "Wolf's Hunger", tag: T.SWORD, rarity: 2, max: 1,
     text: 'Below a third of your health, your blows land with real fury.',
-    cost: 'You fight past your own guard. Everything lands harder, '
-      + 'whatever your health -- including on the way down to the third that '
-      + 'pays out.',
+    cost: 'You fight past your own guard, and so does everything else.',
     mod: (m) => { m.desperation = 0.75; m.damageTaken *= 1.12; },
   },
   {

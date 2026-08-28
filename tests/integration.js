@@ -675,12 +675,12 @@ test('killing a captive that did not ask for it costs, and mercy does not', () =
   const afraid = {
     type: 'prisoner', x: cx + 1.5, y: cy + 0.5, wallX: 0, wallY: -1, mood: 'afraid',
     seed: 0.3, spoken: false, searched: false, freed: false, knows: 'exit', carries: null,
-    id: 'captive_afraid',
+    pleadToDie: false, id: 'captive_afraid',
   };
   const begging = {
     type: 'prisoner', x: cx + 1.5, y: cy + 2.5, wallX: 0, wallY: -1, mood: 'begging',
     seed: 0.7, spoken: false, searched: false, freed: false, knows: 'nothing', carries: null,
-    id: 'captive_begging',
+    pleadToDie: true, id: 'captive_begging',
   };
   level.props.push(afraid, begging);
 
@@ -1875,10 +1875,10 @@ test('the cheapest tier gained no new work', () => {
 
 // --- the buried ------------------------------------------------------------
 
-function findBuried(prefix) {
+function findBuried(prefix, want = null) {
   for (let i = 0; i < 60; i++) {
     const made = makeWorld(6, prefix + '-' + i);
-    const buried = made.world.enemies.find((e) => e.entombed);
+    const buried = made.world.enemies.find((e) => e.entombed && (!want || want(e)));
     if (buried) return { ...made, buried };
   }
   return null;
@@ -1905,7 +1905,9 @@ test('a buried thing has no tell at all until it is stood on', () => {
 });
 
 test('walking onto one brings it up, and the floor keeps the hole', () => {
-  const found = findBuried('unearth');
+  // Not a sealed one: those are held for an encounter that has not fired yet,
+  // and staying under the floor is exactly what they are supposed to do.
+  const found = findBuried('unearth', (e) => !e.sealed);
   assert(found, 'nothing buried to stand on');
   const { world, buried } = found;
   const holesBefore = world.level.decals.filter((d) => d.kind === 'hole').length;

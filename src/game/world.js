@@ -1598,12 +1598,15 @@ export class World {
     this.shake(6);
     if (prop.pleadToDie) return this.releaseCaptive(prop, true);
 
+    // Read before the mood is overwritten: what they were is the reason the
+    // score sheet gives, and 'dead' is not a reason.
+    const raving = prop.mood === 'raving';
     prop.freed = true;
     prop.mood = 'dead';
     prop.searched = !prop.carries;
     this.gore.pool(prop.x, prop.y, '#7a1f1c', 1.1);
     const cost = this.run.score.addPenalty(500 + this.level.depth * 60,
-      prop.mood === 'raving' ? 'the one that was screaming' : 'someone who did not ask');
+      raving ? 'the one that was screaming' : 'someone who did not ask');
     this.particles.text(prop.x, prop.y - 1, 'MURDER  -' + Math.round(cost), '#e05a3c', 15, 2.4);
     this.playSfx('curse', { x: prop.x, y: prop.y });
     this.run.recordMercy(-1);
